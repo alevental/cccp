@@ -1,0 +1,82 @@
+name: planning
+description: >
+  Planning pipeline with 6 sub-stages — technical scoping, architecture,
+  research, master plan, sprint plans, and cross-sprint consistency check.
+
+stages:
+  - name: technical-scoping
+    type: pge
+    description: "Assess codebase health and identify technical constraints."
+    generator:
+      agent: architect
+      operation: health-assessment
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/technical-scoping.md"
+      criteria:
+        - name: codebase-health
+          description: "Health assessment covers dependencies, test coverage, and tech debt."
+        - name: constraints
+          description: "Technical constraints and risks are identified with mitigation strategies."
+      max_iterations: 2
+
+  - name: architecture-design
+    type: pge
+    description: "Design the system architecture for the feature."
+    generator:
+      agent: architect
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/architecture.md"
+      criteria:
+        - name: modularity
+          description: "System decomposed into independent, testable modules."
+        - name: data-flow
+          description: "Data flow between components is clearly documented."
+        - name: api-contract
+          description: "All new/modified API endpoints are specified."
+      max_iterations: 3
+
+  - name: implementation-research
+    type: pge
+    description: "Research libraries, patterns, and implementation approaches."
+    generator:
+      agent: researcher
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/implementation-research.md"
+      criteria:
+        - name: library-evaluation
+          description: "Candidate libraries evaluated with pros/cons and recommendation."
+        - name: pattern-references
+          description: "Implementation patterns cited with working examples."
+      max_iterations: 2
+
+  - name: master-plan
+    type: pge
+    description: "Write the master implementation plan."
+    generator:
+      agent: architect
+      operation: plan-authoring
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/master-plan.md"
+      criteria:
+        - name: sprint-decomposition
+          description: "Work broken into sprints with clear boundaries."
+        - name: dependency-ordering
+          description: "Sprint dependencies are explicit and acyclic."
+        - name: risk-mitigation
+          description: "Each sprint identifies risks and mitigation."
+      max_iterations: 3
+
+  - name: plan-approval
+    type: human_gate
+    prompt: "Review the master plan and sprint decomposition. Approve to begin implementation."
+    artifacts:
+      - "{artifact_dir}/master-plan.md"
+      - "{artifact_dir}/architecture.md"

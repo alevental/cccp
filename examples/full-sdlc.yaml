@@ -1,0 +1,127 @@
+name: full-sdlc
+description: >
+  Full software development lifecycle — discovery through retrospective.
+  This is an illustrative example showing pipeline composition.
+  In practice, each stage pipeline would be more detailed.
+
+stages:
+  # --- Discovery ---
+  - name: problem-research
+    type: pge
+    description: "Research the problem space and validate the opportunity."
+    generator:
+      agent: researcher
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/discovery.md"
+      criteria:
+        - name: problem-defined
+          description: "Problem statement is clear, specific, and validated."
+        - name: opportunity-sized
+          description: "Opportunity is assessed with rough scope estimate."
+      max_iterations: 2
+
+  - name: discovery-approval
+    type: human_gate
+    prompt: "Review the discovery document. Approve to proceed to design."
+    artifacts:
+      - "{artifact_dir}/discovery.md"
+
+  # --- Design ---
+  - name: technical-design
+    type: pge
+    description: "Design the technical solution."
+    generator:
+      agent: architect
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/design.md"
+      criteria:
+        - name: architecture
+          description: "System architecture is documented with component diagram."
+        - name: api-design
+          description: "API contracts are fully specified."
+        - name: data-model
+          description: "Data model changes are documented."
+      max_iterations: 3
+
+  - name: design-approval
+    type: human_gate
+    prompt: "Review the technical design. Approve to proceed to planning."
+    artifacts:
+      - "{artifact_dir}/design.md"
+
+  # --- Planning ---
+  - name: implementation-plan
+    type: pge
+    description: "Create the implementation plan with sprint breakdown."
+    generator:
+      agent: architect
+      operation: plan-authoring
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/plan.md"
+      criteria:
+        - name: sprint-breakdown
+          description: "Work decomposed into sprints with clear deliverables."
+        - name: estimates
+          description: "Each sprint has a complexity assessment."
+      max_iterations: 3
+
+  - name: plan-approval
+    type: human_gate
+    prompt: "Review the implementation plan. Approve to begin implementation."
+    artifacts:
+      - "{artifact_dir}/plan.md"
+
+  # --- Implementation ---
+  - name: implement
+    type: pge
+    description: "Implement the feature according to the plan."
+    generator:
+      agent: implementer
+    evaluator:
+      agent: code-evaluator
+    contract:
+      deliverable: "{artifact_dir}/implementation-complete.md"
+      criteria:
+        - name: functionality
+          description: "All planned functionality is implemented."
+        - name: tests
+          description: "Tests written and passing."
+      max_iterations: 5
+    on_fail: human_gate
+
+  # --- QA ---
+  - name: quality-assurance
+    type: pge
+    description: "Run quality assurance checks."
+    generator:
+      agent: implementer
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/qa-report.md"
+      criteria:
+        - name: test-coverage
+          description: "Critical paths have test coverage."
+        - name: no-regressions
+          description: "No regressions in existing functionality."
+      max_iterations: 3
+
+  # --- Delivery ---
+  - name: delivery-approval
+    type: human_gate
+    prompt: "QA complete. Approve for delivery."
+    artifacts:
+      - "{artifact_dir}/qa-report.md"
+
+  # --- Retrospective ---
+  - name: retrospective
+    type: agent
+    description: "Write a retrospective document covering what went well, what didn't, and improvements."
+    agent: researcher
+    output: "{artifact_dir}/retrospective.md"

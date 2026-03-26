@@ -1,0 +1,244 @@
+import { describe, it, expect } from "vitest";
+import { readFile, mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
+import {
+  createState,
+  loadState,
+  saveState,
+  updateStageStatus,
+  updatePgeProgress,
+  setStageArtifact,
+  finishPipeline,
+  findResumePoint,
+  statePath,
+  type PipelineState,
+} from "../src/state.js";
+
+function tmpPath() {
+  return join(tmpdir(), `cccpr-test-${randomUUID()}`);
+}
+
+// ---------------------------------------------------------------------------
+// createState
+// ---------------------------------------------------------------------------
+
+describe("createState", () => {
+  it("creates a state with all stages pending", () => {
+    const state = createState("planning", "my-app", "planning.yaml", [
+      { name: "scoping", type: "pge" },
+      { name: "design", type: "pge" },
+      { name: "approval", type: "human_gate" },
+    ]);
+
+    expect(state.pipeline).toBe("planning");
+    expect(state.project).toBe("my-app");
+    expect(state.status).toBe("running");
+    expect(state.stageOrder).toEqual(["scoping", "design", "approval"]);
+    expect(state.stages.scoping.status).toBe("pending");
+    expect(state.stages.design.status).toBe("pending");
+    expect(state.stages.approval.status).toBe("pending");
+    expect(state.runId).toBeDefined();
+    expect(state.startedAt).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// save / load round-trip
+// ---------------------------------------------------------------------------
+
+describe("saveState / loadState", () => {
+  it("persists and reloads state", async () => {
+    const dir = tmpPath();
+    await mkdir(dir, { recursive: true });
+
+    const state = createState("test", "proj", "test.yaml", [
+      { name: "step1", type: "agent" },
+    ]);
+    state.stages.step1.status = "passed";
+
+    await saveState(dir, state);
+
+    const loaded = await loadState(dir);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.pipeline).toBe("test");
+    expect(loaded!.stages.step1.status).toBe("passed");
+    expect(loaded!.runId).toBe(state.runId);
+  });
+
+  it("returns null for missing state file", async () => {
+    const dir = tmpPath();
+    const loaded = await loadState(dir);
+    expect(loaded).toBeNull();
+  });
+
+  it("state file is valid JSON", async () => {
+    const dir = tmpPath();
+    await mkdir(dir, { recursive: true });
+
+    const state = createState("test", "proj", "test.yaml", [
+      { name: "s1", type: "agent" },
+    ]);
+    await saveState(dir, state);
+
+    const raw = await readFile(statePath(dir), "utf-8");
+    const parsed = JSON.parse(raw);
+    expect(parsed.pipeline).toBe("test");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// State update helpers
+// ---------------------------------------------------------------------------
+
+describe("updateStageStatus", () => {
+  it("updates stage status and extra fields", () => {
+    const state = createState("test", "proj", "t.yaml", [
+      { name: "s1", type: "agent" },
+    ]);
+
+    updateStageStatus(state, "s1", "passed", {
+      durationMs: 1234,
+    });
+
+    expect(state.stages.s1.status).toBe("passed");
+    expect(state.stages.s1.durationMs).toBe(1234);
+  });
+
+  it("ignores unknown stage names", () => {
+    const state = createState("test", "proj", "t.yaml", [
+      { name: "s1", type: "agent" },
+    ]);
+
+    // Should not throw.
+    updateStageStatus(state, "nonexistent", "passed");
+  });
+});
+
+describe("updatePgeProgress", () => {
+  it("tracks iteration and step", () => {
+    const state = createState("test", "proj", "t.yaml", [
+      { name: "pge1", type: "pge" },
+    ]);
+
+    updatePgeProgress(state, "pge1", 2, "generator_dispatched");
+
+    expect(state.stages.pge1.iteration).toBe(2);
+    expect(state.stages.pge1.pgeStep).toBe("generator_dispatched");
+  });
+});
+
+describe("setStageArtifact", () => {
+  it("sets artifact paths", () => {
+    const state = createState("test", "proj", "t.yaml", [
+      { name: "s1", type: "pge" },
+    ]);
+
+    setStageArtifact(state, "s1", "contract", "/path/to/contract.md");
+    setStageArtifact(state, "s1", "deliverable", "/path/to/output.md");
+
+    expect(state.stages.s1.artifacts).toEqual({
+      contract: "/path/to/contract.md",
+      deliverable: "/path/to/output.md",
+    });
+  });
+});
+
+describe("finishPipeline", () => {
+  it("sets status and completedAt", () => {
+    const state = createState("test", "proj", "t.yaml", [
+      { name: "s1", type: "agent" },
+    ]);
+
+    finishPipeline(state, "passed");
+
+    expect(state.status).toBe("passed");
+    expect(state.completedAt).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findResumePoint
+// ---------------------------------------------------------------------------
+
+describe("findResumePoint", () => {
+  it("returns null for a completed pipeline", () => {
+    const state = createState("test", "proj", "t.yaml", [
+      { name: "s1", type: "agent" },
+      { name: "s2", type: "agent" },
+    ]);
+    state.status = "passed";
+    state.stages.s1.status = "passed";
+    state.stages.s2.status = "passed";
+
+    expect(findResumePoint(state)).toBeNull();
+  });
+
+  it("resumes from first pending stage", () => {
+    const state = createState("test", "proj", "t.yaml", [
+      { name: "s1", type: "agent" },
+      { name: "s2", type: "agent" },
+      { name: "s3", type: "agent" },
+    ]);
+    state.status = "interrupted";
+    state.stages.s1.status = "passed";
+    // s2 and s3 remain pending.
+
+    const point = findResumePoint(state);
+    expect(point).not.toBeNull();
+    expect(point!.stageIndex).toBe(1);
+    expect(point!.stageName).toBe("s2");
+  });
+
+  it("resumes from an in-progress PGE stage with iteration info", () => {
+    const state = createState("test", "proj", "t.yaml", [
+      { name: "s1", type: "agent" },
+      { name: "pge1", type: "pge" },
+      { name: "s3", type: "agent" },
+    ]);
+    state.status = "interrupted";
+    state.stages.s1.status = "passed";
+    state.stages.pge1.status = "in_progress";
+    state.stages.pge1.iteration = 2;
+    state.stages.pge1.pgeStep = "generator_dispatched";
+
+    const point = findResumePoint(state);
+    expect(point).not.toBeNull();
+    expect(point!.stageIndex).toBe(1);
+    expect(point!.stageName).toBe("pge1");
+    expect(point!.resumeIteration).toBe(2);
+    expect(point!.resumeStep).toBe("generator_dispatched");
+  });
+
+  it("skips completed and skipped stages", () => {
+    const state = createState("test", "proj", "t.yaml", [
+      { name: "s1", type: "agent" },
+      { name: "s2", type: "agent" },
+      { name: "s3", type: "agent" },
+    ]);
+    state.status = "interrupted";
+    state.stages.s1.status = "passed";
+    state.stages.s2.status = "skipped";
+    // s3 remains pending.
+
+    const point = findResumePoint(state);
+    expect(point).not.toBeNull();
+    expect(point!.stageIndex).toBe(2);
+    expect(point!.stageName).toBe("s3");
+  });
+
+  it("resumes from failed stage", () => {
+    const state = createState("test", "proj", "t.yaml", [
+      { name: "s1", type: "agent" },
+      { name: "s2", type: "agent" },
+    ]);
+    state.status = "failed";
+    state.stages.s1.status = "passed";
+    state.stages.s2.status = "failed";
+
+    const point = findResumePoint(state);
+    expect(point).not.toBeNull();
+    expect(point!.stageName).toBe("s2");
+  });
+});

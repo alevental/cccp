@@ -1,0 +1,51 @@
+name: implementation
+description: >
+  Implementation pipeline — execute a sprint with PGE per task.
+  Designed as a single-sprint template; compose multiple for multi-sprint projects.
+
+variables:
+  sprint: "1"
+
+stages:
+  - name: sprint-setup
+    type: agent
+    description: "Read the master plan and set up the sprint working context."
+    agent: architect
+    operation: sprint-brief
+    output: "{artifact_dir}/sprint-{sprint}-brief.md"
+
+  - name: implement
+    type: pge
+    description: "Implement the sprint tasks according to the sprint brief."
+    generator:
+      agent: implementer
+    evaluator:
+      agent: code-evaluator
+    contract:
+      deliverable: "{artifact_dir}/sprint-{sprint}-complete.md"
+      criteria:
+        - name: all-tasks-done
+          description: "All tasks from the sprint brief are implemented."
+        - name: tests-pass
+          description: "All new and existing tests pass."
+        - name: no-regressions
+          description: "No regressions introduced in existing functionality."
+      max_iterations: 5
+    on_fail: human_gate
+
+  - name: sprint-review
+    type: pge
+    description: "Review the sprint deliverables for quality and completeness."
+    generator:
+      agent: architect
+      operation: sprint-review
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/sprint-{sprint}-review.md"
+      criteria:
+        - name: code-quality
+          description: "Code follows project conventions and is well-structured."
+        - name: documentation
+          description: "New code is documented where non-obvious."
+      max_iterations: 2

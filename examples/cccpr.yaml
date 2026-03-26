@@ -1,0 +1,45 @@
+# Example CCCPR project configuration
+# Place this file at your project root as cccpr.yaml
+
+# Directories to search for agent definitions (in priority order).
+# Paths are resolved relative to this file.
+agent_paths:
+  - ./agents
+  - ./.claude/agents
+
+# Named MCP server profiles.
+# Each profile defines which MCP servers are available to agents using it.
+# Use "extends" to inherit from another profile.
+mcp_profiles:
+  base:
+    servers:
+      qmd:
+        command: qmd
+        args: [serve, --stdio]
+
+  design:
+    extends: base
+    servers:
+      figma:
+        command: npx
+        args: [-y, figma-console-mcp]
+
+  qa:
+    extends: base
+    servers:
+      ios-simulator:
+        command: npx
+        args: [-y, "@anthropic/ios-simulator-mcp"]
+
+  research:
+    extends: base
+    servers:
+      google-workspace:
+        command: npx
+        args: [-y, google-workspace-mcp]
+
+# Default artifact output directory pattern.
+artifact_dir: docs/projects/{project}/{pipeline_name}
+
+# Default MCP profile when a stage doesn't specify one.
+default_mcp_profile: base
