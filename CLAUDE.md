@@ -1,4 +1,4 @@
-# CCCPR — Claude Code and Cmux Pipeline Reagent
+# CCCP — Claude Code and Cmux Pipeline Reagent
 
 ## What this project is
 
@@ -15,11 +15,11 @@ npx tsx src/cli.ts    # run CLI in dev mode (use instead of `npm run dev`)
 ## Key commands
 
 ```bash
-cccpr run -f <pipeline.yaml> -p <project> [--dry-run] [--headless]
-cccpr resume -p <project> -a <artifact-dir>
-cccpr dashboard -a <artifact-dir>
-cccpr gate-server                          # MCP server for gate interaction
-cccpr init                                 # scaffold cccpr.yaml + example pipeline
+cccp run -f <pipeline.yaml> -p <project> [--dry-run] [--headless]
+cccp resume -p <project> -a <artifact-dir>
+cccp dashboard -a <artifact-dir>
+cccp gate-server                          # MCP server for gate interaction
+cccp init                                 # scaffold cccp.yaml + example pipeline
 ```
 
 ## Architecture
@@ -28,7 +28,7 @@ cccpr init                                 # scaffold cccpr.yaml + example pipel
 - **Stage types**: `agent` (single dispatch), `pge` (Plan-Generate-Evaluate cycle with retry), `human_gate` (approval gate)
 - **Agent dispatch**: `claude --bare -p ... --system-prompt-file ... --output-format stream-json` (`src/agent.ts`)
 - **PGE cycle**: contract → generator → evaluator → regex parse `### Overall: PASS/FAIL` → route (`src/pge.ts`, `src/evaluator.ts`)
-- **State**: `.cccpr/state.json` with atomic writes, stage-level + PGE-iteration-level resume (`src/state.ts`)
+- **State**: `.cccp/state.json` with atomic writes, stage-level + PGE-iteration-level resume (`src/state.ts`)
 - **Agent resolution**: multi-path search — flat files (`writer.md`) and directory agents with operations (`architect/agent.md` + `architect/plan-authoring.md`) (`src/agent-resolver.ts`)
 - **MCP config**: named profiles with `extends` inheritance, per-agent `--strict-mcp-config` (`src/mcp-config.ts`, `src/config.ts`)
 - **Gates**: `FilesystemGateStrategy` polls state.json; MCP server exposes `pipeline_status` / `pipeline_gate_respond` tools (`src/gate/`)
@@ -37,12 +37,12 @@ cccpr init                                 # scaffold cccpr.yaml + example pipel
 
 ## Project-agnostic design
 
-CCCPR ships **no agents and no pipelines**. It resolves agents from paths defined in the consuming project's `cccpr.yaml`. Templates (contract, evaluation) are defaults that can be overridden.
+CCCP ships **no agents and no pipelines**. It resolves agents from paths defined in the consuming project's `cccp.yaml`. Templates (contract, evaluation) are defaults that can be overridden.
 
 ## Conventions
 
 - ESM (`"type": "module"`) — all imports use `.js` extension
 - TSX files for Ink components (`src/tui/*.tsx`)
 - Tests in `tests/` using vitest, named `*.test.ts`
-- Temp files go to `os.tmpdir()` with `cccpr-` prefix and UUID
+- Temp files go to `os.tmpdir()` with `cccp-` prefix and UUID
 - State files use atomic write (write `.tmp` then `rename`)

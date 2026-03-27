@@ -131,7 +131,7 @@ export function buildTaskContext(ctx: TaskContext): string {
 export async function writeSystemPromptFile(
   agentMarkdown: string,
 ): Promise<string> {
-  const filePath = join(tmpdir(), `cccpr-agent-${randomUUID()}.md`);
+  const filePath = join(tmpdir(), `cccp-agent-${randomUUID()}.md`);
   await writeFile(filePath, agentMarkdown, "utf-8");
   return filePath;
 }

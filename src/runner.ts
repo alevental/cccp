@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { activityBus } from "./activity-bus.js";
 import { dispatchAgent } from "./agent.js";
 import { resolveAgent } from "./agent-resolver.js";
 import { AgentCrashError, MissingOutputError } from "./errors.js";
@@ -10,6 +11,7 @@ import {
   createState,
   loadState,
   saveState,
+  saveStateWithEvent,
   updateStageStatus,
   finishPipeline,
   findResumePoint,
@@ -25,6 +27,18 @@ import type {
   Stage,
 } from "./types.js";
 import type { GateInfo } from "./state.js";
+
+// ---------------------------------------------------------------------------
+// Logging helper — suppressed when TUI dashboard is active
+// ---------------------------------------------------------------------------
+
+function log(ctx: RunContext, ...args: unknown[]): void {
+  if (!ctx.quiet) console.log(...args);
+}
+
+function logError(ctx: RunContext, ...args: unknown[]): void {
+  if (!ctx.quiet) console.error(...args);
+}
 
 // ---------------------------------------------------------------------------
 // Stage dispatch — type: agent
@@ -97,7 +111,11 @@ async function runAgentStage(
     cwd: ctx.projectDir,
     allowedTools: stage.allowed_tools,
     agentName: stage.agent.replace(/[/\\]/g, "-").replace(/\.md$/, ""),
-    streamLogDir: resolve(ctx.artifactDir, ".cccpr"),
+    streamLogDir: resolve(ctx.artifactDir, ".cccp"),
+    claudeConfigDir: ctx.projectConfig?.claude_config_dir,
+    permissionMode: ctx.projectConfig?.permission_mode,
+    onActivity: (activity) => activityBus.emit("activity", activity),
+    quiet: ctx.quiet,
   });
 
   if (result.exitCode !== 0) {
@@ -158,7 +176,7 @@ async function runPgeStage(
       };
 
     case "skip":
-      console.log(`    escalation: skip — continuing pipeline`);
+      log(ctx, `    escalation: skip — continuing pipeline`);
       return {
         stageName: stage.name,
         status: "skipped",
@@ -168,7 +186,7 @@ async function runPgeStage(
 
     case "human_gate":
       if (!ctx.gateStrategy) {
-        console.log(`    escalation: human_gate — no gate strategy, stopping`);
+        log(ctx, `    escalation: human_gate — no gate strategy, stopping`);
         return {
           stageName: stage.name,
           status: "failed",
@@ -177,13 +195,13 @@ async function runPgeStage(
           durationMs: Date.now() - start,
         };
       }
-      console.log(`    escalation: human_gate — awaiting approval`);
+      log(ctx, `    escalation: human_gate — awaiting approval`);
       const gateInfo: GateInfo = {
         stageName: stage.name,
         status: "pending",
         prompt: `PGE stage "${stage.name}" failed after ${pgeResult.iterations} iterations. Approve to continue or reject to stop.`,
       };
-      const state = await loadState(ctx.artifactDir);
+      const state = await loadState(ctx.artifactDir, ctx.projectDir);
       if (state) {
         state.gate = gateInfo;
         await saveState(ctx.artifactDir, state);
@@ -194,7 +212,7 @@ async function runPgeStage(
         await saveState(ctx.artifactDir, state);
       }
       if (gateResponse.approved) {
-        console.log(`    gate approved — continuing pipeline`);
+        log(ctx, `    gate approved — continuing pipeline`);
         return {
           stageName: stage.name,
           status: "skipped",
@@ -237,7 +255,7 @@ async function runHumanGateStage(
 
   // No gate strategy configured — skip with warning.
   if (!ctx.gateStrategy) {
-    console.log(`  [skip] No gate strategy configured (stage: ${stage.name})`);
+    log(ctx, `  [skip] No gate strategy configured (stage: ${stage.name})`);
     return {
       stageName: stage.name,
       status: "skipped",
@@ -252,7 +270,7 @@ async function runHumanGateStage(
     prompt: stage.prompt,
   };
 
-  const state = await loadState(ctx.artifactDir);
+  const state = await loadState(ctx.artifactDir, ctx.projectDir);
   if (state) {
     state.gate = gateInfo;
     await saveState(ctx.artifactDir, state);
@@ -348,9 +366,9 @@ export async function runPipeline(
     const resume = findResumePoint(state);
     if (resume) {
       skipUntilIndex = resume.stageIndex;
-      console.log(`\nCCCPR: Resuming pipeline "${ctx.pipeline.name}" from stage "${resume.stageName}"\n`);
+      log(ctx, `\nCCCP: Resuming pipeline "${ctx.pipeline.name}" from stage "${resume.stageName}"\n`);
     } else {
-      console.log(`\nCCCPR: Pipeline "${ctx.pipeline.name}" has no resumable stages\n`);
+      log(ctx, `\nCCCP: Pipeline "${ctx.pipeline.name}" has no resumable stages\n`);
       return {
         pipeline: ctx.pipeline.name,
         project: ctx.project,
@@ -365,8 +383,9 @@ export async function runPipeline(
       ctx.project,
       ctx.pipelineFile,
       ctx.pipeline.stages.map((s) => ({ name: s.name, type: s.type })),
+      ctx.projectDir,
     );
-    console.log(`\nCCCPR: Running pipeline "${ctx.pipeline.name}" for project "${ctx.project}"\n`);
+    log(ctx, `\nCCCP: Running pipeline "${ctx.pipeline.name}" for project "${ctx.project}"\n`);
   }
 
   if (!ctx.dryRun) {
@@ -380,7 +399,7 @@ export async function runPipeline(
     if (opts?.existingState && i < skipUntilIndex) {
       const stageState = state.stages[stage.name];
       if (stageState?.status === "passed" || stageState?.status === "skipped") {
-        console.log(`  ⏭ ${stage.name}: already ${stageState.status}`);
+        log(ctx, `  ⏭ ${stage.name}: already ${stageState.status}`);
         results.push({
           stageName: stage.name,
           status: stageState.status as "passed" | "skipped",
@@ -390,12 +409,12 @@ export async function runPipeline(
       }
     }
 
-    console.log(`▸ Stage: ${stage.name} (${stage.type})`);
+    log(ctx, `▸ Stage: ${stage.name} (${stage.type})`);
 
     // Mark in_progress in state + update cmux.
     if (!ctx.dryRun) {
       updateStageStatus(state, stage.name, "in_progress");
-      await saveState(ctx.artifactDir, state);
+      await saveStateWithEvent(ctx.artifactDir, state, "stage_start", stage.name);
       await updatePipelineStatus(stage.name, i, ctx.pipeline.stages.length);
     }
 
@@ -409,19 +428,22 @@ export async function runPipeline(
           durationMs: result.durationMs,
           error: result.error,
         });
-        await saveState(ctx.artifactDir, state);
+        await saveStateWithEvent(ctx.artifactDir, state, "stage_complete", stage.name, {
+          status: result.status,
+          durationMs: result.durationMs,
+        });
       }
 
       if (result.status === "failed" || result.status === "error") {
         pipelineStatus = "failed";
-        console.log(`  ✗ ${stage.name}: ${result.status}${result.error ? ` — ${result.error}` : ""}`);
+        log(ctx, `  ✗ ${stage.name}: ${result.status}${result.error ? ` — ${result.error}` : ""}`);
         break;
       }
 
       const duration = result.durationMs > 0
         ? ` (${(result.durationMs / 1000).toFixed(1)}s)`
         : "";
-      console.log(`  ✓ ${stage.name}: ${result.status}${duration}`);
+      log(ctx, `  ✓ ${stage.name}: ${result.status}${duration}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       results.push({
@@ -437,20 +459,21 @@ export async function runPipeline(
         await saveState(ctx.artifactDir, state);
       }
 
-      console.error(`  ✗ ${stage.name}: error — ${message}`);
+      logError(ctx, `  ✗ ${stage.name}: error — ${message}`);
       break;
     }
   }
 
   // Finalize state + notify cmux.
   if (!ctx.dryRun) {
-    finishPipeline(state, pipelineStatus === "passed" ? "passed" : pipelineStatus === "error" ? "error" : "failed");
-    await saveState(ctx.artifactDir, state);
+    const finalStatus = pipelineStatus === "passed" ? "passed" : pipelineStatus === "error" ? "error" : "failed";
+    finishPipeline(state, finalStatus);
+    await saveStateWithEvent(ctx.artifactDir, state, "pipeline_complete", undefined, { status: finalStatus });
     await notifyPipelineComplete(ctx.pipeline.name, pipelineStatus);
   }
 
   const durationMs = Date.now() - start;
-  console.log(`\nPipeline "${ctx.pipeline.name}": ${pipelineStatus} (${(durationMs / 1000).toFixed(1)}s)\n`);
+  log(ctx, `\nPipeline "${ctx.pipeline.name}": ${pipelineStatus} (${(durationMs / 1000).toFixed(1)}s)\n`);
 
   return {
     pipeline: ctx.pipeline.name,

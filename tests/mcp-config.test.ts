@@ -173,7 +173,7 @@ describe("writeMcpConfigFile", () => {
 
     const path = await writeMcpConfigFile("test", config);
     expect(path).toBeDefined();
-    expect(path!).toContain("cccpr-mcp-");
+    expect(path!).toContain("cccp-mcp-");
 
     const content = JSON.parse(await readFile(path!, "utf-8"));
     expect(content.mcpServers.qmd.command).toBe("qmd");

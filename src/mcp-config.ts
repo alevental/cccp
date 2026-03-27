@@ -116,7 +116,7 @@ export async function writeMcpConfigFile(
     return undefined;
   }
 
-  const filePath = join(tmpdir(), `cccpr-mcp-${randomUUID()}.json`);
+  const filePath = join(tmpdir(), `cccp-mcp-${randomUUID()}.json`);
   await writeFile(filePath, JSON.stringify(mcpConfig, null, 2), "utf-8");
   return filePath;
 }

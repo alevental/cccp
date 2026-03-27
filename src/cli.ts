@@ -16,7 +16,7 @@ import type { RunContext } from "./types.js";
 const program = new Command();
 
 program
-  .name("cccpr")
+  .name("cccp")
   .description(
     "Claude Code and Cmux Pipeline Reagent — deterministic YAML-based pipeline orchestration",
   )
@@ -33,7 +33,7 @@ program
   )
   .option(
     "-a, --artifact-dir <path>",
-    "Artifact output directory (overrides cccpr.yaml and default)",
+    "Artifact output directory (overrides cccp.yaml and default)",
   )
   .option("--dry-run", "Show assembled prompts without executing agents")
   .option("--headless", "Auto-approve all gates (no human interaction)")
@@ -46,12 +46,12 @@ program
     const pipelineFile = resolve(opts.file);
     const projectDir = resolve(opts.projectDir ?? process.cwd());
 
-    // Load project config (cccpr.yaml) — returns empty defaults if absent.
+    // Load project config (cccp.yaml) — returns empty defaults if absent.
     const projectConfig = await loadProjectConfig(projectDir);
 
     const pipeline = await loadPipeline(pipelineFile);
 
-    // Artifact dir priority: CLI flag > cccpr.yaml > default pattern.
+    // Artifact dir priority: CLI flag > cccp.yaml > default pattern.
     let artifactDir: string;
     if (opts.artifactDir) {
       artifactDir = resolve(opts.artifactDir);
@@ -101,10 +101,13 @@ program
       ...cliVars,
     };
 
+    // Show TUI dashboard by default unless headless or dry-run.
+    const showTui = !opts.headless && !opts.dryRun;
+
     // Gate strategy: headless → auto-approve, otherwise → filesystem polling.
     const gateStrategy: GateStrategy = opts.headless
       ? new AutoApproveStrategy()
-      : new FilesystemGateStrategy(artifactDir);
+      : new FilesystemGateStrategy(artifactDir, projectDir, showTui);
 
     const ctx: RunContext = {
       project: opts.project,
@@ -117,11 +120,36 @@ program
       agentSearchPaths,
       projectConfig,
       gateStrategy,
+      quiet: showTui,
     };
 
-    const result = await runPipeline(ctx);
+    if (showTui) {
+      const { createState, saveState } = await import("./state.js");
+      const { startDashboard } = await import("./tui/dashboard.js");
 
-    process.exit(result.status === "passed" ? 0 : 1);
+      // Create initial state so the dashboard has something to render.
+      const initialState = createState(
+        pipeline.name,
+        opts.project,
+        pipelineFile,
+        pipeline.stages.map((s: any) => ({ name: s.name, type: s.type })),
+        projectDir,
+      );
+      await saveState(artifactDir, initialState);
+
+      // Start dashboard, then run pipeline. Dashboard watches state.json.
+      const dashboard = startDashboard(artifactDir, projectDir, initialState);
+      const result = await runPipeline(ctx, { existingState: initialState });
+
+      // Brief pause for final render, then unmount.
+      await new Promise((r) => setTimeout(r, 500));
+      dashboard.unmount();
+
+      process.exit(result.status === "passed" ? 0 : 1);
+    } else {
+      const result = await runPipeline(ctx);
+      process.exit(result.status === "passed" ? 0 : 1);
+    }
   });
 
 program
@@ -134,7 +162,7 @@ program
   )
   .option(
     "-a, --artifact-dir <path>",
-    "Artifact directory containing .cccpr/state.json",
+    "Artifact directory containing .cccp/state.json",
   )
   .option("--headless", "Auto-approve all gates")
   .action(async (opts) => {
@@ -146,7 +174,7 @@ program
       artifactDir = resolve(opts.artifactDir);
     } else {
       console.error(
-        "Error: --artifact-dir is required for resume (to locate .cccpr/state.json)",
+        "Error: --artifact-dir is required for resume (to locate .cccp/state.json)",
       );
       process.exit(1);
     }
@@ -154,7 +182,7 @@ program
     const existingState = await loadState(artifactDir);
     if (!existingState) {
       console.error(
-        `No state file found at ${artifactDir}/.cccpr/state.json`,
+        `No state file found at ${artifactDir}/.cccp/state.json`,
       );
       process.exit(1);
     }
@@ -185,7 +213,7 @@ program
 
     const gateStrategy: GateStrategy = opts.headless
       ? new AutoApproveStrategy()
-      : new FilesystemGateStrategy(artifactDir);
+      : new FilesystemGateStrategy(artifactDir, projectDir);
 
     const ctx: RunContext = {
       project: opts.project,
@@ -210,45 +238,50 @@ program
   .description("Launch the TUI dashboard to monitor a running pipeline")
   .requiredOption(
     "-a, --artifact-dir <path>",
-    "Artifact directory containing .cccpr/state.json",
+    "Artifact directory for the run",
+  )
+  .option(
+    "-d, --project-dir <path>",
+    "Project directory (defaults to cwd)",
   )
   .action(async (opts) => {
     const artifactDir = resolve(opts.artifactDir);
-    const existingState = await loadState(artifactDir);
+    const dashProjectDir = resolve(opts.projectDir ?? process.cwd());
+    const existingState = await loadState(artifactDir, dashProjectDir);
 
     if (!existingState) {
       console.error(
-        `No state file found at ${artifactDir}/.cccpr/state.json`,
+        `No pipeline run found for artifact dir: ${artifactDir}`,
       );
       process.exit(1);
     }
 
     const { launchDashboard } = await import("./tui/dashboard.js");
-    await launchDashboard(artifactDir, existingState);
+    await launchDashboard(artifactDir, dashProjectDir, existingState);
   });
 
 program
-  .command("gate-server")
+  .command("mcp-server")
   .description(
-    "Start the MCP server for pipeline gate interaction. " +
-      "Register this in .mcp.json for Claude Code integration.",
+    "Start the CCCP MCP server. Exposes pipeline runs, status, gate interaction, " +
+      "logs, and artifacts. Register in .mcp.json for Claude Code integration.",
   )
   .action(async () => {
-    const { startMcpServer } = await import("./gate/mcp-server.js");
+    const { startMcpServer } = await import("./mcp-server.js");
     await startMcpServer();
   });
 
 program
   .command("init")
-  .description("Scaffold a cccpr.yaml config and example pipeline in the current directory")
+  .description("Scaffold a cccp.yaml config and example pipeline in the current directory")
   .option("-d, --dir <path>", "Directory to scaffold in (defaults to cwd)")
   .action(async (opts) => {
     const dir = resolve(opts.dir ?? process.cwd());
 
-    // Write cccpr.yaml
-    const configPath = resolve(dir, "cccpr.yaml");
-    const configContent = `# CCCPR project configuration
-# See: https://github.com/your-org/cccpr
+    // Write cccp.yaml
+    const configPath = resolve(dir, "cccp.yaml");
+    const configContent = `# CCCP project configuration
+# See: https://github.com/your-org/cccp
 
 # Directories to search for agent definitions (in priority order).
 agent_paths:
@@ -398,13 +431,13 @@ You are an evaluator. Grade the deliverable against the contract criteria.
     await writeFile(configPath, configContent, "utf-8");
     await writeFile(pipelinePath, pipelineContent, "utf-8");
 
-    console.log(`Scaffolded CCCPR project in ${dir}:`);
-    console.log(`  cccpr.yaml           — project configuration`);
+    console.log(`Scaffolded CCCP project in ${dir}:`);
+    console.log(`  cccp.yaml           — project configuration`);
     console.log(`  pipelines/example.yaml — example pipeline`);
     console.log(`  agents/researcher.md — example research agent`);
     console.log(`  agents/writer.md     — example writer agent`);
     console.log(`  agents/reviewer.md   — example reviewer/evaluator agent`);
-    console.log(`\nRun with: cccpr run -f pipelines/example.yaml -p my-project --dry-run`);
+    console.log(`\nRun with: cccp run -f pipelines/example.yaml -p my-project --dry-run`);
   });
 
 program.parse();

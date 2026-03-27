@@ -29,7 +29,7 @@ async function cmux(...args: string[]): Promise<string> {
 
 /** Set the sidebar status pill. */
 export async function setStatus(label: string): Promise<void> {
-  await cmux("set-status", "cccpr", label);
+  await cmux("set-status", "cccp", label);
 }
 
 /** Set the progress bar (0.0–1.0). */

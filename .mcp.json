@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "cccp": {
+      "command": "npx",
+      "args": ["tsx", "/Users/alevental/Developer-Personal/cccp/src/cli.ts", "mcp-server"]
+    },
+    "qmd": {
+      "command": "qmd",
+      "args": ["--index", "cccp", "mcp"],
+      "env": {
+        "INDEX_PATH": "/Users/alevental/.cache/qmd/cccp.sqlite"
+      }
+    }
+  }
+}

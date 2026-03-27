@@ -1,4 +1,4 @@
-# CCCPR
+# CCCP
 
 **Claude Code and Cmux Pipeline Reagent** — deterministic YAML-based pipeline orchestration for workflows built around [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [cmux](https://github.com/manaflow-ai/cmux).
 
@@ -8,7 +8,7 @@ Complex multi-stage workflows (SDLC pipelines, research pipelines, content pipel
 
 ## The solution
 
-CCCPR moves the state machine into deterministic TypeScript code. It reads YAML pipeline definitions, dispatches agents via `claude -p` (each with fresh context), parses evaluations with regex, and routes without interpretation. A cmux split-pane dashboard shows live progress. Human approval gates are handled via an MCP server.
+CCCP moves the state machine into deterministic TypeScript code. It reads YAML pipeline definitions, dispatches agents via `claude -p` (each with fresh context), parses evaluations with regex, and routes without interpretation. A cmux split-pane dashboard shows live progress. Human approval gates are handled via an MCP server.
 
 - Uses Max subscription — no API keys needed
 - Each agent gets a fresh context window
@@ -19,9 +19,9 @@ CCCPR moves the state machine into deterministic TypeScript code. It reads YAML 
 ## Install
 
 ```bash
-git clone <repo-url> && cd cccpr
+git clone <repo-url> && cd cccp
 npm install
-npm link  # makes `cccpr` available globally
+npm link  # makes `cccp` available globally
 ```
 
 ## Quick start
@@ -30,13 +30,13 @@ Scaffold a project:
 
 ```bash
 cd my-project
-cccpr init
+cccp init
 ```
 
 This creates:
 
 ```
-cccpr.yaml             # project config (agent paths, MCP profiles)
+cccp.yaml             # project config (agent paths, MCP profiles)
 pipelines/example.yaml # example pipeline
 agents/                # example agent definitions
 ```
@@ -44,13 +44,13 @@ agents/                # example agent definitions
 Preview what the pipeline will do:
 
 ```bash
-cccpr run -f pipelines/example.yaml -p my-project --dry-run
+cccp run -f pipelines/example.yaml -p my-project --dry-run
 ```
 
 Run it for real:
 
 ```bash
-cccpr run -f pipelines/example.yaml -p my-project
+cccp run -f pipelines/example.yaml -p my-project
 ```
 
 ## Pipeline YAML
@@ -117,7 +117,7 @@ Built-in variables available in all string fields:
 
 ## Agents
 
-CCCPR ships no agents — you bring your own. Agents are markdown files that become the `--system-prompt-file` for `claude -p`.
+CCCP ships no agents — you bring your own. Agents are markdown files that become the `--system-prompt-file` for `claude -p`.
 
 **Flat file agent** (`agents/implementer.md`):
 ```markdown
@@ -148,14 +148,14 @@ generator:
 
 ### Agent search paths
 
-CCCPR searches for agents in order (first match wins):
+CCCP searches for agents in order (first match wins):
 
 1. `agents/` relative to the pipeline YAML file
 2. `<project>/.claude/agents/`
 3. `<project>/agents/`
-4. Paths listed in `cccpr.yaml` → `agent_paths`
+4. Paths listed in `cccp.yaml` → `agent_paths`
 
-## Project config (`cccpr.yaml`)
+## Project config (`cccp.yaml`)
 
 Place at your project root:
 
@@ -197,12 +197,12 @@ or
 ### Overall: FAIL
 ```
 
-CCCPR reads only this line. Everything else in the evaluation (criterion tables, iteration guidance) is for the generator agent on retry.
+CCCP reads only this line. Everything else in the evaluation (criterion tables, iteration guidance) is for the generator agent on retry.
 
 ## CLI reference
 
 ```
-cccpr run -f <pipeline.yaml> -p <project> [options]
+cccp run -f <pipeline.yaml> -p <project> [options]
   --dry-run              Show what would execute without running agents
   --headless             Auto-approve all human gates
   --webhook-url <url>    POST pipeline events to a webhook
@@ -210,31 +210,31 @@ cccpr run -f <pipeline.yaml> -p <project> [options]
   -a, --artifact-dir     Override artifact output directory
   -v, --var key=value    Set pipeline variables (repeatable)
 
-cccpr resume -p <project> -a <artifact-dir> [--headless]
+cccp resume -p <project> -a <artifact-dir> [--headless]
   Resume an interrupted pipeline from the last incomplete stage
 
-cccpr dashboard -a <artifact-dir>
+cccp dashboard -a <artifact-dir>
   Launch the TUI dashboard to monitor a running pipeline
 
-cccpr gate-server
+cccp gate-server
   Start the MCP server for pipeline gate interaction
 
-cccpr init [--dir <path>]
-  Scaffold cccpr.yaml, example pipeline, and example agents
+cccp init [--dir <path>]
+  Scaffold cccp.yaml, example pipeline, and example agents
 ```
 
 ## Gate interaction
 
-When a pipeline hits a `human_gate` stage, it writes `gate_pending` to `.cccpr/state.json` and waits.
+When a pipeline hits a `human_gate` stage, it writes `gate_pending` to `.cccp/state.json` and waits.
 
 **Option 1: MCP server** — Register the gate server in your project's `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
-    "cccpr-gate": {
+    "cccp-gate": {
       "command": "npx",
-      "args": ["tsx", "/path/to/cccpr/src/cli.ts", "gate-server"]
+      "args": ["tsx", "/path/to/cccp/src/cli.ts", "gate-server"]
     }
   }
 }
@@ -242,28 +242,28 @@ When a pipeline hits a `human_gate` stage, it writes `gate_pending` to `.cccpr/s
 
 Then from Claude Code: call `pipeline_status` to see what's pending, `pipeline_gate_respond` to approve/reject.
 
-**Option 2: Headless** — `cccpr run --headless` auto-approves all gates.
+**Option 2: Headless** — `cccp run --headless` auto-approves all gates.
 
 ## State & resume
 
-Pipeline state is persisted to `{artifact_dir}/.cccpr/state.json` after every transition (stage start, contract write, generator dispatch, evaluator dispatch, routing decision). If a run is interrupted:
+Pipeline state is persisted to `{artifact_dir}/.cccp/state.json` after every transition (stage start, contract write, generator dispatch, evaluator dispatch, routing decision). If a run is interrupted:
 
 ```bash
-cccpr resume -p my-project -a docs/projects/my-project/planning
+cccp resume -p my-project -a docs/projects/my-project/planning
 ```
 
 Completed stages are skipped. PGE stages resume at the correct iteration and sub-step.
 
 ## cmux integration
 
-When running inside a [cmux](https://github.com/manaflow-ai/cmux) workspace (`CMUX_WORKSPACE_ID` is set), CCCPR automatically:
+When running inside a [cmux](https://github.com/manaflow-ai/cmux) workspace (`CMUX_WORKSPACE_ID` is set), CCCP automatically:
 
 - Updates the sidebar status pill with current stage
 - Sets the progress bar
 - Sends desktop notifications for gates and pipeline completion
 - Can open the dashboard in a cmux split pane
 
-Without cmux, CCCPR falls back to plain terminal output.
+Without cmux, CCCP falls back to plain terminal output.
 
 ## Development
 

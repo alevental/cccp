@@ -4,7 +4,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------
-// Zod schema for cccpr.yaml
+// Zod schema for cccp.yaml
 // ---------------------------------------------------------------------------
 
 const McpServerSchema = z.object({
@@ -27,6 +27,10 @@ const ProjectConfigSchema = z.object({
   artifact_dir: z.string().optional(),
   /** Default MCP profile applied when a stage doesn't specify one. */
   default_mcp_profile: z.string().optional(),
+  /** Claude config directory (default: inherits CLAUDE_CONFIG_DIR or ~/.claude). */
+  claude_config_dir: z.string().optional(),
+  /** Permission mode for agent subprocesses (default: bypassPermissions). */
+  permission_mode: z.enum(["default", "acceptEdits", "bypassPermissions", "auto"]).optional(),
 });
 
 export type McpServer = z.infer<typeof McpServerSchema>;
@@ -38,7 +42,7 @@ export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
 // ---------------------------------------------------------------------------
 
 /**
- * Load a cccpr.yaml project config from the given directory.
+ * Load a cccp.yaml project config from the given directory.
  * Returns an empty config (all defaults) if the file doesn't exist.
  *
  * Paths in `agent_paths` are resolved relative to the config file's directory.
@@ -46,7 +50,7 @@ export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
 export async function loadProjectConfig(
   projectDir: string,
 ): Promise<ProjectConfig> {
-  const configPath = resolve(projectDir, "cccpr.yaml");
+  const configPath = resolve(projectDir, "cccp.yaml");
 
   let raw: string;
   try {

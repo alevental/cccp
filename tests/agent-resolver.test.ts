@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { resolveAgent, listOperations } from "../src/agent-resolver.js";
 
 function tmpPath() {
-  return join(tmpdir(), `cccpr-test-${randomUUID()}`);
+  return join(tmpdir(), `cccp-test-${randomUUID()}`);
 }
 
 async function setupAgentDirs() {

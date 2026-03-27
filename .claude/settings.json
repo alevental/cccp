@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "qmd --index cccp update 2>/dev/null && qmd --index cccp embed 2>/dev/null"
+          }
+        ]
+      }
+    ]
+  }
+}

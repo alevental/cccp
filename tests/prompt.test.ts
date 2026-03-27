@@ -11,7 +11,7 @@ import {
 } from "../src/prompt.js";
 
 function tmpPath() {
-  return join(tmpdir(), `cccpr-test-${randomUUID()}`);
+  return join(tmpdir(), `cccp-test-${randomUUID()}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -153,7 +153,7 @@ describe("writeSystemPromptFile", () => {
     const content = "# Agent\n\nDo things.";
     const filePath = await writeSystemPromptFile(content);
 
-    expect(filePath).toContain("cccpr-agent-");
+    expect(filePath).toContain("cccp-agent-");
     const read = await readFile(filePath, "utf-8");
     expect(read).toBe(content);
   });

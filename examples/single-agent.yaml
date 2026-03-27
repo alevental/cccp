@@ -1,5 +1,5 @@
 name: single-agent-test
-description: Minimal pipeline with one agent stage — for testing CCCPR core loop.
+description: Minimal pipeline with one agent stage — for testing CCCP core loop.
 
 stages:
   - name: hello-world

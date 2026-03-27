@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { loadPipeline } from "../src/pipeline.js";
 
 function tmpPath() {
-  return join(tmpdir(), `cccpr-test-${randomUUID()}`);
+  return join(tmpdir(), `cccp-test-${randomUUID()}`);
 }
 
 async function writeTmpYaml(content: string): Promise<string> {

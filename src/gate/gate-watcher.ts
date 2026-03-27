@@ -16,40 +16,40 @@ const POLL_INTERVAL_MS = 2000;
  * - Direct edit of state.json
  */
 export class FilesystemGateStrategy implements GateStrategy {
-  constructor(private artifactDir: string) {}
+  constructor(
+    private artifactDir: string,
+    private projectDir?: string,
+    private quiet?: boolean,
+  ) {}
 
   async waitForGate(gate: GateInfo): Promise<GateResponse> {
-    // Notify via cmux that a gate requires attention.
     await notifyGateRequired(gate.stageName);
 
-    console.log(
-      `    ⏸ Waiting for gate approval: ${gate.stageName}`,
-    );
-    if (gate.prompt) {
-      console.log(`      ${gate.prompt}`);
+    if (!this.quiet) {
+      console.log(`    ⏸ Waiting for gate approval: ${gate.stageName}`);
+      if (gate.prompt) console.log(`      ${gate.prompt}`);
     }
 
-    // Poll state.json until gate.status changes from "pending".
     return new Promise<GateResponse>((resolve) => {
       const interval = setInterval(async () => {
         try {
-          const state = await loadState(this.artifactDir);
+          const state = await loadState(this.artifactDir, this.projectDir, true);
           if (!state?.gate) return;
 
           if (state.gate.stageName !== gate.stageName) return;
 
           if (state.gate.status === "approved") {
             clearInterval(interval);
-            console.log(`    ✓ Gate approved`);
+            if (!this.quiet) console.log(`    ✓ Gate approved`);
             resolve({
               approved: true,
               feedback: state.gate.feedback,
             });
           } else if (state.gate.status === "rejected") {
             clearInterval(interval);
-            console.log(
-              `    ✗ Gate rejected${state.gate.feedback ? `: ${state.gate.feedback}` : ""}`,
-            );
+            if (!this.quiet) {
+              console.log(`    ✗ Gate rejected${state.gate.feedback ? `: ${state.gate.feedback}` : ""}`);
+            }
             resolve({
               approved: false,
               feedback: state.gate.feedback,

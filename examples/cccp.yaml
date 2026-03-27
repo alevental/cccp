@@ -1,5 +1,5 @@
-# Example CCCPR project configuration
-# Place this file at your project root as cccpr.yaml
+# Example CCCP project configuration
+# Place this file at your project root as cccp.yaml
 
 # Directories to search for agent definitions (in priority order).
 # Paths are resolved relative to this file.

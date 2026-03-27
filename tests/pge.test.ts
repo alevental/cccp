@@ -7,7 +7,7 @@ import { generateContract } from "../src/contract.js";
 import type { PgeStage, RunContext, Pipeline } from "../src/types.js";
 
 function tmpPath() {
-  return join(tmpdir(), `cccpr-test-${randomUUID()}`);
+  return join(tmpdir(), `cccp-test-${randomUUID()}`);
 }
 
 // ---------------------------------------------------------------------------

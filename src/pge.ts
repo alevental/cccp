@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { mkdir } from "node:fs/promises";
+import { activityBus } from "./activity-bus.js";
 import { dispatchAgent } from "./agent.js";
 import { resolveAgent } from "./agent-resolver.js";
 import { writeContract } from "./contract.js";
@@ -19,6 +20,10 @@ import {
   setStageArtifact,
 } from "./state.js";
 import type { PgeStage, PgeResult, RunContext } from "./types.js";
+
+function log(ctx: RunContext, ...args: unknown[]): void {
+  if (!ctx.quiet) console.log(...args);
+}
 
 // ---------------------------------------------------------------------------
 // PGE cycle
@@ -87,11 +92,11 @@ export async function runPgeCycle(
       ? resolve(ctx.projectDir, stage.contract.template)
       : undefined,
   });
-  console.log(`    contract written: ${contractPath}`);
+  log(ctx, `    contract written: ${contractPath}`);
 
   // Persist contract artifact path to state.
   if (!ctx.dryRun) {
-    const state = await loadState(ctx.artifactDir);
+    const state = await loadState(ctx.artifactDir, ctx.projectDir);
     if (state) {
       setStageArtifact(state, stage.name, "contract", contractPath);
       updatePgeProgress(state, stage.name, 0, "contract_written");
@@ -136,7 +141,7 @@ export async function runPgeCycle(
   let lastEvalPath: string | undefined;
 
   for (let iter = 1; iter <= maxIter; iter++) {
-    console.log(`    iteration ${iter}/${maxIter}`);
+    log(ctx, `    iteration ${iter}/${maxIter}`);
     const evalPath = resolve(stageDir, `evaluation-${iter}.md`);
 
     // --- Step 2: Dispatch generator ---
@@ -150,7 +155,7 @@ export async function runPgeCycle(
       maxIterations: maxIter,
     });
 
-    console.log(`    dispatching generator: ${stage.generator.agent}`);
+    log(ctx, `    dispatching generator: ${stage.generator.agent}`);
     const genResult = await dispatchAgent({
       userPrompt: genPrompt,
       systemPromptFile: genSystemFile,
@@ -158,6 +163,12 @@ export async function runPgeCycle(
       expectedOutput: deliverablePath,
       cwd: ctx.projectDir,
       allowedTools: stage.generator.allowed_tools,
+      claudeConfigDir: ctx.projectConfig?.claude_config_dir,
+      permissionMode: ctx.projectConfig?.permission_mode,
+      agentName: `${stage.name}-generator`,
+      streamLogDir: resolve(ctx.artifactDir, ".cccp"),
+      onActivity: (activity) => activityBus.emit("activity", activity),
+      quiet: ctx.quiet,
     });
 
     if (genResult.exitCode !== 0) {
@@ -169,7 +180,7 @@ export async function runPgeCycle(
 
     // Persist generator completion.
     if (!ctx.dryRun) {
-      const state = await loadState(ctx.artifactDir);
+      const state = await loadState(ctx.artifactDir, ctx.projectDir);
       if (state) {
         updatePgeProgress(state, stage.name, iter, "generator_dispatched");
         setStageArtifact(state, stage.name, "deliverable", deliverablePath);
@@ -188,7 +199,7 @@ export async function runPgeCycle(
       maxIterations: maxIter,
     });
 
-    console.log(`    dispatching evaluator: ${stage.evaluator.agent}`);
+    log(ctx, `    dispatching evaluator: ${stage.evaluator.agent}`);
     const evalResult = await dispatchAgent({
       userPrompt: evalPrompt,
       systemPromptFile: evalSystemFile,
@@ -196,6 +207,12 @@ export async function runPgeCycle(
       expectedOutput: evalPath,
       cwd: ctx.projectDir,
       allowedTools: stage.evaluator.allowed_tools,
+      claudeConfigDir: ctx.projectConfig?.claude_config_dir,
+      permissionMode: ctx.projectConfig?.permission_mode,
+      agentName: `${stage.name}-evaluator`,
+      streamLogDir: resolve(ctx.artifactDir, ".cccp"),
+      onActivity: (activity) => activityBus.emit("activity", activity),
+      quiet: ctx.quiet,
     });
 
     if (evalResult.exitCode !== 0) {
@@ -207,7 +224,7 @@ export async function runPgeCycle(
 
     // Persist evaluator completion.
     if (!ctx.dryRun) {
-      const state = await loadState(ctx.artifactDir);
+      const state = await loadState(ctx.artifactDir, ctx.projectDir);
       if (state) {
         updatePgeProgress(state, stage.name, iter, "evaluator_dispatched");
         setStageArtifact(state, stage.name, `evaluation-${iter}`, evalPath);
@@ -219,7 +236,7 @@ export async function runPgeCycle(
     const evaluation = await parseEvaluation(evalPath);
 
     if (evaluation.outcome === "parse_error") {
-      console.error(`    evaluation parse error: ${evaluation.error}`);
+      if (!ctx.quiet) console.error(`    evaluation parse error: ${evaluation.error}`);
       return {
         outcome: "error",
         iterations: iter,
@@ -233,7 +250,7 @@ export async function runPgeCycle(
     // --- Step 5: Route ---
     // Persist routing decision.
     if (!ctx.dryRun) {
-      const state = await loadState(ctx.artifactDir);
+      const state = await loadState(ctx.artifactDir, ctx.projectDir);
       if (state) {
         updatePgeProgress(state, stage.name, iter, "routed");
         await saveState(ctx.artifactDir, state);
@@ -241,7 +258,7 @@ export async function runPgeCycle(
     }
 
     if (evaluation.outcome === "pass") {
-      console.log(`    evaluation: PASS`);
+      log(ctx, `    evaluation: PASS`);
       return {
         outcome: "pass",
         iterations: iter,
@@ -253,12 +270,12 @@ export async function runPgeCycle(
     }
 
     // FAIL — check if retries remain
-    console.log(`    evaluation: FAIL`);
+    log(ctx, `    evaluation: FAIL`);
     lastEvalPath = evalPath;
 
     if (iter === maxIter) {
       // Max iterations reached — escalate
-      console.log(`    max iterations reached — escalating (${stage.on_fail ?? "stop"})`);
+      log(ctx, `    max iterations reached — escalating (${stage.on_fail ?? "stop"})`);
       return {
         outcome: "fail",
         iterations: iter,
@@ -269,7 +286,7 @@ export async function runPgeCycle(
       };
     }
 
-    console.log(`    retrying...`);
+    log(ctx, `    retrying...`);
   }
 
   // Should never reach here, but TypeScript needs it

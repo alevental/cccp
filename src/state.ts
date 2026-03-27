@@ -1,6 +1,9 @@
-import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
-import { resolve, dirname, join } from "node:path";
+import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import { openDatabase, type CccpDatabase, type DiscoveredRun, type StateEvent } from "./db.js";
+
+// Re-export types from db.ts that callers reference
+export type { DiscoveredRun, StateEvent } from "./db.js";
 
 // ---------------------------------------------------------------------------
 // State types
@@ -65,14 +68,16 @@ export interface PipelineState {
   stageOrder: string[];
   /** Active gate info, if any. */
   gate?: GateInfo;
+  /** Project root directory. Used to locate the database. */
+  projectDir?: string;
 }
 
 // ---------------------------------------------------------------------------
-// State file path
+// Legacy state file path (kept for .stream.jsonl and artifact directory)
 // ---------------------------------------------------------------------------
 
 export function stateDir(artifactDir: string): string {
-  return resolve(artifactDir, ".cccpr");
+  return resolve(artifactDir, ".cccp");
 }
 
 export function statePath(artifactDir: string): string {
@@ -80,15 +85,17 @@ export function statePath(artifactDir: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Atomic file write
+// Database resolution
 // ---------------------------------------------------------------------------
 
-async function atomicWrite(path: string, data: string): Promise<void> {
-  const dir = dirname(path);
-  await mkdir(dir, { recursive: true });
-  const tmp = join(dir, `.state-${randomUUID()}.tmp`);
-  await writeFile(tmp, data, "utf-8");
-  await rename(tmp, path);
+/**
+ * Resolve the project directory for database access.
+ * Priority: state.projectDir > derive from pipelineFile > cwd
+ */
+function resolveProjectDir(state?: PipelineState | null): string {
+  if (state?.projectDir) return state.projectDir;
+  // Fall back to cwd (the MCP server and CLI always run from project root)
+  return process.cwd();
 }
 
 // ---------------------------------------------------------------------------
@@ -103,6 +110,7 @@ export function createState(
   project: string,
   pipelineFile: string,
   stages: Array<{ name: string; type: string }>,
+  projectDir?: string,
 ): PipelineState {
   const stageMap: Record<string, StageState> = {};
   const order: string[] = [];
@@ -125,37 +133,63 @@ export function createState(
     status: "running",
     stages: stageMap,
     stageOrder: order,
+    projectDir,
   };
 }
 
 /**
- * Load pipeline state from disk. Returns null if no state file exists.
+ * Load pipeline state. Queries the SQLite database by artifactDir.
+ * When `reloadFromDisk` is true, re-reads the DB file first — needed when
+ * another process (e.g., MCP server) may have written to it.
  */
 export async function loadState(
   artifactDir: string,
+  projectDir?: string,
+  reloadFromDisk?: boolean,
 ): Promise<PipelineState | null> {
-  const path = statePath(artifactDir);
   try {
-    const raw = await readFile(path, "utf-8");
-    return JSON.parse(raw) as PipelineState;
+    const dir = projectDir ?? resolveProjectDir();
+    const db = await openDatabase(dir);
+    if (reloadFromDisk) db.reload();
+    return db.getRunByArtifactDir(artifactDir);
   } catch {
     return null;
   }
 }
 
 /**
- * Save pipeline state to disk (atomic write).
+ * Save pipeline state to the SQLite database.
+ * Also appends an event to the audit log and flushes to disk.
  */
 export async function saveState(
   artifactDir: string,
   state: PipelineState,
 ): Promise<void> {
-  const path = statePath(artifactDir);
-  await atomicWrite(path, JSON.stringify(state, null, 2));
+  const dir = resolveProjectDir(state);
+  const db = await openDatabase(dir);
+  db.upsertRun(state, artifactDir);
+  db.flush();
+}
+
+/**
+ * Save state and record an event in the audit log.
+ */
+export async function saveStateWithEvent(
+  artifactDir: string,
+  state: PipelineState,
+  eventType: string,
+  stageName?: string,
+  eventData?: unknown,
+): Promise<void> {
+  const dir = resolveProjectDir(state);
+  const db = await openDatabase(dir);
+  db.upsertRun(state, artifactDir);
+  db.appendEvent(state.runId, eventType, stageName, eventData);
+  db.flush();
 }
 
 // ---------------------------------------------------------------------------
-// State update helpers
+// State update helpers (in-memory mutations — caller must saveState after)
 // ---------------------------------------------------------------------------
 
 export function updateStageStatus(
@@ -228,18 +262,15 @@ export function findResumePoint(state: PipelineState): ResumePoint | null {
     const name = state.stageOrder[i];
     const stage = state.stages[name];
 
-    // Skip completed/skipped stages.
     if (stage.status === "passed" || stage.status === "skipped") {
       continue;
     }
 
-    // Found a stage that wasn't completed.
     const point: ResumePoint = {
       stageIndex: i,
       stageName: name,
     };
 
-    // For PGE stages that were in progress, resume at the right sub-step.
     if (stage.type === "pge" && stage.status === "in_progress") {
       point.resumeIteration = stage.iteration ?? 1;
       point.resumeStep = stage.pgeStep;
@@ -249,4 +280,23 @@ export function findResumePoint(state: PipelineState): ResumePoint | null {
   }
 
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Run discovery — queries SQLite database
+// ---------------------------------------------------------------------------
+
+/**
+ * Discover all pipeline runs from the SQLite database.
+ * Returns both active and completed runs, sorted running-first.
+ */
+export async function discoverRuns(
+  projectDir: string,
+): Promise<DiscoveredRun[]> {
+  try {
+    const db = await openDatabase(projectDir);
+    return db.listRuns();
+  } catch {
+    return [];
+  }
 }

@@ -1,8 +1,9 @@
-import { describe, it, expect } from "vitest";
-import { readFile, mkdir } from "node:fs/promises";
+import { describe, it, expect, afterEach } from "vitest";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { closeDatabase } from "../src/db.js";
 import {
   createState,
   loadState,
@@ -12,12 +13,12 @@ import {
   setStageArtifact,
   finishPipeline,
   findResumePoint,
-  statePath,
-  type PipelineState,
+  discoverRuns,
 } from "../src/state.js";
 
-function tmpPath() {
-  return join(tmpdir(), `cccpr-test-${randomUUID()}`);
+function tmpProjectDir() {
+  const dir = join(tmpdir(), `cccp-test-${randomUUID()}`);
+  return dir;
 }
 
 // ---------------------------------------------------------------------------
@@ -42,49 +43,69 @@ describe("createState", () => {
     expect(state.runId).toBeDefined();
     expect(state.startedAt).toBeDefined();
   });
+
+  it("accepts projectDir parameter", () => {
+    const state = createState("test", "proj", "t.yaml", [
+      { name: "s1", type: "agent" },
+    ], "/my/project");
+
+    expect(state.projectDir).toBe("/my/project");
+  });
 });
 
 // ---------------------------------------------------------------------------
-// save / load round-trip
+// save / load round-trip (SQLite backed)
 // ---------------------------------------------------------------------------
 
 describe("saveState / loadState", () => {
-  it("persists and reloads state", async () => {
-    const dir = tmpPath();
-    await mkdir(dir, { recursive: true });
+  it("persists and reloads state via SQLite", async () => {
+    const projectDir = tmpProjectDir();
+    const artifactDir = join(projectDir, "docs/projects/proj/test");
 
     const state = createState("test", "proj", "test.yaml", [
       { name: "step1", type: "agent" },
-    ]);
+    ], projectDir);
     state.stages.step1.status = "passed";
 
-    await saveState(dir, state);
+    await saveState(artifactDir, state);
 
-    const loaded = await loadState(dir);
+    const loaded = await loadState(artifactDir, projectDir);
     expect(loaded).not.toBeNull();
     expect(loaded!.pipeline).toBe("test");
     expect(loaded!.stages.step1.status).toBe("passed");
     expect(loaded!.runId).toBe(state.runId);
+
+    closeDatabase(projectDir);
   });
 
-  it("returns null for missing state file", async () => {
-    const dir = tmpPath();
-    const loaded = await loadState(dir);
+  it("returns null for non-existent artifact dir", async () => {
+    const projectDir = tmpProjectDir();
+    const loaded = await loadState("/nonexistent/artifact/dir", projectDir);
     expect(loaded).toBeNull();
+    closeDatabase(projectDir);
   });
 
-  it("state file is valid JSON", async () => {
-    const dir = tmpPath();
-    await mkdir(dir, { recursive: true });
+  it("updates existing run on subsequent saves", async () => {
+    const projectDir = tmpProjectDir();
+    const artifactDir = join(projectDir, "docs/projects/proj/test");
 
     const state = createState("test", "proj", "test.yaml", [
       { name: "s1", type: "agent" },
-    ]);
-    await saveState(dir, state);
+    ], projectDir);
 
-    const raw = await readFile(statePath(dir), "utf-8");
-    const parsed = JSON.parse(raw);
-    expect(parsed.pipeline).toBe("test");
+    await saveState(artifactDir, state);
+
+    state.stages.s1.status = "passed";
+    state.status = "passed";
+    state.completedAt = new Date().toISOString();
+    await saveState(artifactDir, state);
+
+    const loaded = await loadState(artifactDir, projectDir);
+    expect(loaded!.status).toBe("passed");
+    expect(loaded!.stages.s1.status).toBe("passed");
+    expect(loaded!.completedAt).toBeDefined();
+
+    closeDatabase(projectDir);
   });
 });
 
@@ -111,7 +132,6 @@ describe("updateStageStatus", () => {
       { name: "s1", type: "agent" },
     ]);
 
-    // Should not throw.
     updateStageStatus(state, "nonexistent", "passed");
   });
 });
@@ -183,7 +203,6 @@ describe("findResumePoint", () => {
     ]);
     state.status = "interrupted";
     state.stages.s1.status = "passed";
-    // s2 and s3 remain pending.
 
     const point = findResumePoint(state);
     expect(point).not.toBeNull();
@@ -220,7 +239,6 @@ describe("findResumePoint", () => {
     state.status = "interrupted";
     state.stages.s1.status = "passed";
     state.stages.s2.status = "skipped";
-    // s3 remains pending.
 
     const point = findResumePoint(state);
     expect(point).not.toBeNull();
@@ -240,5 +258,33 @@ describe("findResumePoint", () => {
     const point = findResumePoint(state);
     expect(point).not.toBeNull();
     expect(point!.stageName).toBe("s2");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// discoverRuns (SQLite backed)
+// ---------------------------------------------------------------------------
+
+describe("discoverRuns", () => {
+  it("discovers runs from SQLite database", async () => {
+    const projectDir = tmpProjectDir();
+
+    const state = createState("planning", "my-app", "p.yaml", [
+      { name: "s1", type: "agent" },
+    ], projectDir);
+    await saveState("/artifacts/planning", state);
+
+    const runs = await discoverRuns(projectDir);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].state.pipeline).toBe("planning");
+
+    closeDatabase(projectDir);
+  });
+
+  it("returns empty for project with no runs", async () => {
+    const projectDir = tmpProjectDir();
+    const runs = await discoverRuns(projectDir);
+    expect(runs).toHaveLength(0);
+    closeDatabase(projectDir);
   });
 });

@@ -1,10 +1,10 @@
 {
-  "name": "cccpr",
+  "name": "cccp",
   "version": "0.1.0",
   "description": "Claude Code and Cmux Pipeline Reagent — deterministic YAML-based pipeline orchestration",
   "type": "module",
   "bin": {
-    "cccpr": "./dist/cli.js"
+    "cccp": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
@@ -13,17 +13,20 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@inkjs/ui": "^2.0.0",
     "@modelcontextprotocol/sdk": "^1.28.0",
     "commander": "^14.0.0",
     "ink": "^6.0.0",
     "ink-spinner": "^5.0.0",
     "react": "^19.0.0",
+    "sql.js": "^1.14.1",
     "yaml": "^2.8.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/node": "^20.17.0",
     "@types/react": "^19.0.0",
+    "@types/sql.js": "^1.4.11",
     "tsx": "^4.19.0",
     "typescript": "^5.9.0",
     "vitest": "^3.1.0"

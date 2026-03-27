@@ -28,6 +28,12 @@ export interface DispatchOptions {
   streamLogDir?: string;
   /** Callback for stream activity updates. */
   onActivity?: (activity: import("./stream.js").AgentActivity) => void;
+  /** Claude config directory (CLAUDE_CONFIG_DIR). */
+  claudeConfigDir?: string;
+  /** Permission mode for the agent subprocess (default: bypassPermissions). */
+  permissionMode?: string;
+  /** Suppress agent stderr (when TUI dashboard is rendering). */
+  quiet?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -36,10 +42,9 @@ export interface DispatchOptions {
 
 function buildArgs(opts: DispatchOptions): string[] {
   const args: string[] = [
-    "--bare",
     "-p",
     opts.userPrompt,
-    "--system-prompt-file",
+    "--append-system-prompt-file",
     opts.systemPromptFile,
     "--output-format",
     "stream-json",
@@ -55,6 +60,10 @@ function buildArgs(opts: DispatchOptions): string[] {
     args.push("--allowedTools", opts.allowedTools.join(","));
   }
 
+  // Permission mode — default to bypassPermissions for pipeline agents.
+  const mode = opts.permissionMode ?? "bypassPermissions";
+  args.push("--permission-mode", mode);
+
   return args;
 }
 
@@ -64,6 +73,9 @@ function buildArgs(opts: DispatchOptions): string[] {
 
 /**
  * Dispatch an agent by spawning `claude` as a child process.
+ *
+ * Agents inherit the project's CLAUDE.md, hooks, and auth context.
+ * The agent's markdown definition is appended via --append-system-prompt-file.
  *
  * Returns an AgentResult with exit code, output existence check, and duration.
  * In dry-run mode, prints the command and returns a synthetic success result.
@@ -77,6 +89,9 @@ export async function dispatchAgent(
     console.log("\n[dry-run] Would execute:");
     console.log(`  claude ${args.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ")}`);
     console.log(`  cwd: ${opts.cwd}`);
+    if (opts.claudeConfigDir) {
+      console.log(`  CLAUDE_CONFIG_DIR: ${opts.claudeConfigDir}`);
+    }
     if (opts.expectedOutput) {
       console.log(`  expected output: ${opts.expectedOutput}`);
     }
@@ -101,9 +116,16 @@ export async function dispatchAgent(
     parser.on("activity", opts.onActivity);
   }
 
+  // Build environment — inherit parent env, set CLAUDE_CONFIG_DIR if configured.
+  const env = { ...process.env };
+  if (opts.claudeConfigDir) {
+    env.CLAUDE_CONFIG_DIR = opts.claudeConfigDir;
+  }
+
   const exitCode = await new Promise<number>((resolve, reject) => {
     const child = spawn("claude", args, {
       cwd: opts.cwd,
+      env,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -112,8 +134,10 @@ export async function dispatchAgent(
       parser.feed(chunk.toString());
     });
 
-    // Stderr goes to parent stderr.
-    child.stderr.pipe(process.stderr);
+    // Stderr goes to parent stderr (unless TUI is active).
+    if (!opts.quiet) {
+      child.stderr.pipe(process.stderr);
+    }
 
     child.on("error", (err) => {
       parser.flush();

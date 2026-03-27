@@ -18,7 +18,7 @@ export type Stage = AgentStage | PgeStage | HumanGateStage;
 export interface StageBase {
   name: string;
   description?: string;
-  /** Named MCP profile (resolved from project cccpr.yaml). */
+  /** Named MCP profile (resolved from project cccp.yaml). */
   mcp_profile?: string;
   /** Stage-level variable overrides. */
   variables?: Record<string, string>;
@@ -100,10 +100,12 @@ export interface RunContext {
   variables: Record<string, string>;
   /** Ordered directories to search for agent definitions. */
   agentSearchPaths: string[];
-  /** Project config (from cccpr.yaml), if loaded. */
+  /** Project config (from cccp.yaml), if loaded. */
   projectConfig?: import("./config.js").ProjectConfig;
   /** Gate strategy for human_gate stages. */
   gateStrategy?: import("./gate/gate-strategy.js").GateStrategy;
+  /** Suppress console output (when TUI dashboard is rendering). */
+  quiet?: boolean;
 }
 
 /** Result of dispatching a single agent. */
