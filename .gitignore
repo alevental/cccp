@@ -1,4 +1,5 @@
 node_modules/
 dist/
-.cccpr/
+.cccp/
+docs/projects/
 *.tmp
