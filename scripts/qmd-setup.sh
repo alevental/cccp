@@ -21,17 +21,27 @@ for name in $existing; do
   $QMD collection remove "$name" 2>/dev/null || true
 done
 
-# Architecture and internals documentation
+# Foundational
 $QMD collection add docs/architecture/ --name architecture
+$QMD collection add docs/api/ --name api
 
-# Project-level onboarding (CLAUDE.md, README.md — root .md files only)
+# Reference
+$QMD collection add docs/guides/ --name guides
+$QMD collection add docs/patterns/ --name patterns
+
+# Supplementary
+$QMD collection add docs/adr/ --name decisions
 $QMD collection add . --name onboarding --mask "*.md"
 
 echo ""
 echo "Configuring context annotations..."
 
-$QMD context add qmd://architecture "CCCP system architecture: component relationships, data flow, PGE engine internals, state persistence, agent resolution, and MCP config generation"
-$QMD context add qmd://onboarding "Project setup, build commands, CLI reference, and contribution guidelines for the CCCP pipeline orchestration tool"
+$QMD context add qmd://architecture "System internals: pipeline execution, PGE engine, agent resolution, state persistence (SQLite), gate system, streaming, TUI dashboard, doc mapping"
+$QMD context add qmd://api "External interfaces: CLI commands (run, resume, dashboard, mcp-server, init), MCP tools (cccp_runs, cccp_status, cccp_gate_respond, cccp_logs, cccp_artifacts), cccp.yaml configuration schema"
+$QMD context add qmd://guides "User-facing how-tos: pipeline YAML authoring, agent markdown authoring, project setup and first run"
+$QMD context add qmd://patterns "Reusable recipes: PGE cycle pattern (contract → generate → evaluate → route), agent dispatch pattern (subprocess flags, prompt assembly)"
+$QMD context add qmd://decisions "Architecture Decision Records: SQLite over JSON (ADR-001), sql.js over better-sqlite3 (ADR-002)"
+$QMD context add qmd://onboarding "Project setup, build commands, and conventions (CLAUDE.md, README.md)"
 $QMD context add / "CCCP (Claude Code and Cmux Pipeline Reagent) — a TypeScript CLI for deterministic YAML-based pipeline orchestration with Claude Code and cmux"
 
 echo ""

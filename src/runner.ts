@@ -1,9 +1,11 @@
 import { resolve } from "node:path";
 import { activityBus } from "./activity-bus.js";
-import { dispatchAgent } from "./agent.js";
 import { resolveAgent } from "./agent-resolver.js";
+import { DefaultAgentDispatcher, type AgentDispatcher } from "./dispatcher.js";
 import { AgentCrashError, MissingOutputError } from "./errors.js";
-import { writeMcpConfigFile } from "./mcp-config.js";
+import { FilesystemGateStrategy } from "./gate/gate-watcher.js";
+import { ConsoleLogger, type Logger } from "./logger.js";
+import { writeMcpConfigFile } from "./mcp/mcp-config.js";
 import { runPgeCycle } from "./pge.js";
 import { interpolate, loadAgentMarkdown, buildTaskContext, writeSystemPromptFile } from "./prompt.js";
 import { updatePipelineStatus, notifyPipelineComplete } from "./tui/cmux.js";
@@ -15,7 +17,6 @@ import {
   updateStageStatus,
   finishPipeline,
   findResumePoint,
-  type PipelineState,
 } from "./state.js";
 import type {
   AgentStage,
@@ -23,21 +24,23 @@ import type {
   PgeStage,
   RunContext,
   StageResult,
+  StageStatus,
   PipelineResult,
   Stage,
+  PipelineState,
+  GateInfo,
 } from "./types.js";
-import type { GateInfo } from "./state.js";
 
 // ---------------------------------------------------------------------------
-// Logging helper — suppressed when TUI dashboard is active
+// Helpers
 // ---------------------------------------------------------------------------
 
-function log(ctx: RunContext, ...args: unknown[]): void {
-  if (!ctx.quiet) console.log(...args);
+function getLogger(ctx: RunContext): Logger {
+  return ctx.logger ?? new ConsoleLogger();
 }
 
-function logError(ctx: RunContext, ...args: unknown[]): void {
-  if (!ctx.quiet) console.error(...args);
+function getDispatcher(ctx: RunContext): AgentDispatcher {
+  return ctx.dispatcher ?? new DefaultAgentDispatcher();
 }
 
 // ---------------------------------------------------------------------------
@@ -52,7 +55,7 @@ async function runAgentStage(
   const vars = { ...ctx.variables, ...(stage.variables ?? {}) };
 
   const taskDescription =
-    stage.description ?? `Execute stage: ${stage.name}`;
+    stage.task ?? `Execute stage: ${stage.name}`;
   const output = stage.output ? interpolate(stage.output, vars) : undefined;
   const inputs = stage.inputs?.map((i) => interpolate(i, vars));
 
@@ -71,15 +74,16 @@ async function runAgentStage(
     } catch {
       resolvedPath = `${stage.agent} (not found — will resolve at runtime)`;
     }
-    console.log("\n[dry-run] Stage:", stage.name);
-    console.log("  agent:     ", resolvedPath);
-    if (stage.operation) console.log("  operation: ", stage.operation);
-    if (stage.mcp_profile) console.log("  mcp:       ", stage.mcp_profile);
-    if (inputs?.length) console.log("  inputs:    ", inputs.join(", "));
-    if (output) console.log("  output:    ", output);
-    console.log("  user prompt:");
+    const logger = getLogger(ctx);
+    logger.log("\n[dry-run] Stage:", stage.name);
+    logger.log("  agent:     ", resolvedPath);
+    if (stage.operation) logger.log("  operation: ", stage.operation);
+    if (stage.mcp_profile) logger.log("  mcp:       ", stage.mcp_profile);
+    if (inputs?.length) logger.log("  inputs:    ", inputs.join(", "));
+    if (output) logger.log("  output:    ", output);
+    logger.log("  user prompt:");
     for (const line of userPrompt.split("\n")) {
-      console.log("    " + line);
+      logger.log("    " + line);
     }
     return {
       stageName: stage.name,
@@ -98,12 +102,12 @@ async function runAgentStage(
   );
 
   const agentMarkdown = await loadAgentMarkdown(resolved.agentPath, resolved.operationPath);
-  const systemPromptFile = await writeSystemPromptFile(agentMarkdown);
+  const systemPromptFile = await writeSystemPromptFile(agentMarkdown, ctx.tempTracker);
   const mcpConfigFile = ctx.projectConfig
-    ? await writeMcpConfigFile(stage.mcp_profile, ctx.projectConfig)
+    ? await writeMcpConfigFile(stage.mcp_profile, ctx.projectConfig, ctx.tempTracker)
     : undefined;
 
-  const result = await dispatchAgent({
+  const result = await getDispatcher(ctx).dispatch({
     userPrompt,
     systemPromptFile,
     mcpConfigFile,
@@ -140,9 +144,16 @@ async function runAgentStage(
 async function runPgeStage(
   stage: PgeStage,
   ctx: RunContext,
+  state: PipelineState,
 ): Promise<StageResult> {
   const start = Date.now();
-  const pgeResult = await runPgeCycle(stage, ctx);
+  const pgeResult = await runPgeCycle(stage, ctx, state, async (eventType, eventData) => {
+    if (eventType) {
+      await saveStateWithEvent(state, eventType, stage.name, eventData);
+    } else {
+      await saveState(state);
+    }
+  });
 
   if (pgeResult.outcome === "pass") {
     return {
@@ -176,7 +187,7 @@ async function runPgeStage(
       };
 
     case "skip":
-      log(ctx, `    escalation: skip — continuing pipeline`);
+      getLogger(ctx).log(`    escalation: skip — continuing pipeline`);
       return {
         stageName: stage.name,
         status: "skipped",
@@ -186,7 +197,7 @@ async function runPgeStage(
 
     case "human_gate":
       if (!ctx.gateStrategy) {
-        log(ctx, `    escalation: human_gate — no gate strategy, stopping`);
+        getLogger(ctx).log(`    escalation: human_gate — no gate strategy, stopping`);
         return {
           stageName: stage.name,
           status: "failed",
@@ -195,24 +206,19 @@ async function runPgeStage(
           durationMs: Date.now() - start,
         };
       }
-      log(ctx, `    escalation: human_gate — awaiting approval`);
+      getLogger(ctx).log(`    escalation: human_gate — awaiting approval`);
       const gateInfo: GateInfo = {
         stageName: stage.name,
         status: "pending",
         prompt: `PGE stage "${stage.name}" failed after ${pgeResult.iterations} iterations. Approve to continue or reject to stop.`,
       };
-      const state = await loadState(ctx.artifactDir, ctx.projectDir);
-      if (state) {
-        state.gate = gateInfo;
-        await saveState(ctx.artifactDir, state);
-      }
+      state.gate = gateInfo;
+      await saveState(state);
       const gateResponse = await ctx.gateStrategy.waitForGate(gateInfo);
-      if (state) {
-        state.gate = undefined;
-        await saveState(ctx.artifactDir, state);
-      }
+      state.gate = undefined;
+      await saveState(state);
       if (gateResponse.approved) {
-        log(ctx, `    gate approved — continuing pipeline`);
+        getLogger(ctx).log(`    gate approved — continuing pipeline`);
         return {
           stageName: stage.name,
           status: "skipped",
@@ -237,15 +243,17 @@ async function runPgeStage(
 async function runHumanGateStage(
   stage: HumanGateStage,
   ctx: RunContext,
+  state: PipelineState,
 ): Promise<StageResult> {
   const start = Date.now();
 
   // Dry-run: just show what would happen.
   if (ctx.dryRun) {
-    console.log("\n[dry-run] Human Gate:", stage.name);
-    if (stage.prompt) console.log("  prompt:    ", stage.prompt);
-    if (stage.artifacts?.length) console.log("  artifacts: ", stage.artifacts.join(", "));
-    console.log("  on_reject: ", stage.on_reject ?? "stop");
+    const logger = getLogger(ctx);
+    logger.log("\n[dry-run] Human Gate:", stage.name);
+    if (stage.prompt) logger.log("  prompt:    ", stage.prompt);
+    if (stage.artifacts?.length) logger.log("  artifacts: ", stage.artifacts.join(", "));
+    logger.log("  on_reject: ", stage.on_reject ?? "stop");
     return {
       stageName: stage.name,
       status: "passed",
@@ -255,7 +263,7 @@ async function runHumanGateStage(
 
   // No gate strategy configured — skip with warning.
   if (!ctx.gateStrategy) {
-    log(ctx, `  [skip] No gate strategy configured (stage: ${stage.name})`);
+    getLogger(ctx).log(`  [skip] No gate strategy configured (stage: ${stage.name})`);
     return {
       stageName: stage.name,
       status: "skipped",
@@ -270,20 +278,15 @@ async function runHumanGateStage(
     prompt: stage.prompt,
   };
 
-  const state = await loadState(ctx.artifactDir, ctx.projectDir);
-  if (state) {
-    state.gate = gateInfo;
-    await saveState(ctx.artifactDir, state);
-  }
+  state.gate = gateInfo;
+  await saveState(state);
 
   // Wait for response via the gate strategy.
   const response = await ctx.gateStrategy.waitForGate(gateInfo);
 
   // Clear gate from state.
-  if (state) {
-    state.gate = undefined;
-    await saveState(ctx.artifactDir, state);
-  }
+  state.gate = undefined;
+  await saveState(state);
 
   if (response.approved) {
     return {
@@ -321,16 +324,17 @@ async function runHumanGateStage(
 async function runStage(
   stage: Stage,
   ctx: RunContext,
+  state: PipelineState,
 ): Promise<StageResult> {
   switch (stage.type) {
     case "agent":
       return runAgentStage(stage, ctx);
 
     case "pge":
-      return runPgeStage(stage, ctx);
+      return runPgeStage(stage, ctx, state);
 
     case "human_gate":
-      return runHumanGateStage(stage, ctx);
+      return runHumanGateStage(stage, ctx, state);
   }
 }
 
@@ -366,9 +370,9 @@ export async function runPipeline(
     const resume = findResumePoint(state);
     if (resume) {
       skipUntilIndex = resume.stageIndex;
-      log(ctx, `\nCCCP: Resuming pipeline "${ctx.pipeline.name}" from stage "${resume.stageName}"\n`);
+      getLogger(ctx).log(`\nCCCP: Resuming pipeline "${ctx.pipeline.name}" from stage "${resume.stageName}"\n`);
     } else {
-      log(ctx, `\nCCCP: Pipeline "${ctx.pipeline.name}" has no resumable stages\n`);
+      getLogger(ctx).log(`\nCCCP: Pipeline "${ctx.pipeline.name}" has no resumable stages\n`);
       return {
         pipeline: ctx.pipeline.name,
         project: ctx.project,
@@ -383,103 +387,113 @@ export async function runPipeline(
       ctx.project,
       ctx.pipelineFile,
       ctx.pipeline.stages.map((s) => ({ name: s.name, type: s.type })),
+      ctx.artifactDir,
       ctx.projectDir,
     );
-    log(ctx, `\nCCCP: Running pipeline "${ctx.pipeline.name}" for project "${ctx.project}"\n`);
+    getLogger(ctx).log(`\nCCCP: Running pipeline "${ctx.pipeline.name}" for project "${ctx.project}"\n`);
+  }
+
+  // Create gate strategy now that we have a runId.
+  if (!ctx.gateStrategy && !ctx.headless) {
+    ctx.gateStrategy = new FilesystemGateStrategy(state.runId, ctx.projectDir, ctx.quiet);
   }
 
   if (!ctx.dryRun) {
-    await saveState(ctx.artifactDir, state);
+    await saveState(state);
   }
 
-  for (let i = 0; i < ctx.pipeline.stages.length; i++) {
-    const stage = ctx.pipeline.stages[i];
+  try {
+    for (let i = 0; i < ctx.pipeline.stages.length; i++) {
+      const stage = ctx.pipeline.stages[i];
 
-    // Skip completed stages on resume.
-    if (opts?.existingState && i < skipUntilIndex) {
-      const stageState = state.stages[stage.name];
-      if (stageState?.status === "passed" || stageState?.status === "skipped") {
-        log(ctx, `  ⏭ ${stage.name}: already ${stageState.status}`);
+      // Skip completed stages on resume.
+      if (opts?.existingState && i < skipUntilIndex) {
+        const stageState = state.stages[stage.name];
+        if (stageState?.status === "passed" || stageState?.status === "skipped") {
+          getLogger(ctx).log(`  ⏭ ${stage.name}: already ${stageState.status}`);
+          results.push({
+            stageName: stage.name,
+            status: stageState.status as "passed" | "skipped",
+            durationMs: stageState.durationMs ?? 0,
+          });
+          continue;
+        }
+      }
+
+      getLogger(ctx).log(`▸ Stage: ${stage.name} (${stage.type})`);
+
+      // Mark in_progress in state + update cmux.
+      if (!ctx.dryRun) {
+        updateStageStatus(state, stage.name, "in_progress");
+        await saveStateWithEvent(state, "stage_start", stage.name);
+        await updatePipelineStatus(stage.name, i, ctx.pipeline.stages.length);
+      }
+
+      try {
+        const result = await runStage(stage, ctx, state);
+        results.push(result);
+
+        // Persist stage result to state.
+        if (!ctx.dryRun) {
+          updateStageStatus(state, stage.name, result.status as StageStatus, {
+            durationMs: result.durationMs,
+            error: result.error,
+          });
+          await saveStateWithEvent(state, "stage_complete", stage.name, {
+            status: result.status,
+            durationMs: result.durationMs,
+          });
+        }
+
+        if (result.status === "failed" || result.status === "error") {
+          pipelineStatus = "failed";
+          getLogger(ctx).log(`  ✗ ${stage.name}: ${result.status}${result.error ? ` — ${result.error}` : ""}`);
+          break;
+        }
+
+        const duration = result.durationMs > 0
+          ? ` (${(result.durationMs / 1000).toFixed(1)}s)`
+          : "";
+        getLogger(ctx).log(`  ✓ ${stage.name}: ${result.status}${duration}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
         results.push({
           stageName: stage.name,
-          status: stageState.status as "passed" | "skipped",
-          durationMs: stageState.durationMs ?? 0,
+          status: "error",
+          error: message,
+          durationMs: Date.now() - start,
         });
-        continue;
-      }
-    }
+        pipelineStatus = "error";
 
-    log(ctx, `▸ Stage: ${stage.name} (${stage.type})`);
+        if (!ctx.dryRun) {
+          updateStageStatus(state, stage.name, "error", { error: message });
+          await saveState(state);
+        }
 
-    // Mark in_progress in state + update cmux.
-    if (!ctx.dryRun) {
-      updateStageStatus(state, stage.name, "in_progress");
-      await saveStateWithEvent(ctx.artifactDir, state, "stage_start", stage.name);
-      await updatePipelineStatus(stage.name, i, ctx.pipeline.stages.length);
-    }
-
-    try {
-      const result = await runStage(stage, ctx);
-      results.push(result);
-
-      // Persist stage result to state.
-      if (!ctx.dryRun) {
-        updateStageStatus(state, stage.name, result.status as any, {
-          durationMs: result.durationMs,
-          error: result.error,
-        });
-        await saveStateWithEvent(ctx.artifactDir, state, "stage_complete", stage.name, {
-          status: result.status,
-          durationMs: result.durationMs,
-        });
-      }
-
-      if (result.status === "failed" || result.status === "error") {
-        pipelineStatus = "failed";
-        log(ctx, `  ✗ ${stage.name}: ${result.status}${result.error ? ` — ${result.error}` : ""}`);
+        getLogger(ctx).error(`  ✗ ${stage.name}: error — ${message}`);
         break;
       }
-
-      const duration = result.durationMs > 0
-        ? ` (${(result.durationMs / 1000).toFixed(1)}s)`
-        : "";
-      log(ctx, `  ✓ ${stage.name}: ${result.status}${duration}`);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      results.push({
-        stageName: stage.name,
-        status: "error",
-        error: message,
-        durationMs: Date.now() - start,
-      });
-      pipelineStatus = "error";
-
-      if (!ctx.dryRun) {
-        updateStageStatus(state, stage.name, "error", { error: message });
-        await saveState(ctx.artifactDir, state);
-      }
-
-      logError(ctx, `  ✗ ${stage.name}: error — ${message}`);
-      break;
     }
+
+    // Finalize state + notify cmux.
+    if (!ctx.dryRun) {
+      const finalStatus = pipelineStatus === "passed" ? "passed" : pipelineStatus === "error" ? "error" : "failed";
+      finishPipeline(state, finalStatus);
+      await saveStateWithEvent(state, "pipeline_complete", undefined, { status: finalStatus });
+      await notifyPipelineComplete(ctx.pipeline.name, pipelineStatus);
+    }
+
+    const durationMs = Date.now() - start;
+    getLogger(ctx).log(`\nPipeline "${ctx.pipeline.name}": ${pipelineStatus} (${(durationMs / 1000).toFixed(1)}s)\n`);
+
+    return {
+      pipeline: ctx.pipeline.name,
+      project: ctx.project,
+      stages: results,
+      status: pipelineStatus,
+      durationMs,
+    };
+  } finally {
+    await ctx.tempTracker?.cleanup();
   }
-
-  // Finalize state + notify cmux.
-  if (!ctx.dryRun) {
-    const finalStatus = pipelineStatus === "passed" ? "passed" : pipelineStatus === "error" ? "error" : "failed";
-    finishPipeline(state, finalStatus);
-    await saveStateWithEvent(ctx.artifactDir, state, "pipeline_complete", undefined, { status: finalStatus });
-    await notifyPipelineComplete(ctx.pipeline.name, pipelineStatus);
-  }
-
-  const durationMs = Date.now() - start;
-  log(ctx, `\nPipeline "${ctx.pipeline.name}": ${pipelineStatus} (${(durationMs / 1000).toFixed(1)}s)\n`);
-
-  return {
-    pipeline: ctx.pipeline.name,
-    project: ctx.project,
-    stages: results,
-    status: pipelineStatus,
-    durationMs,
-  };
 }

@@ -4,24 +4,24 @@ description: Example pipeline — replace with your own stages.
 stages:
   - name: research
     type: agent
-    description: "Research the project and write a summary."
+    task: "Research the project and write a summary."
     agent: researcher
     output: "{artifact_dir}/research.md"
 
   - name: review
     type: pge
-    description: "Write a technical document and evaluate it."
+    task: "Write a technical document and evaluate it."
+    inputs:
+      - "{artifact_dir}/research.md"
+    planner:
+      agent: planner
     generator:
       agent: writer
     evaluator:
       agent: reviewer
     contract:
       deliverable: "{artifact_dir}/document.md"
-      criteria:
-        - name: completeness
-          description: "All required sections are present."
-        - name: accuracy
-          description: "Technical details are correct."
+      guidance: "All required sections must be present and technically accurate."
       max_iterations: 3
     on_fail: stop
 

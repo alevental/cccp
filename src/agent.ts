@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { access } from "node:fs/promises";
-import { StreamParser } from "./stream.js";
+import { StreamParser } from "./stream/stream.js";
 import type { AgentResult } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -27,7 +27,7 @@ export interface DispatchOptions {
   /** Directory for stream log files (.stream.jsonl). */
   streamLogDir?: string;
   /** Callback for stream activity updates. */
-  onActivity?: (activity: import("./stream.js").AgentActivity) => void;
+  onActivity?: (activity: import("./stream/stream.js").AgentActivity) => void;
   /** Claude config directory (CLAUDE_CONFIG_DIR). */
   claudeConfigDir?: string;
   /** Permission mode for the agent subprocess (default: bypassPermissions). */

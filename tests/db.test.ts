@@ -1,33 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdirSync, existsSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
+import { existsSync, rmSync } from "node:fs";
 import { CccpDatabase, dbPath } from "../src/db.js";
-import type { PipelineState } from "../src/types.js";
-
-function tmpProjectDir() {
-  const dir = join(tmpdir(), `cccp-test-${randomUUID()}`);
-  mkdirSync(dir, { recursive: true });
-  return dir;
-}
-
-function makeState(overrides?: Partial<PipelineState>): PipelineState {
-  return {
-    runId: randomUUID(),
-    pipeline: "test-pipeline",
-    project: "test-project",
-    pipelineFile: "/tmp/test.yaml",
-    startedAt: new Date().toISOString(),
-    status: "running",
-    stages: {
-      s1: { name: "s1", type: "agent", status: "pending" },
-      s2: { name: "s2", type: "pge", status: "pending" },
-    },
-    stageOrder: ["s1", "s2"],
-    ...overrides,
-  };
-}
+import { tmpProjectDir, makeState } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
 // Database lifecycle
@@ -181,16 +155,6 @@ describe("CccpDatabase — runs", () => {
     db.close();
   });
 
-  it("getLastUpdated returns timestamp", async () => {
-    const dir = tmpProjectDir();
-    const db = await CccpDatabase.open(dir);
-
-    db.insertRun(makeState(), "/artifacts/test");
-    const ts = db.getLastUpdated("/artifacts/test");
-    expect(ts).not.toBeNull();
-    expect(ts!.length).toBeGreaterThan(10); // ISO timestamp
-    db.close();
-  });
 });
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFile } from "node:fs/promises";
-import { resolveProfile, buildMcpConfig, writeMcpConfigFile } from "../src/mcp-config.js";
+import { resolveProfile, buildMcpConfig, writeMcpConfigFile } from "../src/mcp/mcp-config.js";
 import type { ProjectConfig } from "../src/config.js";
 
 // ---------------------------------------------------------------------------

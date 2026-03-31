@@ -33,7 +33,7 @@ Order (first match wins):
 
 The result is written to a temp file (`/tmp/cccp-agent-<uuid>.md`) and passed via `--system-prompt-file`.
 
-## MCP config (`src/mcp-config.ts`)
+## MCP config (`src/mcp/mcp-config.ts`)
 
 ### Profile resolution
 
@@ -64,12 +64,15 @@ Circular inheritance is detected and throws.
 
 ### Per-agent isolation
 
-Each agent dispatch can specify its own MCP profile. In PGE stages, generator and evaluator can have different profiles:
+Each agent dispatch can specify its own MCP profile. In PGE stages, planner, generator, and evaluator can have different profiles:
 
 ```yaml
-generator:
+planner:
   agent: architect
   mcp_profile: research    # gets qmd + google-workspace
+generator:
+  agent: implementer
+  mcp_profile: design      # gets design tools
 evaluator:
   agent: reviewer
   mcp_profile: base        # gets only qmd

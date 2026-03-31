@@ -1,18 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { writeFile, mkdir, rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
 import {
   interpolate,
   loadAgentMarkdown,
   buildTaskContext,
   writeSystemPromptFile,
 } from "../src/prompt.js";
-
-function tmpPath() {
-  return join(tmpdir(), `cccp-test-${randomUUID()}`);
-}
+import { tmpPath } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
 // interpolate
@@ -141,6 +136,42 @@ describe("buildTaskContext", () => {
     expect(result).toContain("## Context");
     expect(result).toContain("**branch**: feature/test");
     expect(result).toContain("**sprint**: 3");
+  });
+
+  it("includes plan file section", () => {
+    const result = buildTaskContext({
+      task: "Implement the feature.",
+      planFile: "/path/to/plan.md",
+    });
+    expect(result).toContain("## Plan");
+    expect(result).toContain("/path/to/plan.md");
+  });
+
+  it("includes contract template section", () => {
+    const result = buildTaskContext({
+      task: "Write the contract.",
+      contractTemplate: "/path/to/template.md",
+    });
+    expect(result).toContain("## Contract Template");
+    expect(result).toContain("/path/to/template.md");
+  });
+
+  it("includes guidance section", () => {
+    const result = buildTaskContext({
+      task: "Refactor the module.",
+      guidance: "Must handle backward compat",
+    });
+    expect(result).toContain("## Guidance");
+    expect(result).toContain("Must handle backward compat");
+  });
+
+  it("includes deliverable info section", () => {
+    const result = buildTaskContext({
+      task: "Write the contract criteria.",
+      deliverableInfo: "The generator will produce: output.ts",
+    });
+    expect(result).toContain("## Deliverable");
+    expect(result).toContain("The generator will produce: output.ts");
   });
 });
 

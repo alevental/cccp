@@ -1,13 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { writeFile, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
 import { loadPipeline } from "../src/pipeline.js";
-
-function tmpPath() {
-  return join(tmpdir(), `cccp-test-${randomUUID()}`);
-}
+import { tmpPath } from "./helpers.js";
 
 async function writeTmpYaml(content: string): Promise<string> {
   const dir = tmpPath();
@@ -47,15 +42,14 @@ stages:
 
   - name: review
     type: pge
+    planner:
+      agent: agents/planner.md
     generator:
       agent: agents/writer.md
     evaluator:
       agent: agents/reviewer.md
     contract:
       deliverable: reviewed.md
-      criteria:
-        - name: completeness
-          description: All sections are present
       max_iterations: 3
 
   - name: approve
@@ -122,15 +116,14 @@ name: bad-pge
 stages:
   - name: broken
     type: pge
+    planner:
+      agent: plan.md
     generator:
       agent: gen.md
     evaluator:
       agent: eval.md
     contract:
       deliverable: out.md
-      criteria:
-        - name: check
-          description: check it
       max_iterations: 0
 `);
 
@@ -139,9 +132,9 @@ stages:
     );
   });
 
-  it("rejects a PGE stage with no criteria", async () => {
+  it("rejects PGE stage without planner", async () => {
     const file = await writeTmpYaml(`
-name: no-criteria
+name: no-planner
 stages:
   - name: broken
     type: pge
@@ -151,7 +144,6 @@ stages:
       agent: eval.md
     contract:
       deliverable: out.md
-      criteria: []
       max_iterations: 3
 `);
 
@@ -182,6 +174,10 @@ name: pge-options
 stages:
   - name: careful
     type: pge
+    planner:
+      agent: plan.md
+      operation: outline
+      mcp_profile: research
     generator:
       agent: gen.md
       operation: detailed
@@ -194,9 +190,7 @@ stages:
       mcp_profile: base
     contract:
       deliverable: output.md
-      criteria:
-        - name: accuracy
-          description: Must be accurate
+      guidance: Focus on correctness and completeness
       max_iterations: 5
       template: custom-contract.md
     on_fail: human_gate
@@ -206,12 +200,131 @@ stages:
     const stage = pipeline.stages[0];
     expect(stage.type).toBe("pge");
     if (stage.type === "pge") {
+      expect(stage.planner.agent).toBe("plan.md");
+      expect(stage.planner.operation).toBe("outline");
       expect(stage.generator.operation).toBe("detailed");
       expect(stage.generator.mcp_profile).toBe("research");
       expect(stage.generator.allowed_tools).toEqual(["Read", "Grep"]);
       expect(stage.contract.max_iterations).toBe(5);
       expect(stage.contract.template).toBe("custom-contract.md");
+      expect(stage.contract.guidance).toBe(
+        "Focus on correctness and completeness",
+      );
       expect(stage.on_fail).toBe("human_gate");
+    }
+  });
+
+  it("validates PGE stage with planner and guidance", async () => {
+    const file = await writeTmpYaml(`
+name: planner-guidance
+stages:
+  - name: build-feature
+    type: pge
+    planner:
+      agent: agents/planner.md
+    generator:
+      agent: agents/writer.md
+    evaluator:
+      agent: agents/reviewer.md
+    contract:
+      deliverable: feature.md
+      guidance: Ensure the feature covers all edge cases
+      max_iterations: 3
+`);
+
+    const pipeline = await loadPipeline(file);
+    const stage = pipeline.stages[0];
+    expect(stage.type).toBe("pge");
+    if (stage.type === "pge") {
+      expect(stage.planner.agent).toBe("agents/planner.md");
+      expect(stage.contract.guidance).toBe(
+        "Ensure the feature covers all edge cases",
+      );
+      expect(stage.contract.deliverable).toBe("feature.md");
+      expect(stage.contract.max_iterations).toBe(3);
+      // criteria should not exist on the contract
+      expect(stage.contract).not.toHaveProperty("criteria");
+    }
+  });
+
+  it("validates PGE stage with plan and inputs", async () => {
+    const file = await writeTmpYaml(`
+name: plan-inputs
+stages:
+  - name: implement
+    type: pge
+    plan: plans/feature-plan.md
+    inputs:
+      - src/existing-module.ts
+      - docs/spec.md
+    planner:
+      agent: agents/planner.md
+      inputs:
+        - docs/requirements.md
+    generator:
+      agent: agents/writer.md
+      inputs:
+        - src/helpers.ts
+    evaluator:
+      agent: agents/reviewer.md
+    contract:
+      deliverable: output.md
+      max_iterations: 4
+`);
+
+    const pipeline = await loadPipeline(file);
+    const stage = pipeline.stages[0];
+    expect(stage.type).toBe("pge");
+    if (stage.type === "pge") {
+      expect(stage.plan).toBe("plans/feature-plan.md");
+      expect(stage.inputs).toEqual([
+        "src/existing-module.ts",
+        "docs/spec.md",
+      ]);
+      expect(stage.planner.inputs).toEqual(["docs/requirements.md"]);
+      expect(stage.generator.inputs).toEqual(["src/helpers.ts"]);
+      expect(stage.evaluator.inputs).toBeUndefined();
+    }
+  });
+
+  it("validates PGE stage with per-agent inputs", async () => {
+    const file = await writeTmpYaml(`
+name: per-agent-inputs
+stages:
+  - name: review-cycle
+    type: pge
+    planner:
+      agent: agents/planner.md
+      inputs:
+        - docs/plan-context.md
+        - docs/architecture.md
+    generator:
+      agent: agents/writer.md
+      inputs:
+        - src/module-a.ts
+        - src/module-b.ts
+    evaluator:
+      agent: agents/reviewer.md
+      inputs:
+        - docs/review-checklist.md
+    contract:
+      deliverable: reviewed-output.md
+      max_iterations: 2
+`);
+
+    const pipeline = await loadPipeline(file);
+    const stage = pipeline.stages[0];
+    expect(stage.type).toBe("pge");
+    if (stage.type === "pge") {
+      expect(stage.planner.inputs).toEqual([
+        "docs/plan-context.md",
+        "docs/architecture.md",
+      ]);
+      expect(stage.generator.inputs).toEqual([
+        "src/module-a.ts",
+        "src/module-b.ts",
+      ]);
+      expect(stage.evaluator.inputs).toEqual(["docs/review-checklist.md"]);
     }
   });
 });

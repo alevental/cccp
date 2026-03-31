@@ -8,29 +8,20 @@ import {
 } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { PipelineState, StageState } from "./types.js";
-import type { GateInfo } from "./state.js";
+import type {
+  PipelineState,
+  StageState,
+  GateInfo,
+  StateEvent,
+  DiscoveredRun,
+} from "./types.js";
 
-// ---------------------------------------------------------------------------
-// Event types for the audit log
-// ---------------------------------------------------------------------------
-
-export interface StateEvent {
-  id: number;
-  runId: string;
-  timestamp: string;
-  eventType: string;
-  stageName?: string;
-  data?: unknown;
-}
-
-// ---------------------------------------------------------------------------
-// Discovered run (returned by listRuns)
-// ---------------------------------------------------------------------------
-
-export interface DiscoveredRun {
-  artifactDir: string;
-  state: PipelineState;
+/** Filter criteria for querying pipeline runs. */
+export interface RunFilter {
+  project?: string;
+  pipeline?: string;
+  status?: string;
+  artifactDir?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +238,9 @@ export class CccpDatabase {
     return this.rowToState(results[0].columns, results[0].values[0]);
   }
 
+  /**
+   * @deprecated Use getRun(runId) instead.
+   */
   getRunByArtifactDir(artifactDir: string): PipelineState | null {
     const results = this.db.exec(
       `SELECT * FROM runs WHERE artifact_dir = ? ORDER BY started_at DESC LIMIT 1`,
@@ -256,31 +250,60 @@ export class CccpDatabase {
     return this.rowToState(results[0].columns, results[0].values[0]);
   }
 
-  listRuns(): DiscoveredRun[] {
+  /**
+   * Find a run by ID prefix. Returns null if zero or multiple matches.
+   */
+  getRunByIdPrefix(prefix: string): PipelineState | null {
     const results = this.db.exec(
-      `SELECT * FROM runs ORDER BY
+      `SELECT * FROM runs WHERE run_id LIKE ? || '%'`,
+      [prefix],
+    );
+    if (results.length === 0 || results[0].values.length !== 1) return null;
+    return this.rowToState(results[0].columns, results[0].values[0]);
+  }
+
+  listRuns(): DiscoveredRun[] {
+    return this.findRuns();
+  }
+
+  /**
+   * Find runs matching optional filters. All filters are AND-combined.
+   * Results sorted running-first, then by start time descending.
+   */
+  findRuns(filter?: RunFilter): DiscoveredRun[] {
+    const conditions: string[] = [];
+    const params: string[] = [];
+
+    if (filter?.project) {
+      conditions.push("project = ?");
+      params.push(filter.project);
+    }
+    if (filter?.pipeline) {
+      conditions.push("pipeline = ?");
+      params.push(filter.pipeline);
+    }
+    if (filter?.status) {
+      conditions.push("status = ?");
+      params.push(filter.status);
+    }
+    if (filter?.artifactDir) {
+      conditions.push("artifact_dir = ?");
+      params.push(filter.artifactDir);
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const results = this.db.exec(
+      `SELECT * FROM runs ${where} ORDER BY
         CASE WHEN status = 'running' THEN 0 ELSE 1 END,
         started_at DESC`,
+      params,
     );
     if (results.length === 0) return [];
 
     return results[0].values.map((row) => {
       const state = this.rowToState(results[0].columns, row);
-      const artifactDirIdx = results[0].columns.indexOf("artifact_dir");
-      return {
-        artifactDir: row[artifactDirIdx] as string,
-        state,
-      };
+      return { artifactDir: state.artifactDir, state };
     });
-  }
-
-  getLastUpdated(artifactDir: string): string | null {
-    const results = this.db.exec(
-      `SELECT updated_at FROM runs WHERE artifact_dir = ? LIMIT 1`,
-      [artifactDir],
-    );
-    if (results.length === 0 || results[0].values.length === 0) return null;
-    return results[0].values[0][0] as string;
   }
 
   private rowToState(
@@ -301,6 +324,7 @@ export class CccpDatabase {
       gate: col("gate_json")
         ? JSON.parse(col("gate_json") as string)
         : undefined,
+      artifactDir: col("artifact_dir") as string,
       projectDir: (col("project_dir") as string) || undefined,
     };
   }

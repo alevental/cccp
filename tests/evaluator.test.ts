@@ -1,13 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
 import { parseEvaluation, parseEvaluationContent } from "../src/evaluator.js";
-
-function tmpPath() {
-  return join(tmpdir(), `cccp-test-${randomUUID()}`);
-}
+import { tmpPath } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
 // parseEvaluationContent (in-memory)

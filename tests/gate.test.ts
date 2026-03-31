@@ -1,38 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { writeFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
 import { closeDatabase } from "../src/db.js";
-import {
-  createState,
-  saveState,
-  loadState,
-  type PipelineState,
-  type GateInfo,
-} from "../src/state.js";
-import type { GateStrategy, GateResponse } from "../src/gate/gate-strategy.js";
+import { createState, saveState, loadState } from "../src/state.js";
+import type { PipelineState, GateInfo } from "../src/types.js";
 import { FilesystemGateStrategy } from "../src/gate/gate-watcher.js";
-
-function tmpProjectDir() {
-  return join(tmpdir(), `cccp-test-${randomUUID()}`);
-}
-
-// ---------------------------------------------------------------------------
-// Mock gate strategy (for unit testing)
-// ---------------------------------------------------------------------------
-
-class MockGateStrategy implements GateStrategy {
-  private response: GateResponse;
-
-  constructor(response: GateResponse) {
-    this.response = response;
-  }
-
-  async waitForGate(_gate: GateInfo): Promise<GateResponse> {
-    return this.response;
-  }
-}
+import { tmpProjectDir, MockGateStrategy } from "./helpers.js";
 
 describe("MockGateStrategy", () => {
   it("returns configured response", async () => {
@@ -69,23 +42,23 @@ describe("FilesystemGateStrategy", () => {
 
     const state = createState("test", "proj", "t.yaml", [
       { name: "approval", type: "human_gate" },
-    ], projectDir);
+    ], artifactDir, projectDir);
     state.gate = {
       stageName: "approval",
       status: "pending",
       prompt: "Please approve.",
     };
-    await saveState(artifactDir, state);
+    await saveState(state);
 
-    const strategy = new FilesystemGateStrategy(artifactDir, projectDir);
+    const strategy = new FilesystemGateStrategy(state.runId, projectDir);
     const waitPromise = strategy.waitForGate(state.gate);
 
     setTimeout(async () => {
-      const s = await loadState(artifactDir, projectDir);
+      const s = await loadState(state.runId, projectDir);
       if (s?.gate) {
         s.gate.status = "approved";
         s.gate.respondedAt = new Date().toISOString();
-        await saveState(artifactDir, s);
+        await saveState(s);
       }
     }, 100);
 
@@ -100,22 +73,22 @@ describe("FilesystemGateStrategy", () => {
 
     const state = createState("test", "proj", "t.yaml", [
       { name: "review", type: "human_gate" },
-    ], projectDir);
+    ], artifactDir, projectDir);
     state.gate = {
       stageName: "review",
       status: "pending",
     };
-    await saveState(artifactDir, state);
+    await saveState(state);
 
-    const strategy = new FilesystemGateStrategy(artifactDir, projectDir);
+    const strategy = new FilesystemGateStrategy(state.runId, projectDir);
     const waitPromise = strategy.waitForGate(state.gate);
 
     setTimeout(async () => {
-      const s = await loadState(artifactDir, projectDir);
+      const s = await loadState(state.runId, projectDir);
       if (s?.gate) {
         s.gate.status = "rejected";
         s.gate.feedback = "Needs more work";
-        await saveState(artifactDir, s);
+        await saveState(s);
       }
     }, 100);
 
@@ -137,7 +110,7 @@ describe("Gate state in pipeline state", () => {
 
     const state = createState("test", "proj", "t.yaml", [
       { name: "gate1", type: "human_gate" },
-    ], projectDir);
+    ], artifactDir, projectDir);
 
     const gateInfo: GateInfo = {
       stageName: "gate1",
@@ -145,9 +118,9 @@ describe("Gate state in pipeline state", () => {
       prompt: "Approve the design?",
     };
     state.gate = gateInfo;
-    await saveState(artifactDir, state);
+    await saveState(state);
 
-    const loaded = await loadState(artifactDir, projectDir);
+    const loaded = await loadState(state.runId, projectDir);
     expect(loaded?.gate).toBeDefined();
     expect(loaded?.gate?.stageName).toBe("gate1");
     expect(loaded?.gate?.status).toBe("pending");
@@ -161,18 +134,18 @@ describe("Gate state in pipeline state", () => {
 
     const state = createState("test", "proj", "t.yaml", [
       { name: "gate1", type: "human_gate" },
-    ], projectDir);
+    ], artifactDir, projectDir);
     state.gate = {
       stageName: "gate1",
       status: "approved",
       respondedAt: new Date().toISOString(),
     };
-    await saveState(artifactDir, state);
+    await saveState(state);
 
     state.gate = undefined;
-    await saveState(artifactDir, state);
+    await saveState(state);
 
-    const loaded = await loadState(artifactDir, projectDir);
+    const loaded = await loadState(state.runId, projectDir);
     expect(loaded?.gate).toBeUndefined();
     closeDatabase(projectDir);
   });

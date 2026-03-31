@@ -2,7 +2,8 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { McpProfile, McpServer, ProjectConfig } from "./config.js";
+import type { McpProfile, McpServer, ProjectConfig } from "../config.js";
+import type { TempFileTracker } from "../temp-tracker.js";
 
 // ---------------------------------------------------------------------------
 // MCP config JSON format (what claude --mcp-config expects)
@@ -91,10 +92,13 @@ export function buildMcpConfig(
 /**
  * Write an MCP config JSON file to a temp location and return the path.
  * Returns `undefined` if no profile is specified and no default exists.
+ * If a {@link TempFileTracker} is provided the path is registered for
+ * automatic cleanup.
  */
 export async function writeMcpConfigFile(
   profileName: string | undefined,
   config: ProjectConfig,
+  tracker?: TempFileTracker,
 ): Promise<string | undefined> {
   const name = profileName ?? config.default_mcp_profile;
   if (!name) return undefined;
@@ -118,5 +122,6 @@ export async function writeMcpConfigFile(
 
   const filePath = join(tmpdir(), `cccp-mcp-${randomUUID()}.json`);
   await writeFile(filePath, JSON.stringify(mcpConfig, null, 2), "utf-8");
+  tracker?.track(filePath);
   return filePath;
 }

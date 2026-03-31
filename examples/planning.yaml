@@ -6,7 +6,10 @@ description: >
 stages:
   - name: technical-scoping
     type: pge
-    description: "Assess codebase health and identify technical constraints."
+    task: "Assess codebase health and identify technical constraints."
+    planner:
+      agent: architect
+      operation: health-assessment
     generator:
       agent: architect
       operation: health-assessment
@@ -14,50 +17,57 @@ stages:
       agent: reviewer
     contract:
       deliverable: "{artifact_dir}/technical-scoping.md"
-      criteria:
-        - name: codebase-health
-          description: "Health assessment covers dependencies, test coverage, and tech debt."
-        - name: constraints
-          description: "Technical constraints and risks are identified with mitigation strategies."
+      guidance: |
+        Health assessment must cover dependencies, test coverage, and tech debt.
+        Technical constraints and risks must be identified with mitigation strategies.
       max_iterations: 2
 
   - name: architecture-design
     type: pge
-    description: "Design the system architecture for the feature."
+    task: "Design the system architecture for the feature."
+    inputs:
+      - "{artifact_dir}/technical-scoping.md"
+    planner:
+      agent: architect
     generator:
       agent: architect
     evaluator:
       agent: reviewer
     contract:
       deliverable: "{artifact_dir}/architecture.md"
-      criteria:
-        - name: modularity
-          description: "System decomposed into independent, testable modules."
-        - name: data-flow
-          description: "Data flow between components is clearly documented."
-        - name: api-contract
-          description: "All new/modified API endpoints are specified."
+      guidance: |
+        System must be decomposed into independent, testable modules.
+        Data flow between components must be clearly documented.
+        All new/modified API endpoints must be specified.
       max_iterations: 3
 
   - name: implementation-research
     type: pge
-    description: "Research libraries, patterns, and implementation approaches."
+    task: "Research libraries, patterns, and implementation approaches."
+    inputs:
+      - "{artifact_dir}/architecture.md"
+    planner:
+      agent: researcher
     generator:
       agent: researcher
     evaluator:
       agent: reviewer
     contract:
       deliverable: "{artifact_dir}/implementation-research.md"
-      criteria:
-        - name: library-evaluation
-          description: "Candidate libraries evaluated with pros/cons and recommendation."
-        - name: pattern-references
-          description: "Implementation patterns cited with working examples."
+      guidance: |
+        Candidate libraries must be evaluated with pros/cons and recommendation.
+        Implementation patterns must be cited with working examples.
       max_iterations: 2
 
   - name: master-plan
     type: pge
-    description: "Write the master implementation plan."
+    task: "Write the master implementation plan."
+    inputs:
+      - "{artifact_dir}/architecture.md"
+      - "{artifact_dir}/implementation-research.md"
+    planner:
+      agent: architect
+      operation: plan-authoring
     generator:
       agent: architect
       operation: plan-authoring
@@ -65,13 +75,10 @@ stages:
       agent: reviewer
     contract:
       deliverable: "{artifact_dir}/master-plan.md"
-      criteria:
-        - name: sprint-decomposition
-          description: "Work broken into sprints with clear boundaries."
-        - name: dependency-ordering
-          description: "Sprint dependencies are explicit and acyclic."
-        - name: risk-mitigation
-          description: "Each sprint identifies risks and mitigation."
+      guidance: |
+        Work must be broken into sprints with clear boundaries.
+        Sprint dependencies must be explicit and acyclic.
+        Each sprint must identify risks and mitigation.
       max_iterations: 3
 
   - name: plan-approval

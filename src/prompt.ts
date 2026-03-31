@@ -2,6 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import type { TempFileTracker } from "./temp-tracker.js";
 
 // ---------------------------------------------------------------------------
 // Variable interpolation
@@ -66,6 +67,14 @@ export interface TaskContext {
   maxIterations?: number;
   /** Path to the contract file. */
   contractPath?: string;
+  /** Path to a plan document containing the task reference. */
+  planFile?: string;
+  /** Path to a contract template the agent should follow. */
+  contractTemplate?: string;
+  /** Free-form guidance for the agent. */
+  guidance?: string;
+  /** Info about the deliverable the generator will produce. */
+  deliverableInfo?: string;
   /** Additional key-value context. */
   extra?: Record<string, string>;
 }
@@ -75,6 +84,14 @@ export interface TaskContext {
  */
 export function buildTaskContext(ctx: TaskContext): string {
   const lines: string[] = [`# Task\n`, ctx.task, ""];
+
+  if (ctx.planFile) {
+    lines.push(
+      `## Plan\n`,
+      `Find the task described above in the plan document at: ${ctx.planFile}`,
+      "",
+    );
+  }
 
   if (ctx.contractPath) {
     lines.push(`## Contract\n`, `Read the contract at: ${ctx.contractPath}`, "");
@@ -99,6 +116,22 @@ export function buildTaskContext(ctx: TaskContext): string {
       `Address all issues identified in the evaluation before producing your revised output.`,
       "",
     );
+  }
+
+  if (ctx.contractTemplate) {
+    lines.push(
+      `## Contract Template\n`,
+      `Follow the structure in: ${ctx.contractTemplate}`,
+      "",
+    );
+  }
+
+  if (ctx.guidance) {
+    lines.push(`## Guidance\n`, ctx.guidance, "");
+  }
+
+  if (ctx.deliverableInfo) {
+    lines.push(`## Deliverable\n`, ctx.deliverableInfo, "");
   }
 
   if (ctx.iteration != null && ctx.maxIterations != null) {
@@ -126,12 +159,15 @@ export function buildTaskContext(ctx: TaskContext): string {
 
 /**
  * Write agent markdown to a temp file and return the path.
- * The caller is responsible for cleanup (or let the OS handle it).
+ * If a {@link TempFileTracker} is provided the path is registered for
+ * automatic cleanup; otherwise the caller (or the OS) is responsible.
  */
 export async function writeSystemPromptFile(
   agentMarkdown: string,
+  tracker?: TempFileTracker,
 ): Promise<string> {
   const filePath = join(tmpdir(), `cccp-agent-${randomUUID()}.md`);
   await writeFile(filePath, agentMarkdown, "utf-8");
+  tracker?.track(filePath);
   return filePath;
 }

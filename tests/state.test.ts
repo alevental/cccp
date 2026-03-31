@@ -1,8 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
 import { closeDatabase } from "../src/db.js";
 import {
   createState,
@@ -15,11 +12,7 @@ import {
   findResumePoint,
   discoverRuns,
 } from "../src/state.js";
-
-function tmpProjectDir() {
-  const dir = join(tmpdir(), `cccp-test-${randomUUID()}`);
-  return dir;
-}
+import { tmpProjectDir } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
 // createState
@@ -31,7 +24,7 @@ describe("createState", () => {
       { name: "scoping", type: "pge" },
       { name: "design", type: "pge" },
       { name: "approval", type: "human_gate" },
-    ]);
+    ], "/tmp/test-artifacts");
 
     expect(state.pipeline).toBe("planning");
     expect(state.project).toBe("my-app");
@@ -47,7 +40,7 @@ describe("createState", () => {
   it("accepts projectDir parameter", () => {
     const state = createState("test", "proj", "t.yaml", [
       { name: "s1", type: "agent" },
-    ], "/my/project");
+    ], "/tmp/test-artifacts", "/my/project");
 
     expect(state.projectDir).toBe("/my/project");
   });
@@ -64,12 +57,12 @@ describe("saveState / loadState", () => {
 
     const state = createState("test", "proj", "test.yaml", [
       { name: "step1", type: "agent" },
-    ], projectDir);
+    ], artifactDir, projectDir);
     state.stages.step1.status = "passed";
 
-    await saveState(artifactDir, state);
+    await saveState(state);
 
-    const loaded = await loadState(artifactDir, projectDir);
+    const loaded = await loadState(state.runId, projectDir);
     expect(loaded).not.toBeNull();
     expect(loaded!.pipeline).toBe("test");
     expect(loaded!.stages.step1.status).toBe("passed");
@@ -80,7 +73,7 @@ describe("saveState / loadState", () => {
 
   it("returns null for non-existent artifact dir", async () => {
     const projectDir = tmpProjectDir();
-    const loaded = await loadState("/nonexistent/artifact/dir", projectDir);
+    const loaded = await loadState("nonexistent-run-id", projectDir);
     expect(loaded).toBeNull();
     closeDatabase(projectDir);
   });
@@ -91,16 +84,16 @@ describe("saveState / loadState", () => {
 
     const state = createState("test", "proj", "test.yaml", [
       { name: "s1", type: "agent" },
-    ], projectDir);
+    ], artifactDir, projectDir);
 
-    await saveState(artifactDir, state);
+    await saveState(state);
 
     state.stages.s1.status = "passed";
     state.status = "passed";
     state.completedAt = new Date().toISOString();
-    await saveState(artifactDir, state);
+    await saveState(state);
 
-    const loaded = await loadState(artifactDir, projectDir);
+    const loaded = await loadState(state.runId, projectDir);
     expect(loaded!.status).toBe("passed");
     expect(loaded!.stages.s1.status).toBe("passed");
     expect(loaded!.completedAt).toBeDefined();
@@ -117,7 +110,7 @@ describe("updateStageStatus", () => {
   it("updates stage status and extra fields", () => {
     const state = createState("test", "proj", "t.yaml", [
       { name: "s1", type: "agent" },
-    ]);
+    ], "/tmp/test-artifacts");
 
     updateStageStatus(state, "s1", "passed", {
       durationMs: 1234,
@@ -130,7 +123,7 @@ describe("updateStageStatus", () => {
   it("ignores unknown stage names", () => {
     const state = createState("test", "proj", "t.yaml", [
       { name: "s1", type: "agent" },
-    ]);
+    ], "/tmp/test-artifacts");
 
     updateStageStatus(state, "nonexistent", "passed");
   });
@@ -140,7 +133,7 @@ describe("updatePgeProgress", () => {
   it("tracks iteration and step", () => {
     const state = createState("test", "proj", "t.yaml", [
       { name: "pge1", type: "pge" },
-    ]);
+    ], "/tmp/test-artifacts");
 
     updatePgeProgress(state, "pge1", 2, "generator_dispatched");
 
@@ -153,7 +146,7 @@ describe("setStageArtifact", () => {
   it("sets artifact paths", () => {
     const state = createState("test", "proj", "t.yaml", [
       { name: "s1", type: "pge" },
-    ]);
+    ], "/tmp/test-artifacts");
 
     setStageArtifact(state, "s1", "contract", "/path/to/contract.md");
     setStageArtifact(state, "s1", "deliverable", "/path/to/output.md");
@@ -169,7 +162,7 @@ describe("finishPipeline", () => {
   it("sets status and completedAt", () => {
     const state = createState("test", "proj", "t.yaml", [
       { name: "s1", type: "agent" },
-    ]);
+    ], "/tmp/test-artifacts");
 
     finishPipeline(state, "passed");
 
@@ -187,7 +180,7 @@ describe("findResumePoint", () => {
     const state = createState("test", "proj", "t.yaml", [
       { name: "s1", type: "agent" },
       { name: "s2", type: "agent" },
-    ]);
+    ], "/tmp/test-artifacts");
     state.status = "passed";
     state.stages.s1.status = "passed";
     state.stages.s2.status = "passed";
@@ -200,7 +193,7 @@ describe("findResumePoint", () => {
       { name: "s1", type: "agent" },
       { name: "s2", type: "agent" },
       { name: "s3", type: "agent" },
-    ]);
+    ], "/tmp/test-artifacts");
     state.status = "interrupted";
     state.stages.s1.status = "passed";
 
@@ -215,7 +208,7 @@ describe("findResumePoint", () => {
       { name: "s1", type: "agent" },
       { name: "pge1", type: "pge" },
       { name: "s3", type: "agent" },
-    ]);
+    ], "/tmp/test-artifacts");
     state.status = "interrupted";
     state.stages.s1.status = "passed";
     state.stages.pge1.status = "in_progress";
@@ -235,7 +228,7 @@ describe("findResumePoint", () => {
       { name: "s1", type: "agent" },
       { name: "s2", type: "agent" },
       { name: "s3", type: "agent" },
-    ]);
+    ], "/tmp/test-artifacts");
     state.status = "interrupted";
     state.stages.s1.status = "passed";
     state.stages.s2.status = "skipped";
@@ -250,7 +243,7 @@ describe("findResumePoint", () => {
     const state = createState("test", "proj", "t.yaml", [
       { name: "s1", type: "agent" },
       { name: "s2", type: "agent" },
-    ]);
+    ], "/tmp/test-artifacts");
     state.status = "failed";
     state.stages.s1.status = "passed";
     state.stages.s2.status = "failed";
@@ -271,8 +264,8 @@ describe("discoverRuns", () => {
 
     const state = createState("planning", "my-app", "p.yaml", [
       { name: "s1", type: "agent" },
-    ], projectDir);
-    await saveState("/artifacts/planning", state);
+    ], "/artifacts/planning", projectDir);
+    await saveState(state);
 
     const runs = await discoverRuns(projectDir);
     expect(runs).toHaveLength(1);

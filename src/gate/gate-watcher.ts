@@ -1,5 +1,5 @@
 import { loadState } from "../state.js";
-import type { GateInfo } from "../state.js";
+import type { GateInfo } from "../types.js";
 import type { GateResponse, GateStrategy } from "./gate-strategy.js";
 import { notifyGateRequired } from "../tui/cmux.js";
 
@@ -17,7 +17,7 @@ const POLL_INTERVAL_MS = 2000;
  */
 export class FilesystemGateStrategy implements GateStrategy {
   constructor(
-    private artifactDir: string,
+    private runId: string,
     private projectDir?: string,
     private quiet?: boolean,
   ) {}
@@ -33,7 +33,7 @@ export class FilesystemGateStrategy implements GateStrategy {
     return new Promise<GateResponse>((resolve) => {
       const interval = setInterval(async () => {
         try {
-          const state = await loadState(this.artifactDir, this.projectDir, true);
+          const state = await loadState(this.runId, this.projectDir, true);
           if (!state?.gate) return;
 
           if (state.gate.stageName !== gate.stageName) return;

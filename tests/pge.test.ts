@@ -1,81 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { writeFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
-import { generateContract } from "../src/contract.js";
-import type { PgeStage, RunContext, Pipeline } from "../src/types.js";
-
-function tmpPath() {
-  return join(tmpdir(), `cccp-test-${randomUUID()}`);
-}
-
-// ---------------------------------------------------------------------------
-// Contract generation
-// ---------------------------------------------------------------------------
-
-describe("generateContract", () => {
-  it("generates a contract with criteria table", async () => {
-    const contract = await generateContract({
-      stageName: "architecture-design",
-      deliverable: "docs/architecture.md",
-      criteria: [
-        { name: "modularity", description: "System is decomposed into independent modules" },
-        { name: "scalability", description: "Design supports 10x traffic growth" },
-      ],
-      maxIterations: 3,
-    });
-
-    expect(contract).toContain("## Contract: architecture-design");
-    expect(contract).toContain("docs/architecture.md");
-    expect(contract).toContain("modularity");
-    expect(contract).toContain("scalability");
-    expect(contract).toContain("10x traffic growth");
-    expect(contract).toContain("Max Iterations: 3");
-    expect(contract).toContain("ALL criteria must pass");
-  });
-
-  it("numbers criteria rows correctly", async () => {
-    const contract = await generateContract({
-      stageName: "test",
-      deliverable: "out.md",
-      criteria: [
-        { name: "a", description: "first" },
-        { name: "b", description: "second" },
-        { name: "c", description: "third" },
-      ],
-      maxIterations: 2,
-    });
-
-    expect(contract).toContain("| 1 | a |");
-    expect(contract).toContain("| 2 | b |");
-    expect(contract).toContain("| 3 | c |");
-  });
-
-  it("uses a custom template when provided", async () => {
-    const dir = tmpPath();
-    await mkdir(dir, { recursive: true });
-    const tpl = join(dir, "custom.md");
-    await writeFile(
-      tpl,
-      "Stage: {stage_name}\nOutput: {deliverable}\n{criteria_table}\nRetries: {max_iterations}",
-      "utf-8",
-    );
-
-    const contract = await generateContract({
-      stageName: "custom-stage",
-      deliverable: "custom-output.md",
-      criteria: [{ name: "check", description: "verify it" }],
-      maxIterations: 5,
-      templatePath: tpl,
-    });
-
-    expect(contract).toContain("Stage: custom-stage");
-    expect(contract).toContain("Output: custom-output.md");
-    expect(contract).toContain("| 1 | check | verify it |");
-    expect(contract).toContain("Retries: 5");
-  });
-});
+import { createState } from "../src/state.js";
+import { AgentCrashError, MissingOutputError } from "../src/errors.js";
+import type { AgentDispatcher, DispatchOptions } from "../src/dispatcher.js";
+import type { PgeStage, RunContext, Pipeline, PipelineState, AgentResult } from "../src/types.js";
+import { tmpPath } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
 // PGE dry-run
@@ -83,8 +13,6 @@ describe("generateContract", () => {
 
 describe("PGE dry-run", () => {
   it("produces dry-run output for a PGE stage via runner", async () => {
-    // We test dry-run by importing runPgeCycle and verifying it doesn't
-    // try to read agent files or spawn processes.
     const { runPgeCycle } = await import("../src/pge.js");
 
     const dir = tmpPath();
@@ -93,11 +21,11 @@ describe("PGE dry-run", () => {
     const stage: PgeStage = {
       name: "test-pge",
       type: "pge",
+      planner: { agent: "agents/planner.md" },
       generator: { agent: "agents/gen.md" },
       evaluator: { agent: "agents/eval.md" },
       contract: {
         deliverable: "output.md",
-        criteria: [{ name: "exists", description: "Output file exists" }],
         max_iterations: 2,
       },
     };
@@ -118,10 +46,62 @@ describe("PGE dry-run", () => {
       agentSearchPaths: [join(dir, "agents")],
     };
 
-    const result = await runPgeCycle(stage, ctx);
+    const state = createState("test", "test", "test.yaml", [stage], join(dir, "artifacts"));
+    const result = await runPgeCycle(stage, ctx, state);
     expect(result.outcome).toBe("pass");
     expect(result.iterations).toBe(0);
     expect(result.maxIterations).toBe(2);
+    expect(result.taskPlanPath).toBeDefined();
+    expect(result.contractPath).toBeDefined();
+  });
+
+  it("dry-run logs planner and contract info", async () => {
+    const { runPgeCycle } = await import("../src/pge.js");
+
+    const dir = tmpPath();
+    await mkdir(dir, { recursive: true });
+
+    const logLines: string[] = [];
+    const mockLogger = {
+      log: (...args: unknown[]) => logLines.push(args.join(" ")),
+      error: (...args: unknown[]) => logLines.push(args.join(" ")),
+      warn: (...args: unknown[]) => logLines.push(args.join(" ")),
+    };
+
+    const stage: PgeStage = {
+      name: "dry-pge",
+      type: "pge",
+      planner: { agent: "agents/planner.md", operation: "decompose" },
+      generator: { agent: "agents/gen.md" },
+      evaluator: { agent: "agents/eval.md" },
+      contract: {
+        deliverable: "output.md",
+        guidance: "Focus on correctness",
+        max_iterations: 3,
+      },
+    };
+
+    const ctx: RunContext = {
+      project: "test",
+      projectDir: dir,
+      artifactDir: join(dir, "artifacts"),
+      pipelineFile: "test.yaml",
+      pipeline: { name: "test", stages: [stage] },
+      dryRun: true,
+      variables: { project: "test", project_dir: dir, artifact_dir: join(dir, "artifacts"), pipeline_name: "test" },
+      agentSearchPaths: [join(dir, "agents")],
+      logger: mockLogger as any,
+    };
+
+    const state = createState("test", "test", "test.yaml", [stage], join(dir, "artifacts"));
+    await runPgeCycle(stage, ctx, state);
+
+    const output = logLines.join("\n");
+    expect(output).toContain("agents/planner.md");
+    expect(output).toContain("decompose");
+    expect(output).toContain("agents/gen.md");
+    expect(output).toContain("agents/eval.md");
+    expect(output).toContain("guidance");
   });
 });
 
@@ -130,49 +110,87 @@ describe("PGE dry-run", () => {
 // ---------------------------------------------------------------------------
 
 describe("PGE iteration logic", () => {
-  it("passes on first iteration when evaluator returns PASS", async () => {
-    // Mock agent.ts dispatch to:
-    // 1. Write a deliverable file (generator)
-    // 2. Write an evaluation file with PASS (evaluator)
-    const agentModule = await import("../src/agent.js");
+  /**
+   * Helper: build a mock dispatcher for the planner-based PGE flow.
+   *
+   * Each PGE pass dispatches 4 agents:
+   *   1. planner   → writes task-plan.md   (dispatch 1, once only)
+   *   2. contract   → writes contract.md    (dispatch 2, once only)
+   *   3. generator → writes deliverable     (dispatch 3+ per iter)
+   *   4. evaluator → writes evaluation-N.md (dispatch 4+ per iter)
+   *
+   * `evalOutcomes` controls what each evaluator dispatch writes.
+   * For example, ["FAIL", "PASS"] means iter 1 fails, iter 2 passes.
+   */
+  function buildMockDispatcher(
+    dir: string,
+    evalOutcomes: ("PASS" | "FAIL")[],
+  ): { dispatcher: AgentDispatcher; dispatchCount: () => number } {
+    let count = 0;
+    let evalIndex = 0;
 
+    const dispatcher: AgentDispatcher = {
+      async dispatch(opts: DispatchOptions): Promise<AgentResult> {
+        count++;
+        if (opts.expectedOutput) {
+          await mkdir(join(opts.expectedOutput, ".."), { recursive: true }).catch(() => {});
+
+          if (count === 1) {
+            // Planner dispatch → task-plan.md
+            await writeFile(opts.expectedOutput, "# Task Plan\n\n1. Do the thing\n2. Verify the thing\n", "utf-8");
+          } else if (count === 2) {
+            // Contract dispatch → contract.md
+            await writeFile(
+              opts.expectedOutput,
+              "## Contract\n\n### Criteria\n\n1. Output exists\n\n### Pass Rule\n\nAll criteria must pass.\n",
+              "utf-8",
+            );
+          } else {
+            // GE loop: odd = generator, even = evaluator (relative to GE loop start)
+            const geIndex = count - 2; // 1-based index within the GE loop
+            if (geIndex % 2 === 1) {
+              // Generator
+              await writeFile(opts.expectedOutput, "# Generated Output\n\nSome content.\n", "utf-8");
+            } else {
+              // Evaluator
+              const outcome = evalOutcomes[evalIndex] ?? "FAIL";
+              evalIndex++;
+              const body =
+                outcome === "FAIL"
+                  ? "### Overall: FAIL\n\n### Iteration Guidance\n1. Fix it\n"
+                  : "### Overall: PASS\n";
+              await writeFile(opts.expectedOutput, body, "utf-8");
+            }
+          }
+        }
+        return { exitCode: 0, outputPath: opts.expectedOutput, outputExists: true, durationMs: 100 };
+      },
+    };
+
+    return { dispatcher, dispatchCount: () => count };
+  }
+
+  it("passes on first iteration when evaluator returns PASS", async () => {
     const dir = tmpPath();
     const artifactDir = join(dir, "artifacts");
     const agentsDir = join(dir, "agents");
     await mkdir(agentsDir, { recursive: true });
+    await writeFile(join(agentsDir, "planner.md"), "# Planner\nPlan things.", "utf-8");
     await writeFile(join(agentsDir, "gen.md"), "# Generator\nGenerate things.", "utf-8");
     await writeFile(join(agentsDir, "eval.md"), "# Evaluator\nEvaluate things.", "utf-8");
 
-    let dispatchCount = 0;
-    const originalDispatch = agentModule.dispatchAgent;
-
-    vi.spyOn(agentModule, "dispatchAgent").mockImplementation(async (opts) => {
-      dispatchCount++;
-      if (opts.expectedOutput) {
-        await mkdir(join(opts.expectedOutput, ".."), { recursive: true }).catch(() => {});
-        // Generator dispatch writes a deliverable
-        if (dispatchCount === 1) {
-          await mkdir(join(dir, "artifacts", "test-pge"), { recursive: true }).catch(() => {});
-          await writeFile(opts.expectedOutput, "# Generated Output\n\nSome content.", "utf-8");
-        }
-        // Evaluator dispatch writes a PASS evaluation
-        if (dispatchCount === 2) {
-          await writeFile(opts.expectedOutput, "### Overall: PASS\n", "utf-8");
-        }
-      }
-      return { exitCode: 0, outputPath: opts.expectedOutput, outputExists: true, durationMs: 100 };
-    });
+    const { dispatcher: mockDispatcher, dispatchCount } = buildMockDispatcher(dir, ["PASS"]);
 
     const { runPgeCycle } = await import("../src/pge.js");
 
     const stage: PgeStage = {
       name: "test-pge",
       type: "pge",
+      planner: { agent: "agents/planner.md" },
       generator: { agent: "agents/gen.md" },
       evaluator: { agent: "agents/eval.md" },
       contract: {
         deliverable: "artifacts/test-pge/output.md",
-        criteria: [{ name: "exists", description: "Output exists" }],
         max_iterations: 3,
       },
     };
@@ -185,59 +203,42 @@ describe("PGE iteration logic", () => {
       pipeline: { name: "test", stages: [stage] },
       dryRun: false,
       variables: { project: "test", project_dir: dir, artifact_dir: artifactDir, pipeline_name: "test" },
+      agentSearchPaths: [agentsDir],
+      dispatcher: mockDispatcher,
     };
 
-    const result = await runPgeCycle(stage, ctx);
+    const state = createState("test", "test", "test.yaml", [stage], artifactDir);
+    const result = await runPgeCycle(stage, ctx, state);
 
     expect(result.outcome).toBe("pass");
     expect(result.iterations).toBe(1);
-    expect(dispatchCount).toBe(2); // 1 generator + 1 evaluator
-
-    vi.restoreAllMocks();
+    // 1 planner + 1 contract + 1 generator + 1 evaluator = 4
+    expect(dispatchCount()).toBe(4);
+    expect(result.taskPlanPath).toBeDefined();
+    expect(result.contractPath).toBeDefined();
   });
 
   it("retries on FAIL then passes", async () => {
-    const agentModule = await import("../src/agent.js");
-
     const dir = tmpPath();
     const artifactDir = join(dir, "artifacts");
     const agentsDir = join(dir, "agents");
     await mkdir(agentsDir, { recursive: true });
+    await writeFile(join(agentsDir, "planner.md"), "# Planner", "utf-8");
     await writeFile(join(agentsDir, "gen.md"), "# Generator", "utf-8");
     await writeFile(join(agentsDir, "eval.md"), "# Evaluator", "utf-8");
 
-    let dispatchCount = 0;
-
-    vi.spyOn(agentModule, "dispatchAgent").mockImplementation(async (opts) => {
-      dispatchCount++;
-      if (opts.expectedOutput) {
-        await mkdir(join(opts.expectedOutput, ".."), { recursive: true }).catch(() => {});
-
-        // Dispatch 1: generator (iter 1)
-        // Dispatch 2: evaluator (iter 1) — FAIL
-        // Dispatch 3: generator (iter 2)
-        // Dispatch 4: evaluator (iter 2) — PASS
-        if (dispatchCount === 1 || dispatchCount === 3) {
-          await writeFile(opts.expectedOutput, "# Output", "utf-8");
-        } else if (dispatchCount === 2) {
-          await writeFile(opts.expectedOutput, "### Overall: FAIL\n\n### Iteration Guidance\n1. Fix it\n", "utf-8");
-        } else if (dispatchCount === 4) {
-          await writeFile(opts.expectedOutput, "### Overall: PASS\n", "utf-8");
-        }
-      }
-      return { exitCode: 0, outputPath: opts.expectedOutput, outputExists: true, durationMs: 100 };
-    });
+    const { dispatcher: mockDispatcher, dispatchCount } = buildMockDispatcher(dir, ["FAIL", "PASS"]);
 
     const { runPgeCycle } = await import("../src/pge.js");
 
     const stage: PgeStage = {
       name: "retry-test",
       type: "pge",
+      planner: { agent: "agents/planner.md" },
       generator: { agent: "agents/gen.md" },
       evaluator: { agent: "agents/eval.md" },
       contract: {
         deliverable: "artifacts/retry-test/output.md",
-        criteria: [{ name: "quality", description: "Must be good" }],
         max_iterations: 3,
       },
     };
@@ -250,53 +251,40 @@ describe("PGE iteration logic", () => {
       pipeline: { name: "test", stages: [stage] },
       dryRun: false,
       variables: { project: "test", project_dir: dir, artifact_dir: artifactDir, pipeline_name: "test" },
+      agentSearchPaths: [agentsDir],
+      dispatcher: mockDispatcher,
     };
 
-    const result = await runPgeCycle(stage, ctx);
+    const state = createState("test", "test", "test.yaml", [stage], artifactDir);
+    const result = await runPgeCycle(stage, ctx, state);
 
     expect(result.outcome).toBe("pass");
     expect(result.iterations).toBe(2);
-    expect(dispatchCount).toBe(4); // 2 generators + 2 evaluators
-
-    vi.restoreAllMocks();
+    // 1 planner + 1 contract + 2 generators + 2 evaluators = 6
+    expect(dispatchCount()).toBe(6);
   });
 
   it("returns fail after exhausting max iterations", async () => {
-    const agentModule = await import("../src/agent.js");
-
     const dir = tmpPath();
     const artifactDir = join(dir, "artifacts");
     const agentsDir = join(dir, "agents");
     await mkdir(agentsDir, { recursive: true });
+    await writeFile(join(agentsDir, "planner.md"), "# Planner", "utf-8");
     await writeFile(join(agentsDir, "gen.md"), "# Generator", "utf-8");
     await writeFile(join(agentsDir, "eval.md"), "# Evaluator", "utf-8");
 
-    let dispatchCount = 0;
-
-    vi.spyOn(agentModule, "dispatchAgent").mockImplementation(async (opts) => {
-      dispatchCount++;
-      if (opts.expectedOutput) {
-        await mkdir(join(opts.expectedOutput, ".."), { recursive: true }).catch(() => {});
-        // All generators write output, all evaluators write FAIL
-        if (dispatchCount % 2 === 1) {
-          await writeFile(opts.expectedOutput, "# Output", "utf-8");
-        } else {
-          await writeFile(opts.expectedOutput, "### Overall: FAIL\n", "utf-8");
-        }
-      }
-      return { exitCode: 0, outputPath: opts.expectedOutput, outputExists: true, durationMs: 100 };
-    });
+    const { dispatcher: mockDispatcher, dispatchCount } = buildMockDispatcher(dir, ["FAIL", "FAIL"]);
 
     const { runPgeCycle } = await import("../src/pge.js");
 
     const stage: PgeStage = {
       name: "exhaust-test",
       type: "pge",
+      planner: { agent: "agents/planner.md" },
       generator: { agent: "agents/gen.md" },
       evaluator: { agent: "agents/eval.md" },
       contract: {
         deliverable: "artifacts/exhaust-test/output.md",
-        criteria: [{ name: "impossible", description: "Can never pass" }],
         max_iterations: 2,
       },
     };
@@ -309,14 +297,140 @@ describe("PGE iteration logic", () => {
       pipeline: { name: "test", stages: [stage] },
       dryRun: false,
       variables: { project: "test", project_dir: dir, artifact_dir: artifactDir, pipeline_name: "test" },
+      agentSearchPaths: [agentsDir],
+      dispatcher: mockDispatcher,
     };
 
-    const result = await runPgeCycle(stage, ctx);
+    const state = createState("test", "test", "test.yaml", [stage], artifactDir);
+    const result = await runPgeCycle(stage, ctx, state);
 
     expect(result.outcome).toBe("fail");
     expect(result.iterations).toBe(2);
-    expect(dispatchCount).toBe(4); // 2 generators + 2 evaluators
+    // 1 planner + 1 contract + 2 generators + 2 evaluators = 6
+    expect(dispatchCount()).toBe(6);
+  });
 
-    vi.restoreAllMocks();
+  it("planner crash throws AgentCrashError", async () => {
+    const dir = tmpPath();
+    const artifactDir = join(dir, "artifacts");
+    const agentsDir = join(dir, "agents");
+    await mkdir(agentsDir, { recursive: true });
+    await writeFile(join(agentsDir, "planner.md"), "# Planner", "utf-8");
+    await writeFile(join(agentsDir, "gen.md"), "# Generator", "utf-8");
+    await writeFile(join(agentsDir, "eval.md"), "# Evaluator", "utf-8");
+
+    let count = 0;
+    const crashDispatcher: AgentDispatcher = {
+      async dispatch(opts: DispatchOptions): Promise<AgentResult> {
+        count++;
+        // First dispatch is the planner — crash it
+        if (count === 1) {
+          return { exitCode: 1, outputPath: opts.expectedOutput, outputExists: false, durationMs: 50 };
+        }
+        // Should never reach here
+        if (opts.expectedOutput) {
+          await mkdir(join(opts.expectedOutput, ".."), { recursive: true }).catch(() => {});
+          await writeFile(opts.expectedOutput, "content", "utf-8");
+        }
+        return { exitCode: 0, outputPath: opts.expectedOutput, outputExists: true, durationMs: 100 };
+      },
+    };
+
+    const { runPgeCycle } = await import("../src/pge.js");
+
+    const stage: PgeStage = {
+      name: "crash-test",
+      type: "pge",
+      planner: { agent: "agents/planner.md" },
+      generator: { agent: "agents/gen.md" },
+      evaluator: { agent: "agents/eval.md" },
+      contract: {
+        deliverable: "artifacts/crash-test/output.md",
+        max_iterations: 2,
+      },
+    };
+
+    const ctx: RunContext = {
+      project: "test",
+      projectDir: dir,
+      artifactDir: artifactDir,
+      pipelineFile: "test.yaml",
+      pipeline: { name: "test", stages: [stage] },
+      dryRun: false,
+      variables: { project: "test", project_dir: dir, artifact_dir: artifactDir, pipeline_name: "test" },
+      agentSearchPaths: [agentsDir],
+      dispatcher: crashDispatcher,
+    };
+
+    const state = createState("test", "test", "test.yaml", [stage], artifactDir);
+
+    await expect(runPgeCycle(stage, ctx, state)).rejects.toThrow(AgentCrashError);
+    expect(count).toBe(1); // Only the planner was dispatched
+  });
+
+  it("contract step missing output throws MissingOutputError", async () => {
+    const dir = tmpPath();
+    const artifactDir = join(dir, "artifacts");
+    const agentsDir = join(dir, "agents");
+    await mkdir(agentsDir, { recursive: true });
+    await writeFile(join(agentsDir, "planner.md"), "# Planner", "utf-8");
+    await writeFile(join(agentsDir, "gen.md"), "# Generator", "utf-8");
+    await writeFile(join(agentsDir, "eval.md"), "# Evaluator", "utf-8");
+
+    let count = 0;
+    const noContractDispatcher: AgentDispatcher = {
+      async dispatch(opts: DispatchOptions): Promise<AgentResult> {
+        count++;
+        if (count === 1) {
+          // Planner succeeds and writes task-plan.md
+          if (opts.expectedOutput) {
+            await mkdir(join(opts.expectedOutput, ".."), { recursive: true }).catch(() => {});
+            await writeFile(opts.expectedOutput, "# Task Plan\n\n1. Step one\n", "utf-8");
+          }
+          return { exitCode: 0, outputPath: opts.expectedOutput, outputExists: true, durationMs: 100 };
+        }
+        if (count === 2) {
+          // Contract dispatch succeeds (exit 0) but does NOT write the file
+          return { exitCode: 0, outputPath: opts.expectedOutput, outputExists: false, durationMs: 100 };
+        }
+        // Should never reach here
+        if (opts.expectedOutput) {
+          await mkdir(join(opts.expectedOutput, ".."), { recursive: true }).catch(() => {});
+          await writeFile(opts.expectedOutput, "content", "utf-8");
+        }
+        return { exitCode: 0, outputPath: opts.expectedOutput, outputExists: true, durationMs: 100 };
+      },
+    };
+
+    const { runPgeCycle } = await import("../src/pge.js");
+
+    const stage: PgeStage = {
+      name: "no-contract-test",
+      type: "pge",
+      planner: { agent: "agents/planner.md" },
+      generator: { agent: "agents/gen.md" },
+      evaluator: { agent: "agents/eval.md" },
+      contract: {
+        deliverable: "artifacts/no-contract-test/output.md",
+        max_iterations: 2,
+      },
+    };
+
+    const ctx: RunContext = {
+      project: "test",
+      projectDir: dir,
+      artifactDir: artifactDir,
+      pipelineFile: "test.yaml",
+      pipeline: { name: "test", stages: [stage] },
+      dryRun: false,
+      variables: { project: "test", project_dir: dir, artifact_dir: artifactDir, pipeline_name: "test" },
+      agentSearchPaths: [agentsDir],
+      dispatcher: noContractDispatcher,
+    };
+
+    const state = createState("test", "test", "test.yaml", [stage], artifactDir);
+
+    await expect(runPgeCycle(stage, ctx, state)).rejects.toThrow(MissingOutputError);
+    expect(count).toBe(2); // Planner succeeded, contract dispatch happened but no file
   });
 });

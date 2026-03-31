@@ -9,13 +9,110 @@ import { EventEmitter } from "node:events";
 // Real format uses nested message.content[] arrays, not flat events.
 // ---------------------------------------------------------------------------
 
-export interface StreamEventBase {
-  type: string;
+// --- Content block types (within message.content[]) ---
+
+export interface TextBlock {
+  type: "text";
+  text: string;
+}
+
+export interface ThinkingBlock {
+  type: "thinking";
+  thinking: string;
+}
+
+export interface ToolUseBlock {
+  type: "tool_use";
+  name: string;
+  id: string;
+  input?: Record<string, unknown>;
+}
+
+export interface ToolResultBlock {
+  type: "tool_result";
+  tool_use_id: string;
+  content?: unknown;
+}
+
+export type ContentBlock = TextBlock | ThinkingBlock | ToolUseBlock | ToolResultBlock;
+
+// --- Message wrapper ---
+
+export interface StreamMessage {
+  id?: string;
+  content?: ContentBlock[];
+  usage?: { input_tokens?: number; output_tokens?: number };
+}
+
+// --- Top-level event types (discriminated on `type` field) ---
+
+export interface SystemInitEvent {
+  type: "system";
+  subtype: "init";
+  model?: string;
+  tools?: string[];
+}
+
+export interface SystemTaskProgressEvent {
+  type: "system";
+  subtype: "task_progress";
+  last_tool_name?: string;
+  description?: string;
+}
+
+export interface SystemOtherEvent {
+  type: "system";
   subtype?: string;
+}
+
+export interface AssistantEvent {
+  type: "assistant";
+  subtype?: string;
+  message?: StreamMessage;
+  text?: string;
+  name?: string;
+  id?: string;
+  input?: Record<string, unknown>;
+}
+
+export interface UserEvent {
+  type: "user";
+  subtype?: string;
+  message?: StreamMessage;
+  name?: string;
+}
+
+export interface ToolResultEvent {
+  type: "tool_result";
+  name?: string;
+  id?: string;
+}
+
+export interface ResultEvent {
+  type: "result";
+  subtype?: string;
+  usage?: { input_tokens?: number; output_tokens?: number };
+  total_cost_usd?: number;
+  exit_code?: number;
+}
+
+export interface UnknownEvent {
+  type: string;
   [key: string]: unknown;
 }
 
-export type StreamEvent = StreamEventBase;
+export type StreamEvent =
+  | SystemInitEvent
+  | SystemTaskProgressEvent
+  | SystemOtherEvent
+  | AssistantEvent
+  | UserEvent
+  | ToolResultEvent
+  | ResultEvent
+  | UnknownEvent;
+
+/** @deprecated Use `StreamEvent` instead. */
+export type StreamEventBase = StreamEvent;
 
 // ---------------------------------------------------------------------------
 // Tool history entry
@@ -136,7 +233,11 @@ export class StreamParser extends EventEmitter {
   private parseLine(line: string): void {
     let event: StreamEvent;
     try {
-      event = JSON.parse(line) as StreamEvent;
+      const raw: unknown = JSON.parse(line);
+      if (typeof raw !== "object" || raw === null || typeof (raw as Record<string, unknown>).type !== "string") {
+        return;
+      }
+      event = raw as StreamEvent;
     } catch {
       return;
     }
@@ -152,16 +253,18 @@ export class StreamParser extends EventEmitter {
 
   private processEvent(event: StreamEvent): void {
     const type = event.type;
-    const subtype = event.subtype as string | undefined;
 
     // --- system events ---
     if (type === "system") {
-      if (subtype === "init") {
-        this.activity.model = (event as any).model ?? "";
-      } else if (subtype === "task_progress") {
+      const sysEvent = event as SystemInitEvent | SystemTaskProgressEvent | SystemOtherEvent;
+      if (sysEvent.subtype === "init") {
+        const initEvent = sysEvent as SystemInitEvent;
+        this.activity.model = initEvent.model ?? "";
+      } else if (sysEvent.subtype === "task_progress") {
         // Sub-agent activity
-        const toolName = (event as any).last_tool_name;
-        const desc = (event as any).description;
+        const progressEvent = sysEvent as SystemTaskProgressEvent;
+        const toolName = progressEvent.last_tool_name;
+        const desc = progressEvent.description;
         if (toolName) {
           this.activity.lastText = `[sub-agent] ${toolName}: ${desc ?? ""}`.slice(-200);
         }
@@ -171,7 +274,8 @@ export class StreamParser extends EventEmitter {
 
     // --- assistant events (nested message.content[] format) ---
     if (type === "assistant") {
-      const message = (event as any).message;
+      const assistantEvent = event as AssistantEvent;
+      const message = assistantEvent.message;
       if (message?.content && Array.isArray(message.content)) {
         this.processContentBlocks(message.content);
         // Per-message usage (partial, during streaming)
@@ -182,17 +286,17 @@ export class StreamParser extends EventEmitter {
         return;
       }
       // Legacy flat format (for backward compat with tests)
-      if (subtype === "text" && typeof (event as any).text === "string") {
-        this.activity.lastText = ((event as any).text as string).slice(-200);
-      } else if (subtype === "tool_use" && (event as any).name) {
-        const name = (event as any).name as string;
-        const id = (event as any).id as string;
+      if (assistantEvent.subtype === "text" && typeof assistantEvent.text === "string") {
+        this.activity.lastText = assistantEvent.text.slice(-200);
+      } else if (assistantEvent.subtype === "tool_use" && assistantEvent.name) {
+        const name = assistantEvent.name;
+        const id = assistantEvent.id;
         if (id && !this.seenToolIds.has(id)) {
           this.seenToolIds.add(id);
           this.toolIdToName.set(id, name);
           this.activity.activeTools.push(name);
           this.activity.toolCallCount++;
-          this.addToolHistory(name, id, summarizeToolInput((event as any).input));
+          this.addToolHistory(name, id, summarizeToolInput(assistantEvent.input));
         }
       }
       return;
@@ -200,7 +304,8 @@ export class StreamParser extends EventEmitter {
 
     // --- user events (tool_result in message.content[]) ---
     if (type === "user") {
-      const message = (event as any).message;
+      const userEvent = event as UserEvent;
+      const message = userEvent.message;
       if (message?.content && Array.isArray(message.content)) {
         for (const block of message.content) {
           if (block.type === "tool_result" && block.tool_use_id) {
@@ -215,8 +320,8 @@ export class StreamParser extends EventEmitter {
         }
       }
       // Legacy flat format
-      if ((event as any).subtype === "tool_result" || type === "tool_result") {
-        const name = (event as any).name as string | undefined;
+      if (userEvent.subtype === "tool_result") {
+        const name = userEvent.name;
         if (name) {
           this.activity.activeTools = this.activity.activeTools.filter(
             (t) => t !== name,
@@ -228,7 +333,8 @@ export class StreamParser extends EventEmitter {
 
     // --- Legacy flat tool_result (backward compat) ---
     if (type === "tool_result") {
-      const name = (event as any).name as string | undefined;
+      const toolResultEvent = event as ToolResultEvent;
+      const name = toolResultEvent.name;
       if (name) {
         this.activity.activeTools = this.activity.activeTools.filter(
           (t) => t !== name,
@@ -239,25 +345,26 @@ export class StreamParser extends EventEmitter {
 
     // --- result event (final stats) ---
     if (type === "result") {
-      const usage = (event as any).usage;
+      const resultEvent = event as ResultEvent;
+      const usage = resultEvent.usage;
       if (usage) {
         if (usage.input_tokens != null) this.activity.inputTokens = usage.input_tokens;
         if (usage.output_tokens != null) this.activity.outputTokens = usage.output_tokens;
       }
-      if ((event as any).total_cost_usd != null) {
-        this.activity.totalCostUsd = (event as any).total_cost_usd;
+      if (resultEvent.total_cost_usd != null) {
+        this.activity.totalCostUsd = resultEvent.total_cost_usd;
       }
       return;
     }
   }
 
-  private processContentBlocks(blocks: any[]): void {
+  private processContentBlocks(blocks: ContentBlock[]): void {
     for (const block of blocks) {
-      if (block.type === "text" && typeof block.text === "string") {
+      if (block.type === "text") {
         this.activity.lastText = block.text.slice(-200);
-      } else if (block.type === "thinking" && typeof block.thinking === "string") {
+      } else if (block.type === "thinking") {
         this.activity.lastThinking = block.thinking.slice(-200);
-      } else if (block.type === "tool_use" && block.name && block.id) {
+      } else if (block.type === "tool_use") {
         if (!this.seenToolIds.has(block.id)) {
           this.seenToolIds.add(block.id);
           this.toolIdToName.set(block.id, block.name);

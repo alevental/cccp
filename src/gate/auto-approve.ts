@@ -1,4 +1,4 @@
-import type { GateInfo } from "../state.js";
+import type { GateInfo } from "../types.js";
 import type { GateResponse, GateStrategy } from "./gate-strategy.js";
 
 /**

@@ -71,6 +71,12 @@ stages:
   # Plan-Generate-Evaluate with retry loop
   - name: design
     type: pge
+    task: "Design the system architecture."
+    inputs:
+      - "{artifact_dir}/research.md"
+    planner:
+      agent: architect
+      operation: task-planning
     generator:
       agent: architect
       operation: design        # optional sub-operation
@@ -79,11 +85,7 @@ stages:
       agent: reviewer
     contract:
       deliverable: "{artifact_dir}/design.md"
-      criteria:
-        - name: modularity
-          description: "System is decomposed into independent modules."
-        - name: data-flow
-          description: "Data flow between components is documented."
+      guidance: "System must be modular with documented data flow."
       max_iterations: 3
     on_fail: stop              # stop | skip | human_gate
 
@@ -100,7 +102,7 @@ stages:
 | Type | What it does |
 |------|-------------|
 | `agent` | Dispatch one agent, collect output |
-| `pge` | Write contract → dispatch generator → dispatch evaluator → parse `### Overall: PASS/FAIL` → retry on FAIL up to `max_iterations` |
+| `pge` | Dispatch planner -> evaluator writes contract -> dispatch generator -> dispatch evaluator -> parse `### Overall: PASS/FAIL` -> retry generator/evaluator on FAIL up to `max_iterations` |
 | `human_gate` | Block until approved via MCP tool call or state file edit |
 
 ### Variables
@@ -205,15 +207,14 @@ CCCP reads only this line. Everything else in the evaluation (criterion tables, 
 cccp run -f <pipeline.yaml> -p <project> [options]
   --dry-run              Show what would execute without running agents
   --headless             Auto-approve all human gates
-  --webhook-url <url>    POST pipeline events to a webhook
   -d, --project-dir      Project directory (default: cwd)
   -a, --artifact-dir     Override artifact output directory
   -v, --var key=value    Set pipeline variables (repeatable)
 
-cccp resume -p <project> -a <artifact-dir> [--headless]
+cccp resume -p <project> -r <run-id-prefix> [--headless]
   Resume an interrupted pipeline from the last incomplete stage
 
-cccp dashboard -a <artifact-dir>
+cccp dashboard -r <run-id-prefix>
   Launch the TUI dashboard to monitor a running pipeline
 
 cccp gate-server
@@ -225,7 +226,7 @@ cccp init [--dir <path>]
 
 ## Gate interaction
 
-When a pipeline hits a `human_gate` stage, it writes `gate_pending` to `.cccp/state.json` and waits.
+When a pipeline hits a `human_gate` stage, it writes a pending gate to the SQLite state database (`.cccp/cccp.db`) and waits.
 
 **Option 1: MCP server** — Register the gate server in your project's `.mcp.json`:
 
@@ -246,10 +247,10 @@ Then from Claude Code: call `pipeline_status` to see what's pending, `pipeline_g
 
 ## State & resume
 
-Pipeline state is persisted to `{artifact_dir}/.cccp/state.json` after every transition (stage start, contract write, generator dispatch, evaluator dispatch, routing decision). If a run is interrupted:
+Pipeline state is persisted to a SQLite database at `{projectDir}/.cccp/cccp.db` after every transition (stage start, planner dispatch, contract dispatch, generator dispatch, evaluator dispatch, routing decision). If a run is interrupted:
 
 ```bash
-cccp resume -p my-project -a docs/projects/my-project/planning
+cccp resume -p my-project -r <run-id-prefix>
 ```
 
 Completed stages are skipped. PGE stages resume at the correct iteration and sub-step.
@@ -268,7 +269,8 @@ Without cmux, CCCP falls back to plain terminal output.
 ## Development
 
 ```bash
-npm test           # run all tests (107 tests)
+npm test           # run all tests (143 tests)
+npm run typecheck  # tsc --noEmit
 npm run test:watch # watch mode
 npm run build      # compile TypeScript to dist/
 ```

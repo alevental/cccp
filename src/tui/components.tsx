@@ -1,9 +1,8 @@
 import React from "react";
 import { Box, Text } from "ink";
 import Spinner from "ink-spinner";
-import type { PipelineState, StageState, GateInfo } from "../state.js";
-import type { StateEvent } from "../db.js";
-import type { AgentActivity } from "../stream.js";
+import type { PipelineState, StageState, GateInfo, StateEvent } from "../types.js";
+import type { AgentActivity } from "../stream/stream.js";
 
 // ---------------------------------------------------------------------------
 // Stage list (left pane)

@@ -7,14 +7,9 @@ import type { Pipeline } from "./types.js";
 // Zod schemas — validate raw YAML into typed Pipeline objects
 // ---------------------------------------------------------------------------
 
-const ContractCriterionSchema = z.object({
-  name: z.string(),
-  description: z.string(),
-});
-
 const AgentStageSchema = z.object({
   name: z.string(),
-  description: z.string().optional(),
+  task: z.string().optional(),
   type: z.literal("agent"),
   agent: z.string(),
   operation: z.string().optional(),
@@ -25,28 +20,29 @@ const AgentStageSchema = z.object({
   variables: z.record(z.string()).optional(),
 });
 
+const PgeAgentConfigSchema = z.object({
+  agent: z.string(),
+  operation: z.string().optional(),
+  mcp_profile: z.string().optional(),
+  allowed_tools: z.array(z.string()).optional(),
+  inputs: z.array(z.string()).optional(),
+});
+
 const PgeStageSchema = z.object({
   name: z.string(),
-  description: z.string().optional(),
+  task: z.string().optional(),
   type: z.literal("pge"),
   mcp_profile: z.string().optional(),
-  generator: z.object({
-    agent: z.string(),
-    operation: z.string().optional(),
-    mcp_profile: z.string().optional(),
-    allowed_tools: z.array(z.string()).optional(),
-  }),
-  evaluator: z.object({
-    agent: z.string(),
-    operation: z.string().optional(),
-    mcp_profile: z.string().optional(),
-    allowed_tools: z.array(z.string()).optional(),
-  }),
+  plan: z.string().optional(),
+  inputs: z.array(z.string()).optional(),
+  planner: PgeAgentConfigSchema,
+  generator: PgeAgentConfigSchema,
+  evaluator: PgeAgentConfigSchema,
   contract: z.object({
     deliverable: z.string(),
-    criteria: z.array(ContractCriterionSchema).min(1),
-    max_iterations: z.number().int().min(1).max(10),
     template: z.string().optional(),
+    guidance: z.string().optional(),
+    max_iterations: z.number().int().min(1).max(10),
   }),
   on_fail: z.enum(["stop", "human_gate", "skip"]).optional(),
   variables: z.record(z.string()).optional(),
@@ -54,7 +50,7 @@ const PgeStageSchema = z.object({
 
 const HumanGateStageSchema = z.object({
   name: z.string(),
-  description: z.string().optional(),
+  task: z.string().optional(),
   type: z.literal("human_gate"),
   mcp_profile: z.string().optional(),
   artifacts: z.array(z.string()).optional(),

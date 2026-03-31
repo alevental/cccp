@@ -1,76 +1,25 @@
 import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { openDatabase, type CccpDatabase, type DiscoveredRun, type StateEvent } from "./db.js";
+import { openDatabase, type RunFilter } from "./db.js";
+import type {
+  PipelineState,
+  StageState,
+  StageStatus,
+  PgeStep,
+  GateInfo,
+  ResumePoint,
+  DiscoveredRun,
+} from "./types.js";
 
-// Re-export types from db.ts that callers reference
-export type { DiscoveredRun, StateEvent } from "./db.js";
-
-// ---------------------------------------------------------------------------
-// State types
-// ---------------------------------------------------------------------------
-
-export type StageStatus =
-  | "pending"
-  | "in_progress"
-  | "passed"
-  | "failed"
-  | "skipped"
-  | "error";
-
-export type PgeStep =
-  | "contract_written"
-  | "generator_dispatched"
-  | "evaluator_dispatched"
-  | "routed";
-
-export interface StageState {
-  name: string;
-  type: string;
-  status: StageStatus;
-  /** Current PGE iteration (1-based). Only for type: pge. */
-  iteration?: number;
-  /** Last completed PGE sub-step within the current iteration. */
-  pgeStep?: PgeStep;
-  /** Paths to artifacts produced by this stage. */
-  artifacts?: Record<string, string>;
-  /** Duration in ms (set on completion). */
-  durationMs?: number;
-  /** Error message if status is error/failed. */
-  error?: string;
-}
-
-export interface GateInfo {
-  stageName: string;
-  status: "pending" | "approved" | "rejected";
-  prompt?: string;
-  feedback?: string;
-  respondedAt?: string;
-}
-
-export interface PipelineState {
-  /** Unique run ID. */
-  runId: string;
-  /** Pipeline name. */
-  pipeline: string;
-  /** Project name. */
-  project: string;
-  /** Pipeline YAML file path. */
-  pipelineFile: string;
-  /** ISO timestamp when the run started. */
-  startedAt: string;
-  /** ISO timestamp when the run completed (set on finish). */
-  completedAt?: string;
-  /** Overall status. */
-  status: "running" | "passed" | "failed" | "error" | "interrupted";
-  /** Per-stage state, keyed by stage name. */
-  stages: Record<string, StageState>;
-  /** Stage execution order (preserves YAML order). */
-  stageOrder: string[];
-  /** Active gate info, if any. */
-  gate?: GateInfo;
-  /** Project root directory. Used to locate the database. */
-  projectDir?: string;
-}
+export type {
+  PipelineState,
+  StageState,
+  StageStatus,
+  PgeStep,
+  GateInfo,
+  ResumePoint,
+  DiscoveredRun,
+} from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Legacy state file path (kept for .stream.jsonl and artifact directory)
@@ -110,6 +59,7 @@ export function createState(
   project: string,
   pipelineFile: string,
   stages: Array<{ name: string; type: string }>,
+  artifactDir: string,
   projectDir?: string,
 ): PipelineState {
   const stageMap: Record<string, StageState> = {};
@@ -133,17 +83,18 @@ export function createState(
     status: "running",
     stages: stageMap,
     stageOrder: order,
+    artifactDir,
     projectDir,
   };
 }
 
 /**
- * Load pipeline state. Queries the SQLite database by artifactDir.
+ * Load pipeline state by run ID. Queries the SQLite database.
  * When `reloadFromDisk` is true, re-reads the DB file first — needed when
  * another process (e.g., MCP server) may have written to it.
  */
 export async function loadState(
-  artifactDir: string,
+  runId: string,
   projectDir?: string,
   reloadFromDisk?: boolean,
 ): Promise<PipelineState | null> {
@@ -151,31 +102,34 @@ export async function loadState(
     const dir = projectDir ?? resolveProjectDir();
     const db = await openDatabase(dir);
     if (reloadFromDisk) db.reload();
-    return db.getRunByArtifactDir(artifactDir);
-  } catch {
+    return db.getRun(runId);
+  } catch (err) {
+    // Log database errors but don't crash — callers handle null gracefully.
+    if (err instanceof Error) {
+      console.error(`[cccp] loadState error: ${err.message}`);
+    }
     return null;
   }
 }
 
 /**
- * Save pipeline state to the SQLite database.
- * Also appends an event to the audit log and flushes to disk.
+ * Save pipeline state to the SQLite database and flush to disk.
+ * The artifact directory is extracted from `state.artifactDir`.
  */
 export async function saveState(
-  artifactDir: string,
   state: PipelineState,
 ): Promise<void> {
   const dir = resolveProjectDir(state);
   const db = await openDatabase(dir);
-  db.upsertRun(state, artifactDir);
+  db.upsertRun(state, state.artifactDir);
   db.flush();
 }
 
 /**
  * Save state and record an event in the audit log.
+ * The artifact directory is extracted from `state.artifactDir`.
  */
 export async function saveStateWithEvent(
-  artifactDir: string,
   state: PipelineState,
   eventType: string,
   stageName?: string,
@@ -183,7 +137,7 @@ export async function saveStateWithEvent(
 ): Promise<void> {
   const dir = resolveProjectDir(state);
   const db = await openDatabase(dir);
-  db.upsertRun(state, artifactDir);
+  db.upsertRun(state, state.artifactDir);
   db.appendEvent(state.runId, eventType, stageName, eventData);
   db.flush();
 }
@@ -240,17 +194,6 @@ export function finishPipeline(
 // Resume logic
 // ---------------------------------------------------------------------------
 
-export interface ResumePoint {
-  /** Index into stageOrder to resume from. */
-  stageIndex: number;
-  /** Stage name to resume from. */
-  stageName: string;
-  /** For PGE stages: which iteration to resume at. */
-  resumeIteration?: number;
-  /** For PGE stages: which sub-step to resume at within the iteration. */
-  resumeStep?: PgeStep;
-}
-
 /**
  * Determine where to resume a pipeline from its saved state.
  * Returns null if the pipeline is already complete or has no resumable point.
@@ -287,16 +230,22 @@ export function findResumePoint(state: PipelineState): ResumePoint | null {
 // ---------------------------------------------------------------------------
 
 /**
- * Discover all pipeline runs from the SQLite database.
- * Returns both active and completed runs, sorted running-first.
+ * Discover pipeline runs from the SQLite database.
+ * Optionally filter by project, pipeline, status, or artifact directory.
+ * Returns matching runs sorted running-first, then by start time descending.
  */
 export async function discoverRuns(
   projectDir: string,
+  filter?: RunFilter,
 ): Promise<DiscoveredRun[]> {
   try {
     const db = await openDatabase(projectDir);
-    return db.listRuns();
-  } catch {
+    return db.findRuns(filter);
+  } catch (err) {
+    // Log database errors but don't crash — callers handle empty list gracefully.
+    if (err instanceof Error) {
+      console.error(`[cccp] discoverRuns error: ${err.message}`);
+    }
     return [];
   }
 }

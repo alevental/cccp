@@ -3,14 +3,10 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
-import { openDatabase } from "./db.js";
-import {
-  loadState,
-  saveState,
-  discoverRuns,
-  type PipelineState,
-  type DiscoveredRun,
-} from "./state.js";
+import { openDatabase } from "../db.js";
+import { GateNotifier } from "./gate-notifier.js";
+import { loadState, saveState, discoverRuns } from "../state.js";
+import type { PipelineState, DiscoveredRun } from "../types.js";
 
 // ---------------------------------------------------------------------------
 // Run resolution
@@ -211,7 +207,7 @@ export async function startMcpServer(): Promise<void> {
       state.gate.status = approved ? "approved" : "rejected";
       state.gate.feedback = feedback;
       state.gate.respondedAt = new Date().toISOString();
-      await saveState(artifactDir, state);
+      await saveState(state);
 
       const action = approved ? "approved" : "rejected";
       return textResult(
@@ -256,8 +252,8 @@ export async function startMcpServer(): Promise<void> {
           const recent = allLines.slice(-lines);
           logContent = `Log: ${logFiles[0]} (${allLines.length} total lines)\n\n${recent.join("\n")}`;
         }
-      } catch {
-        logContent = "Could not read log files.";
+      } catch (err) {
+        logContent = `Could not read log files: ${err instanceof Error ? err.message : String(err)}`;
       }
 
       return textResult(logContent);
@@ -318,16 +314,16 @@ export async function startMcpServer(): Promise<void> {
         try {
           const content = await readFile(resolve(artifactDir, read), "utf-8");
           return textResult(content);
-        } catch {
-          return textResult(`Artifact "${read}" not found.`);
+        } catch (err) {
+          return textResult(`Artifact "${read}" not found: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
 
       try {
         const content = await readFile(match.path, "utf-8");
         return textResult(`${match.key} (${match.stage}):\n\n${content}`);
-      } catch {
-        return textResult(`Could not read artifact at ${match.path}`);
+      } catch (err) {
+        return textResult(`Could not read artifact at ${match.path}: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
   );
@@ -335,4 +331,11 @@ export async function startMcpServer(): Promise<void> {
   // --- Start server ---
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  // --- Start gate notifier ---
+  const notifier = new GateNotifier({
+    server,
+    projectDir: process.cwd(),
+  });
+  notifier.start();
 }

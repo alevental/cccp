@@ -1,19 +1,21 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { render, Box, Text } from "ink";
+import { render, Box, Text, useStdout } from "ink";
 import { resolve } from "node:path";
 import { loadState } from "../state.js";
-import { openDatabase, type StateEvent } from "../db.js";
+import { openDatabase } from "../db.js";
 import { activityBus } from "../activity-bus.js";
-import { StreamTailer } from "../stream-tail.js";
-import type { PipelineState } from "../state.js";
-import type { AgentActivity } from "../stream.js";
-import { Header, StageList, AgentActivityPanel, EventLog } from "./components.js";
+import { StreamTailer } from "../stream/stream-tail.js";
+import type { PipelineState, StateEvent } from "../types.js";
+import type { AgentActivity } from "../stream/stream.js";
+import { Header, StageList, AgentActivityPanel } from "./components.js";
+import { DetailLog } from "./detail-log.js";
 
 // ---------------------------------------------------------------------------
 // Dashboard app component
 // ---------------------------------------------------------------------------
 
 interface DashboardProps {
+  runId: string;
   artifactDir: string;
   projectDir: string;
   initialState: PipelineState;
@@ -21,7 +23,8 @@ interface DashboardProps {
   onComplete?: () => void;
 }
 
-function Dashboard({ artifactDir, projectDir, initialState, useEventBus, onComplete }: DashboardProps) {
+function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, onComplete }: DashboardProps) {
+  const { stdout } = useStdout();
   const [state, setState] = useState<PipelineState>(initialState);
   const [activity, setActivity] = useState<AgentActivity | null>(null);
   const [events, setEvents] = useState<StateEvent[]>([]);
@@ -79,7 +82,7 @@ function Dashboard({ artifactDir, projectDir, initialState, useEventBus, onCompl
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const updated = await loadState(artifactDir, projectDir);
+        const updated = await loadState(runId, projectDir);
         if (!updated) return;
 
         if (
@@ -103,7 +106,7 @@ function Dashboard({ artifactDir, projectDir, initialState, useEventBus, onCompl
         const newEvents = db.getEvents(updated.runId, lastEventId.current);
         if (newEvents.length > 0) {
           lastEventId.current = newEvents[newEvents.length - 1].id;
-          setEvents((prev) => [...prev, ...newEvents].slice(-50));
+          setEvents((prev) => [...prev, ...newEvents].slice(-200));
         }
       } catch {
         // Ignore — DB may be mid-write.
@@ -111,7 +114,7 @@ function Dashboard({ artifactDir, projectDir, initialState, useEventBus, onCompl
     }, 300);
 
     return () => clearInterval(interval);
-  }, [artifactDir, projectDir, onComplete]);
+  }, [runId, projectDir, onComplete]);
 
   // Tick elapsed timer.
   useEffect(() => {
@@ -126,8 +129,10 @@ function Dashboard({ artifactDir, projectDir, initialState, useEventBus, onCompl
     state.status === "failed" ||
     state.status === "error";
 
+  const terminalRows = stdout.rows ?? 24;
+
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" height={terminalRows} overflow="hidden">
       {/* Header */}
       <Header
         pipelineName={state.pipeline}
@@ -135,8 +140,9 @@ function Dashboard({ artifactDir, projectDir, initialState, useEventBus, onCompl
         elapsed={elapsed}
       />
 
-      {/* Split pane: Stages (left) | Activity (right) */}
-      <Box marginTop={1} flexDirection="row">
+      {/* Split pane: Stages (left) | Activity (right)
+         Fixed height prevents Ink re-render corruption when content changes. */}
+      <Box marginTop={1} flexDirection="row" height={Math.max(state.stageOrder.length + 3, 8)} overflow="hidden">
         <StageList state={state} />
         {!isComplete ? (
           <AgentActivityPanel activity={activity} />
@@ -158,7 +164,7 @@ function Dashboard({ artifactDir, projectDir, initialState, useEventBus, onCompl
       </Box>
 
       {/* Event log (bottom) */}
-      <EventLog events={events} />
+      <DetailLog events={events} chromeHeight={Math.max(state.stageOrder.length + 3, 8) + 3} />
     </Box>
   );
 }
@@ -168,14 +174,15 @@ function Dashboard({ artifactDir, projectDir, initialState, useEventBus, onCompl
 // ---------------------------------------------------------------------------
 
 export async function launchDashboard(
-  artifactDir: string,
+  runId: string,
   projectDir: string,
   initialState: PipelineState,
 ): Promise<void> {
   return new Promise<void>((resolve) => {
     const { unmount, waitUntilExit } = render(
       <Dashboard
-        artifactDir={artifactDir}
+        runId={runId}
+        artifactDir={initialState.artifactDir}
         projectDir={projectDir}
         initialState={initialState}
         onComplete={() => {
@@ -185,7 +192,7 @@ export async function launchDashboard(
       />,
     );
 
-    waitUntilExit().then(resolve);
+    waitUntilExit().then(() => resolve());
   });
 }
 
@@ -198,13 +205,14 @@ export interface InlineDashboardHandle {
 }
 
 export function startDashboard(
-  artifactDir: string,
+  runId: string,
   projectDir: string,
   initialState: PipelineState,
 ): InlineDashboardHandle {
   const { unmount } = render(
     <Dashboard
-      artifactDir={artifactDir}
+      runId={runId}
+      artifactDir={initialState.artifactDir}
       projectDir={projectDir}
       initialState={initialState}
       useEventBus={true}

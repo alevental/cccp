@@ -1,25 +1,25 @@
 name: pge-example
 description: >
   Example pipeline demonstrating a Plan-Generate-Evaluate cycle.
-  The generator writes a technical document, the evaluator grades it
-  against the contract criteria, and the runner retries on FAIL.
+  A planner writes the task plan, the evaluator writes a contract,
+  the generator produces a deliverable, and the evaluator grades it.
+  The generator/evaluator loop retries on FAIL.
 
 stages:
   - name: technical-doc
     type: pge
-    description: "Write a technical design document for the project's authentication system."
+    task: "Write a technical design document for the project's authentication system."
+    planner:
+      agent: agents/planner.md
     generator:
       agent: agents/writer.md
     evaluator:
       agent: agents/reviewer.md
     contract:
       deliverable: "{artifact_dir}/auth-design.md"
-      criteria:
-        - name: threat-model
-          description: "Document includes a threat model section covering at least 3 attack vectors."
-        - name: sequence-diagrams
-          description: "Login and token refresh flows are described with step-by-step sequences."
-        - name: api-contract
-          description: "All auth endpoints are listed with request/response schemas."
+      guidance: |
+        Document must include a threat model covering at least 3 attack vectors,
+        login and token refresh flows with step-by-step sequences,
+        and all auth endpoints with request/response schemas.
       max_iterations: 3
     on_fail: stop

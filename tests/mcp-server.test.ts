@@ -1,17 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
 import { closeDatabase } from "../src/db.js";
 import {
   createState,
   saveState,
   discoverRuns,
 } from "../src/state.js";
-
-function tmpProjectDir() {
-  return join(tmpdir(), `cccp-test-${randomUUID()}`);
-}
+import { tmpProjectDir } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
 // discoverRuns (SQLite backed)
@@ -23,8 +17,8 @@ describe("discoverRuns", () => {
 
     const state = createState("planning", "my-app", "planning.yaml", [
       { name: "s1", type: "agent" },
-    ], projectDir);
-    await saveState("/artifacts/planning", state);
+    ], "/artifacts/planning", projectDir);
+    await saveState(state);
 
     const runs = await discoverRuns(projectDir);
     expect(runs).toHaveLength(1);
@@ -40,13 +34,13 @@ describe("discoverRuns", () => {
 
     const state1 = createState("discovery", "app-a", "d.yaml", [
       { name: "research", type: "agent" },
-    ], projectDir);
-    await saveState("/artifacts/discovery", state1);
+    ], "/artifacts/discovery", projectDir);
+    await saveState(state1);
 
     const state2 = createState("planning", "app-b", "p.yaml", [
       { name: "design", type: "pge" },
-    ], projectDir);
-    await saveState("/artifacts/planning", state2);
+    ], "/artifacts/planning", projectDir);
+    await saveState(state2);
 
     const runs = await discoverRuns(projectDir);
     expect(runs).toHaveLength(2);
@@ -69,16 +63,16 @@ describe("discoverRuns", () => {
 
     const completed = createState("old", "p", "o.yaml", [
       { name: "s1", type: "agent" },
-    ], projectDir);
+    ], "/artifacts/old", projectDir);
     completed.status = "passed";
     completed.startedAt = "2026-03-01T00:00:00.000Z";
-    await saveState("/artifacts/old", completed);
+    await saveState(completed);
 
     const active = createState("active", "p", "a.yaml", [
       { name: "s1", type: "agent" },
-    ], projectDir);
+    ], "/artifacts/active", projectDir);
     active.startedAt = "2026-03-26T00:00:00.000Z";
-    await saveState("/artifacts/active", active);
+    await saveState(active);
 
     const runs = await discoverRuns(projectDir);
     expect(runs).toHaveLength(2);

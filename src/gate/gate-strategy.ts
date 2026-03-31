@@ -1,4 +1,4 @@
-import type { GateInfo } from "../state.js";
+import type { GateInfo } from "../types.js";
 
 // ---------------------------------------------------------------------------
 // Gate response

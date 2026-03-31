@@ -1,13 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { readFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
-import { StreamParser, type StreamEvent, type AgentActivity } from "../src/stream.js";
-
-function tmpPath() {
-  return join(tmpdir(), `cccp-test-${randomUUID()}`);
-}
+import { StreamParser, type StreamEvent, type AgentActivity } from "../src/stream/stream.js";
+import { tmpPath } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
 // StreamParser — legacy flat format (backward compat)
