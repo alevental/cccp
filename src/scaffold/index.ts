@@ -3,8 +3,7 @@ import { writeFile, mkdir, readdir, readFile, access } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import {
   cccpYaml,
-  examplePipeline,
-  // Core agents (used by example.yaml)
+  // Agents used by scaffoldExamples
   researcherAgent,
   writerAgent,
   reviewerAgent,
@@ -161,26 +160,14 @@ async function ensureMcpServer(dir: string): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 /**
- * Scaffold a minimal CCCP project: cccp.yaml, one example pipeline,
- * and the core agents it references.
+ * Scaffold a CCCP project: cccp.yaml, skills, and MCP server registration.
+ * Agents and pipelines are scaffolded separately via `cccp examples`.
  */
 export async function scaffoldProject(dir: string): Promise<void> {
-  const pipelinesDir = resolve(dir, "pipelines");
-  const agentsDir = resolve(dir, ".claude", "agents");
-  const architectDir = resolve(agentsDir, "architect");
+  await mkdir(dir, { recursive: true });
 
-  await mkdir(pipelinesDir, { recursive: true });
-  await mkdir(architectDir, { recursive: true });
-
-  // Config & pipeline
+  // Config
   await writeFile(resolve(dir, "cccp.yaml"), cccpYaml, "utf-8");
-  await writeFile(resolve(pipelinesDir, "example.yaml"), examplePipeline, "utf-8");
-
-  // Core agents referenced by example.yaml
-  await writeFile(resolve(agentsDir, "researcher.md"), researcherAgent, "utf-8");
-  await writeFile(resolve(agentsDir, "writer.md"), writerAgent, "utf-8");
-  await writeFile(resolve(agentsDir, "reviewer.md"), reviewerAgent, "utf-8");
-  await writeFile(resolve(architectDir, "agent.md"), architectBase, "utf-8");
 
   // Skills
   const skillCount = await scaffoldSkills(dir);
@@ -190,20 +177,14 @@ export async function scaffoldProject(dir: string): Promise<void> {
 
   console.log(`Scaffolded CCCP project in ${dir}:\n`);
   console.log(`  cccp.yaml                               — project configuration`);
-  console.log(`  pipelines/example.yaml                   — example pipeline\n`);
-  console.log(`  .claude/agents/researcher.md             — research agent`);
-  console.log(`  .claude/agents/writer.md                 — document writer`);
-  console.log(`  .claude/agents/reviewer.md               — contract & evaluation agent`);
-  console.log(`  .claude/agents/architect/agent.md         — system architect\n`);
   if (skillCount > 0) {
     console.log(`  .claude/skills/cccp-run/SKILL.md         — /cccp-run skill`);
-    console.log(`  .claude/skills/cccp-pipeline/SKILL.md    — /cccp-pipeline skill\n`);
+    console.log(`  .claude/skills/cccp-pipeline/SKILL.md    — /cccp-pipeline skill`);
   }
   if (mcpUpdated) {
-    console.log(`  .mcp.json                                — MCP server (cccp) registered\n`);
+    console.log(`  .mcp.json                                — MCP server (cccp) registered`);
   }
-  console.log(`Run with: npx @alevental/cccp run -f pipelines/example.yaml -p my-project --dry-run`);
-  console.log(`\nFor all agents and example pipelines: npx @alevental/cccp examples`);
+  console.log(`\nFor agents and example pipelines: npx @alevental/cccp examples`);
 }
 
 // ---------------------------------------------------------------------------
