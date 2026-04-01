@@ -1,9 +1,0 @@
-name: single-agent-test
-description: Minimal pipeline with one agent stage — for testing CCCP core loop.
-
-stages:
-  - name: hello-world
-    type: agent
-    task: "Write a short summary of the project to the output file."
-    agent: agents/summarizer.md
-    output: "{artifact_dir}/summary.md"
