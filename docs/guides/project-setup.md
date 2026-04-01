@@ -10,35 +10,49 @@ This guide walks through setting up CCCP in a new or existing project, from scaf
 
 - Node.js 18+
 - Claude Code CLI (`claude`) installed and authenticated
-- CCCP installed (`npm install` in the CCCP repo, or as a dependency)
+- CCCP: `npm install @alevental/cccp` or use `npx @alevental/cccp`
 
 ## Step 1: Scaffold with `cccp init`
 
 Run from your project root:
 
 ```bash
-cccp init
+npx @alevental/cccp init
 ```
 
-This creates:
+This creates a minimal scaffold:
 
 ```
 your-project/
-  cccp.yaml                  -- project configuration
+  cccp.yaml                          -- project configuration
   pipelines/
-    example.yaml             -- example 3-stage pipeline (agent + pge + gate)
-  agents/
-    researcher.md            -- research agent
-    planner.md               -- planner agent (PGE planning)
-    writer.md                -- writer/generator agent
-    reviewer.md              -- evaluator agent (contract writing + evaluation)
+    example.yaml                     -- example 3-stage pipeline (agent + pge + gate)
+  .claude/agents/
+    researcher.md                    -- research agent
+    writer.md                        -- writer/generator agent
+    reviewer.md                      -- evaluator agent
+    architect/
+      agent.md                       -- base architect identity
+  .claude/skills/
+    research.md                      -- research skill
+    evaluate.md                      -- evaluation skill
 ```
 
 Alternatively, scaffold into a specific directory:
 
 ```bash
-cccp init -d ~/projects/my-project
+npx @alevental/cccp init -d ~/projects/my-project
 ```
+
+## Step 1b: Get All Agents and Pipelines (Optional)
+
+To scaffold the full set of template agents and example pipelines:
+
+```bash
+npx @alevental/cccp examples
+```
+
+This generates 44 agent files (18 identities) and 11 example pipelines covering engineering, product, marketing, growth, strategy, design, customer success, and operations. Use `--agents-only` or `--pipelines-only` to scaffold selectively. Files that already exist are skipped.
 
 ## Step 2: Configure `cccp.yaml`
 
@@ -121,7 +135,7 @@ To interact with running pipelines from Claude Code (approve gates, check status
   "mcpServers": {
     "cccp": {
       "command": "npx",
-      "args": ["tsx", "/path/to/cccp/src/cli.ts", "mcp-server"]
+      "args": ["@alevental/cccp", "mcp-server"]
     }
   }
 }
@@ -157,8 +171,8 @@ You are a research agent for the {project_name} project.
 agents/
   architect/
     agent.md                 # Base identity and capabilities
-    plan-authoring.md        # Specialization for planning
-    code-review.md           # Specialization for code review
+    design.md                # Specialization for technical design
+    task-planning.md         # Specialization for implementation task breakdown
 ```
 
 See [Agent Authoring](agent-authoring.md) for the full guide.
@@ -187,7 +201,8 @@ stages:
     inputs:
       - "{artifact_dir}/research.md"
     planner:
-      agent: planner
+      agent: architect
+      operation: task-planning
     generator:
       agent: writer
     evaluator:
@@ -212,7 +227,7 @@ See [Pipeline Authoring](pipeline-authoring.md) for the full format reference.
 Verify your pipeline resolves correctly without executing any agents:
 
 ```bash
-cccp run -f pipelines/build-docs.yaml -p my-project --dry-run
+npx @alevental/cccp run -f pipelines/build-docs.yaml -p my-project --dry-run
 ```
 
 This shows:
@@ -227,13 +242,13 @@ Fix any agent resolution or variable errors before running live.
 
 ```bash
 # Interactive mode (TUI dashboard, manual gate approval)
-cccp run -f pipelines/build-docs.yaml -p my-project
+npx @alevental/cccp run -f pipelines/build-docs.yaml -p my-project
 
 # Headless mode (auto-approve gates, no TUI)
-cccp run -f pipelines/build-docs.yaml -p my-project --headless
+npx @alevental/cccp run -f pipelines/build-docs.yaml -p my-project --headless
 
 # With variable overrides
-cccp run -f pipelines/build-docs.yaml -p my-project -v feature=payments
+npx @alevental/cccp run -f pipelines/build-docs.yaml -p my-project -v feature=payments
 ```
 
 ### What happens
@@ -278,7 +293,7 @@ The TUI dashboard runs automatically with `cccp run`. It shows stage progress, l
 Monitor from a separate terminal:
 
 ```bash
-cccp dashboard -a docs/projects/my-project/build-docs
+npx @alevental/cccp dashboard -a docs/projects/my-project/build-docs
 ```
 
 ### MCP tools
@@ -290,7 +305,7 @@ When the CCCP MCP server is registered, pending gates are automatically detected
 If a pipeline is interrupted (crash, Ctrl-C, network error), resume from the last checkpoint:
 
 ```bash
-cccp resume -p my-project -a docs/projects/my-project/build-docs
+npx @alevental/cccp resume -p my-project -a docs/projects/my-project/build-docs
 ```
 
 The runner skips completed stages and resumes from the first incomplete stage. For PGE stages, it resumes at the iteration and sub-step level.
@@ -305,12 +320,12 @@ your-project/
     cccp.db                      # SQLite database (created at runtime)
   agents/
     researcher.md                # Agent definitions
-    planner.md                   # Planner agent (PGE planning)
     writer.md
     reviewer.md                  # Evaluator (contract writing + evaluation)
     architect/                   # Directory-style agent
       agent.md
-      plan-authoring.md
+      design.md
+      task-planning.md
   pipelines/
     build-docs.yaml              # Pipeline definitions
     deploy.yaml

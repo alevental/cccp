@@ -44,6 +44,20 @@ describe("createState", () => {
 
     expect(state.projectDir).toBe("/my/project");
   });
+
+  it("generates random UUID for runId", () => {
+    const state1 = createState("test", "proj", "t.yaml", [
+      { name: "s1", type: "agent" },
+    ], "/tmp/test-artifacts");
+
+    const state2 = createState("test", "proj", "t.yaml", [
+      { name: "s1", type: "agent" },
+    ], "/tmp/test-artifacts");
+
+    expect(state1.runId).toBeDefined();
+    expect(state2.runId).toBeDefined();
+    expect(state1.runId).not.toBe(state2.runId);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -280,4 +294,5 @@ describe("discoverRuns", () => {
     expect(runs).toHaveLength(0);
     closeDatabase(projectDir);
   });
+
 });

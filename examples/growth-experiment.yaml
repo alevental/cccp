@@ -1,0 +1,49 @@
+name: growth-experiment
+description: Design and document a growth experiment.
+
+stages:
+  - name: funnel-analysis
+    type: agent
+    task: "Analyze the current conversion funnel and identify drop-off points."
+    agent: analyst
+    output: "{artifact_dir}/funnel-analysis.md"
+
+  - name: experiment-design
+    type: pge
+    task: "Design a growth experiment to improve the weakest funnel stage."
+    inputs:
+      - "{artifact_dir}/funnel-analysis.md"
+    planner:
+      agent: growth-strategist
+    generator:
+      agent: growth-strategist
+    evaluator:
+      agent: analyst
+    contract:
+      deliverable: "{artifact_dir}/experiment-design.md"
+      guidance: "Must include hypothesis, test/control design, sample size considerations, success metrics, and duration."
+      max_iterations: 3
+
+  - name: campaign-copy
+    type: pge
+    task: "Write the copy for the experiment's test variant."
+    inputs:
+      - "{artifact_dir}/experiment-design.md"
+    planner:
+      agent: marketer
+      operation: content
+    generator:
+      agent: copywriter
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/campaign-copy.md"
+      guidance: "Must include all ad copy variants, landing page copy, and email sequences as specified in experiment design."
+      max_iterations: 3
+
+  - name: experiment-approval
+    type: human_gate
+    prompt: "Review experiment design and campaign copy. Approve to launch."
+    artifacts:
+      - "{artifact_dir}/experiment-design.md"
+      - "{artifact_dir}/campaign-copy.md"

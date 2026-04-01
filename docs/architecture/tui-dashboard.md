@@ -208,8 +208,9 @@ All cmux commands are no-ops when not in a cmux workspace.
 | `setProgress(fraction)` | `cmux set-progress <0.0-1.0>` | Progress bar |
 | `log(message, level)` | `cmux log --level <level> <msg>` | Structured log entry |
 | `notify(title, body?)` | `cmux notify --title <t> [--body <b>]` | Desktop notification |
-| `newSplit(direction)` | `cmux new-split <right\|below>` | Open a split pane |
-| `sendToSurface(id, cmd)` | `cmux send-surface --surface <id> <cmd>` | Send to split pane |
+| `newSplit(direction)` | `cmux new-split <right\|below>` | Open a split pane (parses `OK surface:N workspace:M` → returns `surface:N`) |
+| `sendText(surfaceId, text)` | `cmux send --surface <id> <text>` | Send text to a split pane |
+| `sendKey(surfaceId, key)` | `cmux send-key --surface <id> <key>` | Send a keystroke to a split pane |
 
 ### Pipeline-level helpers
 

@@ -92,34 +92,42 @@ export class GateNotifier {
     const runShort = run.state.runId.slice(0, 8);
 
     try {
-      const result = await this.opts.server.server.elicitInput({
-        message: [
-          `Pipeline gate requires approval (run ${runShort}).`,
-          "",
-          `Stage: ${gate.stageName}`,
-          gate.prompt ? `\n${gate.prompt}` : "",
-        ]
-          .filter(Boolean)
-          .join("\n"),
-        requestedSchema: {
-          type: "object" as const,
-          properties: {
-            decision: {
-              type: "string" as const,
-              title: "Decision",
-              description: "Approve or reject this gate",
-              enum: ["approve", "reject"],
-              default: "approve",
+      // Elicit approval from the user — this blocks until they respond.
+      let result;
+      try {
+        result = await this.opts.server.server.elicitInput({
+          message: [
+            `Pipeline gate requires approval (run ${runShort}).`,
+            "",
+            `Stage: ${gate.stageName}`,
+            gate.prompt ? `\n${gate.prompt}` : "",
+          ]
+            .filter(Boolean)
+            .join("\n"),
+          requestedSchema: {
+            type: "object" as const,
+            properties: {
+              decision: {
+                type: "string" as const,
+                title: "Decision",
+                description: "Approve or reject this gate",
+                enum: ["approve", "reject"],
+                default: "approve",
+              },
+              feedback: {
+                type: "string" as const,
+                title: "Feedback",
+                description: "Optional feedback (passed to generator on rejection)",
+              },
             },
-            feedback: {
-              type: "string" as const,
-              title: "Feedback",
-              description: "Optional feedback (passed to generator on rejection)",
-            },
+            required: ["decision"],
           },
-          required: ["decision"],
-        },
-      });
+        });
+      } catch {
+        // Elicitation not supported by this client — disable for the session.
+        this.elicitationSupported = false;
+        return;
+      }
 
       // Handle the elicitation result.
       if (result.action === "cancel") {
@@ -140,8 +148,9 @@ export class GateNotifier {
       const approved = decision !== "reject";
       await this.writeGateResponse(run, approved, feedback);
     } catch {
-      // Elicitation not supported or connection lost.
-      this.elicitationSupported = false;
+      // DB write error — transient, don't disable elicitation.
+      // Remove from seen so it can be retried on the next poll cycle.
+      this.seenGates.delete(this.gateKey(run.state.runId, gate.stageName));
     } finally {
       this.pendingElicitation = null;
     }

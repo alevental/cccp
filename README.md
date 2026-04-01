@@ -19,9 +19,13 @@ CCCP moves the state machine into deterministic TypeScript code. It reads YAML p
 ## Install
 
 ```bash
-git clone <repo-url> && cd cccp
-npm install
-npm link  # makes `cccp` available globally
+npm install @alevental/cccp
+```
+
+Or use npx (no install):
+
+```bash
+npx @alevental/cccp <command>
 ```
 
 ## Quick start
@@ -30,27 +34,38 @@ Scaffold a project:
 
 ```bash
 cd my-project
-cccp init
+npx @alevental/cccp init
 ```
 
 This creates:
 
 ```
-cccp.yaml             # project config (agent paths, MCP profiles)
-pipelines/example.yaml # example pipeline
-agents/                # example agent definitions
+cccp.yaml                               — project configuration
+pipelines/example.yaml                   — example pipeline
+.claude/agents/researcher.md             — research agent
+.claude/agents/writer.md                 — document writer
+.claude/agents/reviewer.md               — evaluation agent
+.claude/agents/architect/agent.md        — system architect
+.claude/skills/cccp-run/SKILL.md         — /cccp-run skill
+.claude/skills/cccp-pipeline/SKILL.md    — /cccp-pipeline skill
+```
+
+For all template agents and example pipelines:
+
+```bash
+npx @alevental/cccp examples
 ```
 
 Preview what the pipeline will do:
 
 ```bash
-cccp run -f pipelines/example.yaml -p my-project --dry-run
+npx @alevental/cccp run -f pipelines/example.yaml -p my-project --dry-run
 ```
 
 Run it for real:
 
 ```bash
-cccp run -f pipelines/example.yaml -p my-project
+npx @alevental/cccp run -f pipelines/example.yaml -p my-project
 ```
 
 ## Pipeline YAML
@@ -103,6 +118,7 @@ stages:
 |------|-------------|
 | `agent` | Dispatch one agent, collect output |
 | `pge` | Dispatch planner -> evaluator writes contract -> dispatch generator -> dispatch evaluator -> parse `### Overall: PASS/FAIL` -> retry generator/evaluator on FAIL up to `max_iterations` |
+| `autoresearch` | Iterative artifact optimization — adjust artifact, execute task, evaluate against ground truth, retry on FAIL |
 | `human_gate` | Block until approved via MCP tool call or state file edit |
 
 ### Variables
@@ -119,7 +135,7 @@ Built-in variables available in all string fields:
 
 ## Agents
 
-CCCP ships no agents — you bring your own. Agents are markdown files that become the `--system-prompt-file` for `claude -p`.
+CCCP ships 18 template agents as starting points. Run `npx @alevental/cccp examples` to scaffold all of them into your project. Agents are markdown files that become the `--system-prompt-file` for `claude -p`.
 
 **Flat file agent** (`agents/implementer.md`):
 ```markdown
@@ -204,44 +220,47 @@ CCCP reads only this line. Everything else in the evaluation (criterion tables, 
 ## CLI reference
 
 ```
-cccp run -f <pipeline.yaml> -p <project> [options]
+npx @alevental/cccp run -f <pipeline.yaml> -p <project> [options]
   --dry-run              Show what would execute without running agents
   --headless             Auto-approve all human gates
   -d, --project-dir      Project directory (default: cwd)
   -a, --artifact-dir     Override artifact output directory
   -v, --var key=value    Set pipeline variables (repeatable)
 
-cccp resume -p <project> -r <run-id-prefix> [--headless]
+npx @alevental/cccp resume -p <project> -r <run-id-prefix> [--headless]
   Resume an interrupted pipeline from the last incomplete stage
 
-cccp dashboard -r <run-id-prefix>
+npx @alevental/cccp dashboard -r <run-id-prefix>
   Launch the TUI dashboard to monitor a running pipeline
 
-cccp gate-server
-  Start the MCP server for pipeline gate interaction
+npx @alevental/cccp mcp-server
+  Start the MCP server for pipeline interaction and gate approval
 
-cccp init [--dir <path>]
+npx @alevental/cccp init [--dir <path>]
   Scaffold cccp.yaml, example pipeline, and example agents
+
+npx @alevental/cccp examples [--dir <path>] [--agents-only] [--pipelines-only]
+  Scaffold all template agents and example pipelines
 ```
 
 ## Gate interaction
 
 When a pipeline hits a `human_gate` stage, it writes a pending gate to the SQLite state database (`.cccp/cccp.db`) and waits.
 
-**Option 1: MCP server** — Register the gate server in your project's `.mcp.json`:
+**Option 1: MCP server** — Register the MCP server in your project's `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
-    "cccp-gate": {
+    "cccp": {
       "command": "npx",
-      "args": ["tsx", "/path/to/cccp/src/cli.ts", "gate-server"]
+      "args": ["@alevental/cccp", "mcp-server"]
     }
   }
 }
 ```
 
-Then from Claude Code: call `pipeline_status` to see what's pending, `pipeline_gate_respond` to approve/reject.
+Then from Claude Code: call `cccp_status` to see what's pending, `cccp_gate_respond` to approve/reject.
 
 **Option 2: Headless** — `cccp run --headless` auto-approves all gates.
 
@@ -250,7 +269,7 @@ Then from Claude Code: call `pipeline_status` to see what's pending, `pipeline_g
 Pipeline state is persisted to a SQLite database at `{projectDir}/.cccp/cccp.db` after every transition (stage start, planner dispatch, contract dispatch, generator dispatch, evaluator dispatch, routing decision). If a run is interrupted:
 
 ```bash
-cccp resume -p my-project -r <run-id-prefix>
+npx @alevental/cccp resume -p my-project -r <run-id-prefix>
 ```
 
 Completed stages are skipped. PGE stages resume at the correct iteration and sub-step.
@@ -269,7 +288,7 @@ Without cmux, CCCP falls back to plain terminal output.
 ## Development
 
 ```bash
-npm test           # run all tests (143 tests)
+npm test           # run all tests (181 tests)
 npm run typecheck  # tsc --noEmit
 npm run test:watch # watch mode
 npm run build      # compile TypeScript to dist/

@@ -22,9 +22,10 @@ Each agent runs as a separate `claude --bare -p` subprocess with:
 
 ### Agent resolver (`src/agent-resolver.ts`)
 Resolves agent names to file paths by searching configured directories. Supports:
-- **Flat file agents**: `writer.md`
-- **Directory agents with operations**: `architect/agent.md` + `architect/plan-authoring.md`
+- **Flat file agents**: `researcher.md`, `code-reviewer.md`, `copywriter.md`, etc. (11 template flat agents)
+- **Directory agents with operations**: `architect/agent.md` + `architect/task-planning.md`, `product-manager/agent.md` + `product-manager/spec-writing.md`, etc. (7 template directory agents)
 - Search path priority: pipeline-local → project `.claude/agents/` → project `agents/` → config paths
+- 18 template agents across 8 functional areas: engineering, product, marketing, growth, strategy, design, customer success, operations
 
 ### PGE engine (`src/pge.ts`, `src/evaluator.ts`)
 The Plan-Generate-Evaluate cycle:
@@ -84,7 +85,7 @@ CLI (cli.ts)
 
 ## Key design decisions
 
-- **Project-agnostic**: CCCP ships no agents, no pipelines, no MCP configs. Everything is defined by the consuming project.
+- **Template-driven**: CCCP ships 18 template agents and 10 example pipelines as starting points. Projects customize or replace them via `cccp.yaml` paths.
 - **Fresh context per agent**: Each `claude -p` invocation starts with a clean context window. No context rot.
 - **Regex routing**: The evaluator's `### Overall: PASS/FAIL` line is the only thing the runner reads. No interpretation.
 - **Artifact-driven communication**: Agents read contracts and evaluations from disk. Artifacts are markdown files — the orchestrator only reads the `### Overall: PASS/FAIL` line.

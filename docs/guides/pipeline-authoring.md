@@ -58,7 +58,8 @@ All stages share these base fields:
 |-------|------|----------|-------------|
 | `name` | `string` | Yes | Unique stage identifier |
 | `task` | `string` | No | Task instruction for the agent |
-| `type` | `"agent" \| "pge" \| "human_gate"` | Yes | Stage discriminator |
+| `task_file` | `string` | No | Path to file containing task (mutually exclusive with `task`) |
+| `type` | `"agent" \| "pge" \| "autoresearch" \| "human_gate"` | Yes | Stage discriminator |
 | `mcp_profile` | `string` | No | Named MCP profile from `cccp.yaml` |
 | `variables` | `Record<string, string>` | No | Stage-level variable overrides |
 
@@ -69,15 +70,15 @@ All stages share these base fields:
 Dispatches a single agent to perform a task.
 
 ```yaml
-- name: research
+- name: service-assessment
   type: agent
-  task: "Research the project and write a summary."
-  agent: researcher
-  operation: deep-analysis        # Optional: for directory-style agents
+  task: "Assess the service architecture and identify failure modes."
+  agent: architect
+  operation: health-assessment    # Optional: for directory-style agents
   mcp_profile: base               # Optional: MCP server profile
   inputs:                          # Optional: files the agent should read
     - "{artifact_dir}/context.md"
-  output: "{artifact_dir}/research.md"  # Optional: expected output file
+  output: "{artifact_dir}/service-assessment.md"  # Optional: expected output file
   allowed_tools:                   # Optional: restrict available tools
     - Read
     - Write
@@ -103,40 +104,36 @@ If `output` is specified, the runner verifies the file exists after the agent co
 Runs a planner -> contract -> generate -> evaluate loop with automatic retries on the generator/evaluator cycle.
 
 ```yaml
-- name: implement-auth
+# From feature-development.yaml — implementation stage
+- name: implementation
   type: pge
-  task: "Sprint 1 > Task 3: Implement OAuth module"
-  plan: "{artifact_dir}/master-plan.md"  # Optional: plan document path
+  task: "Implement the feature according to the design."
   inputs:                                # Optional: stage-level inputs shared across all agents
-    - "{artifact_dir}/architecture.md"
+    - "{artifact_dir}/prd.md"
+    - "{artifact_dir}/design.md"
   planner:
     agent: architect
-    operation: task-planning             # Optional
+    operation: task-planning             # Optional: for directory-style agents
     mcp_profile: research-tools          # Optional: overrides stage-level
-    inputs:                              # Optional: planner-specific inputs
-      - "{artifact_dir}/design.md"
   generator:
     agent: implementer
     mcp_profile: writing-tools           # Optional
-    inputs:                              # Optional: generator-specific inputs
-      - "{artifact_dir}/api-spec.md"
     allowed_tools:                       # Optional
       - Read
       - Write
   evaluator:
-    agent: reviewer
-    operation: code-review               # Optional
+    agent: code-reviewer
     mcp_profile: review-tools            # Optional
     allowed_tools:
       - Read
       - Write
   contract:
-    deliverable: "src/auth/oauth.ts"
+    deliverable: "{artifact_dir}/implementation-report.md"
     template: templates/implementation-contract.md  # Optional: structural guide for contract writer
     guidance: |                          # Optional: free-form guidance for planner and contract writer
-      Must handle backward compatibility.
-    max_iterations: 3
-  on_fail: stop                          # Optional: stop | human_gate | skip
+      All PRD acceptance criteria must be met. Tests required for new code paths.
+    max_iterations: 5
+  on_fail: human_gate                    # Optional: stop | human_gate | skip
 ```
 
 #### PGE flow
@@ -216,62 +213,129 @@ Blocks the pipeline until a human approves or rejects.
 
 Gate responses come through the MCP server (`cccp_gate_respond` tool) or direct database update. See [Gate System](../architecture/gate-system.md).
 
-## Complete Example
+## Complete Example: Cross-Functional Pipeline
+
+This example (from `product-launch.yaml`) shows a cross-functional pipeline spanning research, marketing, and content creation:
 
 ```yaml
-name: feature-docs
-description: Generate and review feature documentation.
-
-variables:
-  feature_name: authentication
-  doc_format: markdown
+name: product-launch
+description: Product launch pipeline — positioning, launch plan, content creation.
 
 stages:
-  # Stage 1: Research the codebase
-  - name: research
+  # Stage 1: Research agent (flat file) gathers competitive intelligence
+  - name: competitive-landscape
     type: agent
-    task: "Analyze the {feature_name} feature and document findings."
+    task: "Research the competitive landscape for the product launch."
     agent: researcher
-    output: "{artifact_dir}/research.md"
+    output: "{artifact_dir}/competitive-research.md"
 
-  # Stage 2: Write documentation with quality loop
-  - name: write-docs
+  # Stage 2: Marketer (directory agent) defines positioning via PGE cycle
+  - name: positioning
     type: pge
-    task: "Write comprehensive {feature_name} documentation."
+    task: "Define product positioning and messaging framework."
     inputs:
-      - "{artifact_dir}/research.md"
+      - "{artifact_dir}/competitive-research.md"
     planner:
-      agent: architect
-      operation: doc-planning
+      agent: marketer
+      operation: positioning
     generator:
-      agent: writer
-      operation: feature-docs
+      agent: marketer
+      operation: positioning
+    evaluator:
+      agent: exec-reviewer
+    contract:
+      deliverable: "{artifact_dir}/positioning.md"
+      guidance: "Must include target audience, value propositions, competitive differentiators, and messaging pillars."
+      max_iterations: 3
+
+  # Stage 3: Human gate before committing to launch plan
+  - name: positioning-approval
+    type: human_gate
+    prompt: "Review positioning and messaging. Approve to proceed with launch planning."
+    artifacts:
+      - "{artifact_dir}/positioning.md"
+
+  # Stage 4: Content creation with copywriter and general reviewer
+  - name: blog-post
+    type: pge
+    task: "Write the launch blog post."
+    inputs:
+      - "{artifact_dir}/positioning.md"
+    planner:
+      agent: marketer
+      operation: content
+    generator:
+      agent: copywriter
     evaluator:
       agent: reviewer
     contract:
-      deliverable: "{artifact_dir}/{feature_name}-docs.md"
-      guidance: |
-        Focus on public APIs, configuration options, and error handling.
-        Include working code examples for every major use case.
+      deliverable: "{artifact_dir}/blog-post.md"
+      guidance: "Must align with positioning. Engaging, clear, technically accurate."
       max_iterations: 3
-    on_fail: human_gate
 
-  # Stage 3: Human review before publishing
-  - name: final-review
-    type: human_gate
-    prompt: "Review the {feature_name} documentation. Check for accuracy and completeness."
-    artifacts:
-      - "{artifact_dir}/{feature_name}-docs.md"
-      - "{artifact_dir}/research.md"
-
-  # Stage 4: Publish (post-approval)
-  - name: publish
+  # Stage 5: Simple agent dispatch for release notes
+  - name: release-notes
     type: agent
-    task: "Move approved docs to the docs/ directory and update the index."
-    agent: publisher
+    task: "Write release notes based on the positioning and launch plan."
+    agent: copywriter
     inputs:
-      - "{artifact_dir}/{feature_name}-docs.md"
+      - "{artifact_dir}/positioning.md"
+    output: "{artifact_dir}/release-notes.md"
 ```
+
+## Complete Example: Variable Usage
+
+This example (from `sprint-cycle.yaml`) shows how variables parameterize a reusable pipeline:
+
+```yaml
+name: sprint-cycle
+description: Single sprint execution — brief, implement, test, review.
+
+variables:
+  sprint: "1"                    # Default sprint number; override with --var sprint=2
+
+stages:
+  - name: sprint-brief
+    type: agent
+    task: "Read the master plan and produce the sprint brief for sprint {sprint}."
+    agent: architect
+    operation: sprint-brief
+    output: "{artifact_dir}/sprint-{sprint}-brief.md"
+
+  - name: implement
+    type: pge
+    task: "Implement all tasks from the sprint brief."
+    plan: "{artifact_dir}/sprint-{sprint}-brief.md"
+    planner:
+      agent: architect
+      operation: task-planning
+    generator:
+      agent: implementer
+    evaluator:
+      agent: code-reviewer
+    contract:
+      deliverable: "{artifact_dir}/sprint-{sprint}-complete.md"
+      guidance: "All sprint brief tasks must be implemented with passing tests."
+      max_iterations: 5
+    on_fail: human_gate
+```
+
+## Example Pipelines
+
+CCCP ships 10 example pipelines in `examples/` covering 8 functional areas:
+
+| Pipeline | Area | Description |
+|----------|------|-------------|
+| `feature-development.yaml` | Engineering | Full feature cycle -- spec, design, implement, test, ship |
+| `sprint-cycle.yaml` | Engineering | Single sprint execution with variable-driven sprint number |
+| `product-launch.yaml` | Product / Marketing | Positioning, launch plan, blog post, release notes |
+| `content-calendar.yaml` | Marketing | Plan and produce a month of content |
+| `growth-experiment.yaml` | Growth | Funnel analysis, experiment design, campaign copy |
+| `quarterly-planning.yaml` | Strategy | Competitive analysis, OKRs, roadmap |
+| `business-case.yaml` | Strategy | Market research, financial analysis, business case |
+| `design-sprint.yaml` | Design | UX research, product requirements, design spec |
+| `customer-feedback-loop.yaml` | Customer Success | Feedback synthesis and backlog prioritization |
+| `incident-runbook.yaml` | Operations | Service assessment, runbook authoring, DevOps review |
 
 ## Validation
 

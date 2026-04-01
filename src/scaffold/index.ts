@@ -1,45 +1,322 @@
-import { resolve } from "node:path";
-import { writeFile, mkdir } from "node:fs/promises";
+import { resolve, dirname } from "node:path";
+import { writeFile, mkdir, readdir, readFile, access } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import {
   cccpYaml,
   examplePipeline,
+  // Core agents (used by example.yaml)
   researcherAgent,
-  plannerAgent,
   writerAgent,
   reviewerAgent,
+  architectBase,
+  // Remaining flat agents
+  implementerAgent,
+  codeReviewerAgent,
+  analystAgent,
+  copywriterAgent,
+  growthStrategistAgent,
+  execReviewerAgent,
+  devopsAgent,
+  opsManagerAgent,
+  // Directory agent: architect (operations)
+  architectDesign,
+  architectPlanAuthoring,
+  architectTaskPlanning,
+  architectHealthAssessment,
+  architectSprintBrief,
+  architectSprintReview,
+  // Directory agent: qa-engineer
+  qaEngineerBase,
+  qaEngineerTestPlanning,
+  qaEngineerTestAuthoring,
+  // Directory agent: product-manager
+  productManagerBase,
+  productManagerSpecWriting,
+  productManagerPrioritization,
+  productManagerUserResearch,
+  // Directory agent: marketer
+  marketerBase,
+  marketerPositioning,
+  marketerLaunchPlan,
+  marketerContent,
+  // Directory agent: strategist
+  strategistBase,
+  strategistCompetitiveAnalysis,
+  strategistBusinessCase,
+  strategistQuarterlyPlanning,
+  // Directory agent: designer
+  designerBase,
+  designerUxResearch,
+  designerDesignSpec,
+  designerDesignReview,
+  // Directory agent: customer-success
+  customerSuccessBase,
+  customerSuccessSupportContent,
+  customerSuccessOnboarding,
+  customerSuccessFeedbackSynthesis,
 } from "./templates.js";
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Write a file only if it doesn't already exist. Returns true if written. */
+async function writeIfMissing(path: string, content: string): Promise<boolean> {
+  if (await fileExists(path)) return false;
+  await writeFile(path, content, "utf-8");
+  return true;
+}
+
+/** Resolve the package root from the compiled module location. */
+function packageRoot(): string {
+  const thisFile = fileURLToPath(import.meta.url);
+  // thisFile = <pkg>/dist/scaffold/index.js → <pkg>/
+  return resolve(dirname(thisFile), "..", "..");
+}
+
+/** Resolve the package's `examples/` directory. */
+function packageExamplesDir(): string {
+  return resolve(packageRoot(), "examples");
+}
+
+/** Resolve the package's `.claude/skills/` directory. */
+function packageSkillsDir(): string {
+  return resolve(packageRoot(), ".claude", "skills");
+}
+
 /**
- * Scaffold a new CCCP project in the given directory.
- *
- * Creates:
- *   cccp.yaml              — project configuration
- *   pipelines/example.yaml — example pipeline
- *   agents/researcher.md   — example research agent
- *   agents/planner.md      — example planner agent
- *   agents/writer.md       — example writer agent
- *   agents/reviewer.md     — example reviewer/evaluator agent
+ * Copy skill directories from the package into the target project.
+ * Each skill is a directory with a SKILL.md file.
+ * Returns the number of skills written.
+ */
+async function scaffoldSkills(targetDir: string): Promise<number> {
+  const srcSkillsDir = packageSkillsDir();
+  const destSkillsDir = resolve(targetDir, ".claude", "skills");
+  let count = 0;
+
+  try {
+    const skillDirs = await readdir(srcSkillsDir);
+    for (const skillName of skillDirs) {
+      if (skillName.startsWith(".")) continue;
+      const srcSkillDir = resolve(srcSkillsDir, skillName);
+      const srcSkillFile = resolve(srcSkillDir, "SKILL.md");
+      if (!(await fileExists(srcSkillFile))) continue;
+
+      const destSkillDir = resolve(destSkillsDir, skillName);
+      await mkdir(destSkillDir, { recursive: true });
+      const content = await readFile(srcSkillFile, "utf-8");
+      if (await writeIfMissing(resolve(destSkillDir, "SKILL.md"), content)) count++;
+    }
+  } catch {
+    // .claude/skills/ may not exist in all installations
+  }
+
+  return count;
+}
+
+// ---------------------------------------------------------------------------
+// cccp init — minimal scaffold
+// ---------------------------------------------------------------------------
+
+/**
+ * Scaffold a minimal CCCP project: cccp.yaml, one example pipeline,
+ * and the core agents it references.
  */
 export async function scaffoldProject(dir: string): Promise<void> {
   const pipelinesDir = resolve(dir, "pipelines");
-  const agentsDir = resolve(dir, "agents");
+  const agentsDir = resolve(dir, ".claude", "agents");
+  const architectDir = resolve(agentsDir, "architect");
 
   await mkdir(pipelinesDir, { recursive: true });
-  await mkdir(agentsDir, { recursive: true });
+  await mkdir(architectDir, { recursive: true });
 
+  // Config & pipeline
   await writeFile(resolve(dir, "cccp.yaml"), cccpYaml, "utf-8");
   await writeFile(resolve(pipelinesDir, "example.yaml"), examplePipeline, "utf-8");
+
+  // Core agents referenced by example.yaml
   await writeFile(resolve(agentsDir, "researcher.md"), researcherAgent, "utf-8");
-  await writeFile(resolve(agentsDir, "planner.md"), plannerAgent, "utf-8");
   await writeFile(resolve(agentsDir, "writer.md"), writerAgent, "utf-8");
   await writeFile(resolve(agentsDir, "reviewer.md"), reviewerAgent, "utf-8");
+  await writeFile(resolve(architectDir, "agent.md"), architectBase, "utf-8");
 
-  console.log(`Scaffolded CCCP project in ${dir}:`);
-  console.log(`  cccp.yaml              — project configuration`);
-  console.log(`  pipelines/example.yaml — example pipeline`);
-  console.log(`  agents/researcher.md   — example research agent`);
-  console.log(`  agents/planner.md      — example planner agent`);
-  console.log(`  agents/writer.md       — example writer agent`);
-  console.log(`  agents/reviewer.md     — example reviewer/evaluator agent`);
-  console.log(`\nRun with: cccp run -f pipelines/example.yaml -p my-project --dry-run`);
+  // Skills
+  const skillCount = await scaffoldSkills(dir);
+
+  console.log(`Scaffolded CCCP project in ${dir}:\n`);
+  console.log(`  cccp.yaml                               — project configuration`);
+  console.log(`  pipelines/example.yaml                   — example pipeline\n`);
+  console.log(`  .claude/agents/researcher.md             — research agent`);
+  console.log(`  .claude/agents/writer.md                 — document writer`);
+  console.log(`  .claude/agents/reviewer.md               — contract & evaluation agent`);
+  console.log(`  .claude/agents/architect/agent.md         — system architect\n`);
+  if (skillCount > 0) {
+    console.log(`  .claude/skills/cccp-run/SKILL.md         — /cccp-run skill`);
+    console.log(`  .claude/skills/cccp-pipeline/SKILL.md    — /cccp-pipeline skill\n`);
+  }
+  console.log(`Run with: npx @alevental/cccp run -f pipelines/example.yaml -p my-project --dry-run`);
+  console.log(`\nFor all agents and example pipelines: npx @alevental/cccp examples`);
+}
+
+// ---------------------------------------------------------------------------
+// cccp examples — full agent + pipeline scaffold
+// ---------------------------------------------------------------------------
+
+export interface ExamplesOptions {
+  agentsOnly?: boolean;
+  pipelinesOnly?: boolean;
+}
+
+/**
+ * Scaffold the full set of template agents and example pipelines.
+ * Skips files that already exist.
+ */
+export async function scaffoldExamples(
+  dir: string,
+  opts: ExamplesOptions = {},
+): Promise<void> {
+  const agentsDir = resolve(dir, ".claude", "agents");
+  const pipelinesDir = resolve(dir, "pipelines");
+
+  let agentCount = 0;
+  let pipelineCount = 0;
+
+  // --- Agents ---
+  if (!opts.pipelinesOnly) {
+    // Directory agent directories
+    const architectDir = resolve(agentsDir, "architect");
+    const qaEngineerDir = resolve(agentsDir, "qa-engineer");
+    const productManagerDir = resolve(agentsDir, "product-manager");
+    const marketerDir = resolve(agentsDir, "marketer");
+    const strategistDir = resolve(agentsDir, "strategist");
+    const designerDir = resolve(agentsDir, "designer");
+    const customerSuccessDir = resolve(agentsDir, "customer-success");
+
+    await mkdir(architectDir, { recursive: true });
+    await mkdir(qaEngineerDir, { recursive: true });
+    await mkdir(productManagerDir, { recursive: true });
+    await mkdir(marketerDir, { recursive: true });
+    await mkdir(strategistDir, { recursive: true });
+    await mkdir(designerDir, { recursive: true });
+    await mkdir(customerSuccessDir, { recursive: true });
+
+    // Flat agents
+    const flatAgents: [string, string][] = [
+      ["researcher.md", researcherAgent],
+      ["implementer.md", implementerAgent],
+      ["code-reviewer.md", codeReviewerAgent],
+      ["writer.md", writerAgent],
+      ["reviewer.md", reviewerAgent],
+      ["analyst.md", analystAgent],
+      ["copywriter.md", copywriterAgent],
+      ["growth-strategist.md", growthStrategistAgent],
+      ["exec-reviewer.md", execReviewerAgent],
+      ["devops.md", devopsAgent],
+      ["ops-manager.md", opsManagerAgent],
+    ];
+
+    for (const [name, content] of flatAgents) {
+      if (await writeIfMissing(resolve(agentsDir, name), content)) agentCount++;
+    }
+
+    // Directory agents
+    const dirAgents: [string, string, string][] = [
+      // architect
+      ["architect", "agent.md", architectBase],
+      ["architect", "design.md", architectDesign],
+      ["architect", "plan-authoring.md", architectPlanAuthoring],
+      ["architect", "task-planning.md", architectTaskPlanning],
+      ["architect", "health-assessment.md", architectHealthAssessment],
+      ["architect", "sprint-brief.md", architectSprintBrief],
+      ["architect", "sprint-review.md", architectSprintReview],
+      // qa-engineer
+      ["qa-engineer", "agent.md", qaEngineerBase],
+      ["qa-engineer", "test-planning.md", qaEngineerTestPlanning],
+      ["qa-engineer", "test-authoring.md", qaEngineerTestAuthoring],
+      // product-manager
+      ["product-manager", "agent.md", productManagerBase],
+      ["product-manager", "spec-writing.md", productManagerSpecWriting],
+      ["product-manager", "prioritization.md", productManagerPrioritization],
+      ["product-manager", "user-research.md", productManagerUserResearch],
+      // marketer
+      ["marketer", "agent.md", marketerBase],
+      ["marketer", "positioning.md", marketerPositioning],
+      ["marketer", "launch-plan.md", marketerLaunchPlan],
+      ["marketer", "content.md", marketerContent],
+      // strategist
+      ["strategist", "agent.md", strategistBase],
+      ["strategist", "competitive-analysis.md", strategistCompetitiveAnalysis],
+      ["strategist", "business-case.md", strategistBusinessCase],
+      ["strategist", "quarterly-planning.md", strategistQuarterlyPlanning],
+      // designer
+      ["designer", "agent.md", designerBase],
+      ["designer", "ux-research.md", designerUxResearch],
+      ["designer", "design-spec.md", designerDesignSpec],
+      ["designer", "design-review.md", designerDesignReview],
+      // customer-success
+      ["customer-success", "agent.md", customerSuccessBase],
+      ["customer-success", "support-content.md", customerSuccessSupportContent],
+      ["customer-success", "onboarding.md", customerSuccessOnboarding],
+      ["customer-success", "feedback-synthesis.md", customerSuccessFeedbackSynthesis],
+    ];
+
+    for (const [agentDir, name, content] of dirAgents) {
+      if (await writeIfMissing(resolve(agentsDir, agentDir, name), content)) agentCount++;
+    }
+
+    // Example-specific agents (from examples/agents/)
+    const examplesDir = packageExamplesDir();
+    const exampleAgentsDir = resolve(examplesDir, "agents");
+    try {
+      const exampleAgentFiles = await readdir(exampleAgentsDir);
+      for (const file of exampleAgentFiles) {
+        if (!file.endsWith(".md")) continue;
+        const content = await readFile(resolve(exampleAgentsDir, file), "utf-8");
+        if (await writeIfMissing(resolve(agentsDir, file), content)) agentCount++;
+      }
+    } catch {
+      // examples/agents/ may not exist in all installations
+    }
+  }
+
+  // --- Pipelines ---
+  if (!opts.agentsOnly) {
+    await mkdir(pipelinesDir, { recursive: true });
+
+    const examplesDir = packageExamplesDir();
+    try {
+      const files = await readdir(examplesDir);
+      for (const file of files) {
+        if (!file.endsWith(".yaml") || file === "cccp.yaml") continue;
+        const content = await readFile(resolve(examplesDir, file), "utf-8");
+        if (await writeIfMissing(resolve(pipelinesDir, file), content)) pipelineCount++;
+      }
+    } catch {
+      // examples/ may not exist in all installations
+    }
+  }
+
+  // --- Skills (always included) ---
+  const skillCount = await scaffoldSkills(dir);
+
+  console.log(`Scaffolded examples in ${dir}:\n`);
+  if (!opts.pipelinesOnly) {
+    console.log(`  ${agentCount} agent file(s) written to .claude/agents/`);
+  }
+  if (!opts.agentsOnly) {
+    console.log(`  ${pipelineCount} pipeline(s) written to pipelines/`);
+  }
+  if (skillCount > 0) {
+    console.log(`  ${skillCount} skill(s) written to .claude/skills/`);
+  }
+  console.log(`\n  (existing files were skipped)`);
 }

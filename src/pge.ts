@@ -1,20 +1,19 @@
-import { resolve, basename } from "node:path";
-import { access, mkdir, readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { mkdir, readFile } from "node:fs/promises";
 import { activityBus } from "./activity-bus.js";
-import { resolveAgent } from "./agent-resolver.js";
 import { DefaultAgentDispatcher, type AgentDispatcher } from "./dispatcher.js";
 import { parseEvaluation } from "./evaluator.js";
 import { AgentCrashError, MissingOutputError } from "./errors.js";
 import { ConsoleLogger, type Logger } from "./logger.js";
-import { writeMcpConfigFile } from "./mcp/mcp-config.js";
 import {
   interpolate,
-  loadAgentMarkdown,
+  resolveTaskBody,
   buildTaskContext,
   writeSystemPromptFile,
 } from "./prompt.js";
+import { mergeInputs, resolveAndLoad } from "./stage-helpers.js";
 import { updatePgeProgress, setStageArtifact } from "./state.js";
-import type { PgeStage, PgeAgentConfig, PgeResult, RunContext, PipelineState } from "./types.js";
+import type { PgeStage, PgeResult, RunContext, PipelineState } from "./types.js";
 
 function getLogger(ctx: RunContext): Logger {
   return ctx.logger ?? new ConsoleLogger();
@@ -22,50 +21,6 @@ function getLogger(ctx: RunContext): Logger {
 
 function getDispatcher(ctx: RunContext): AgentDispatcher {
   return ctx.dispatcher ?? new DefaultAgentDispatcher();
-}
-
-// ---------------------------------------------------------------------------
-// Input merging — stage-level + agent-level inputs, interpolated
-// ---------------------------------------------------------------------------
-
-function mergeInputs(
-  stageInputs: string[] | undefined,
-  agentInputs: string[] | undefined,
-  vars: Record<string, string>,
-  extra?: string[],
-): string[] {
-  const all = [
-    ...(stageInputs ?? []),
-    ...(agentInputs ?? []),
-    ...(extra ?? []),
-  ];
-  return all.map((i) => interpolate(i, vars));
-}
-
-// ---------------------------------------------------------------------------
-// Agent resolution helper
-// ---------------------------------------------------------------------------
-
-async function resolveAndLoad(
-  config: PgeAgentConfig,
-  ctx: RunContext,
-  stageMcpProfile: string | undefined,
-) {
-  const resolved = await resolveAgent(
-    config.agent,
-    ctx.agentSearchPaths,
-    config.operation,
-    ctx.projectDir,
-  );
-  const markdown = await loadAgentMarkdown(
-    resolved.agentPath,
-    resolved.operationPath,
-  );
-  const mcpProfile = config.mcp_profile ?? stageMcpProfile;
-  const mcpFile = ctx.projectConfig
-    ? await writeMcpConfigFile(mcpProfile, ctx.projectConfig, ctx.tempTracker)
-    : undefined;
-  return { resolved, markdown, mcpFile };
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +96,9 @@ export async function runPgeCycle(
     };
   }
 
+  // --- Resolve task body (file or inline) ---
+  const taskBody = await resolveTaskBody(stage, vars, `Generate deliverable for: ${stage.name}`);
+
   // --- Resolve all agents via search paths ---
   const plannerAgent = await resolveAndLoad(stage.planner, ctx, stage.mcp_profile);
   const genAgent = await resolveAndLoad(stage.generator, ctx, stage.mcp_profile);
@@ -155,7 +113,7 @@ export async function runPgeCycle(
   const plannerInputs = mergeInputs(stage.inputs, stage.planner.inputs, vars);
   const planFile = stage.plan ? interpolate(stage.plan, vars) : undefined;
   const plannerPrompt = buildTaskContext({
-    task: stage.task ?? `Plan the implementation for: ${stage.name}`,
+    task: taskBody,
     planFile,
     inputs: plannerInputs.length > 0 ? plannerInputs : undefined,
     output: taskPlanPath,
@@ -267,7 +225,7 @@ export async function runPgeCycle(
     const genSystemFile = await writeSystemPromptFile(genAgent.markdown, ctx.tempTracker);
     const genInputs = mergeInputs(stage.inputs, stage.generator.inputs, vars, [taskPlanPath]);
     const genPrompt = buildTaskContext({
-      task: stage.task ?? `Generate deliverable for: ${stage.name}`,
+      task: taskBody,
       contractPath,
       inputs: genInputs.length > 0 ? genInputs : undefined,
       output: deliverable,
@@ -320,6 +278,7 @@ export async function runPgeCycle(
       output: evalPath,
       iteration: iter,
       maxIterations: maxIter,
+      evaluatorFormat: true,
     });
 
     getLogger(ctx).log(`    dispatching evaluator: ${stage.evaluator.agent}`);

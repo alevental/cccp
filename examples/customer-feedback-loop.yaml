@@ -1,0 +1,44 @@
+name: customer-feedback-loop
+description: Synthesize customer feedback into product improvements.
+
+stages:
+  - name: feedback-synthesis
+    type: pge
+    task: "Synthesize recent customer feedback into themes and recommendations."
+    planner:
+      agent: customer-success
+      operation: feedback-synthesis
+    generator:
+      agent: customer-success
+      operation: feedback-synthesis
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/feedback-synthesis.md"
+      guidance: "Must identify top themes with frequency, severity, and representative quotes."
+      max_iterations: 2
+
+  - name: prioritization
+    type: pge
+    task: "Prioritize feedback themes into product backlog items."
+    inputs:
+      - "{artifact_dir}/feedback-synthesis.md"
+    planner:
+      agent: product-manager
+      operation: prioritization
+    generator:
+      agent: product-manager
+      operation: prioritization
+    evaluator:
+      agent: exec-reviewer
+    contract:
+      deliverable: "{artifact_dir}/prioritized-backlog.md"
+      guidance: "Must use impact/effort framework with clear rationale for priority order."
+      max_iterations: 2
+
+  - name: product-review
+    type: human_gate
+    prompt: "Review the prioritized backlog. Approve to update roadmap."
+    artifacts:
+      - "{artifact_dir}/feedback-synthesis.md"
+      - "{artifact_dir}/prioritized-backlog.md"

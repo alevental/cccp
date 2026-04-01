@@ -1,5 +1,5 @@
 name: example
-description: Example pipeline — replace with your own stages.
+description: Example pipeline — research, write, review with human approval.
 
 stages:
   - name: research
@@ -14,7 +14,8 @@ stages:
     inputs:
       - "{artifact_dir}/research.md"
     planner:
-      agent: planner
+      agent: architect
+      operation: plan-authoring
     generator:
       agent: writer
     evaluator:

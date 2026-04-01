@@ -14,28 +14,49 @@ A single `.md` file containing the agent's system prompt:
 
 ```
 agents/
-  researcher.md
-  writer.md
-  reviewer.md
+  researcher.md          # Engineering: research and analysis
+  reviewer.md            # General-purpose evaluator
+  implementer.md         # Engineering: code generation
+  code-reviewer.md       # Engineering: code evaluation (PASS/FAIL format)
+  copywriter.md          # Marketing: long-form content
+  analyst.md             # Strategy: data and metrics analysis
+  exec-reviewer.md       # Strategy: executive-level evaluation
+  growth-strategist.md   # Growth: experiment design
+  ops-manager.md         # Operations: runbook and process authoring
+  devops.md              # Operations: infrastructure review
+  writer.md              # General-purpose document generation
 ```
 
-Example flat-file agent (`agents/researcher.md`):
+Example flat-file agent (`agents/code-reviewer.md`):
 
 ```markdown
 ---
-name: researcher
-description: Researches a topic and writes a summary.
+name: code-reviewer
+description: Reviews code against a contract and produces a PASS/FAIL evaluation.
 ---
 
-# Researcher Agent
+# Code Reviewer
 
-You are a research agent. Read the project files and produce a clear, concise summary.
+You are a code review agent. Evaluate deliverables against acceptance criteria.
 
 ## Instructions
 
-1. Read the project's key files (README, package.json, etc.)
-2. Identify the main technologies, patterns, and structure
-3. Write your findings to the output path specified in your task
+1. Read the contract to understand the acceptance criteria
+2. Read the deliverable code
+3. For each criterion, determine PASS or FAIL with specific evidence
+4. Write your evaluation using this format:
+
+### Criterion Results
+
+| # | Criterion | Result | Evidence |
+|---|-----------|--------|----------|
+| 1 | [name]    | PASS/FAIL | [specific evidence] |
+
+### Overall: PASS / FAIL
+
+### Iteration Guidance (if FAIL)
+
+1. [Specific fix needed]
 ```
 
 The YAML frontmatter (`---` delimited) is optional and informational. The entire file content (including frontmatter) is passed as the system prompt via `--append-system-prompt-file`.
@@ -46,11 +67,39 @@ A directory containing `agent.md` (the base prompt) and one or more operation fi
 
 ```
 agents/
-  architect/
+  architect/                  # Engineering: architecture and planning
     agent.md                  # Base agent definition (always loaded)
-    plan-authoring.md         # Operation: plan authoring
-    design-review.md          # Operation: design review
-    code-review.md            # Operation: code review
+    design.md                 # Operation: technical design
+    task-planning.md          # Operation: implementation task breakdown
+    sprint-brief.md           # Operation: sprint brief generation
+    sprint-review.md          # Operation: sprint quality review
+    health-assessment.md      # Operation: service health assessment
+  product-manager/            # Product: requirements and prioritization
+    agent.md
+    spec-writing.md           # Operation: PRD authoring
+    prioritization.md         # Operation: backlog prioritization
+  marketer/                   # Marketing: strategy and content planning
+    agent.md
+    positioning.md            # Operation: product positioning
+    launch-plan.md            # Operation: launch planning
+    content.md                # Operation: content strategy and planning
+  qa-engineer/                # Engineering: test planning and authoring
+    agent.md
+    test-planning.md          # Operation: test plan creation
+    test-authoring.md         # Operation: test implementation
+  strategist/                 # Strategy: business and competitive analysis
+    agent.md
+    competitive-analysis.md   # Operation: competitive landscape
+    quarterly-planning.md     # Operation: OKR and roadmap planning
+    business-case.md          # Operation: business case authoring
+  designer/                   # Design: UX research and design specs
+    agent.md
+    ux-research.md            # Operation: user research synthesis
+    design-spec.md            # Operation: design specification
+    design-review.md          # Operation: design evaluation
+  customer-success/           # Customer Success: feedback analysis
+    agent.md
+    feedback-synthesis.md     # Operation: feedback theme synthesis
 ```
 
 When a directory agent is invoked with an operation, the base `agent.md` and the operation file are concatenated with a separator:
@@ -68,26 +117,37 @@ This allows the base agent to define the agent's identity and capabilities, whil
 
 ```yaml
 stages:
-  - name: plan
-    type: agent
-    agent: architect
-    operation: plan-authoring
-    output: "{artifact_dir}/plan.md"
+  - name: technical-design
+    type: pge
+    task: "Design the technical architecture for this feature."
+    planner:
+      agent: architect
+      operation: design
+    generator:
+      agent: architect
+      operation: design
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/design.md"
+      max_iterations: 3
 
   - name: implement
     type: pge
-    task: "Implement the feature."
+    task: "Implement the feature according to the design."
+    inputs:
+      - "{artifact_dir}/design.md"
     planner:
       agent: architect
       operation: task-planning
     generator:
       agent: implementer
     evaluator:
-      agent: reviewer
-      operation: code-review
+      agent: code-reviewer
     contract:
-      deliverable: "src/feature.ts"
-      max_iterations: 3
+      deliverable: "{artifact_dir}/implementation-report.md"
+      max_iterations: 5
+    on_fail: human_gate
 ```
 
 ## Search Path Resolution
@@ -134,7 +194,7 @@ Agent "architect" not found. Searched:
 ```
 
 ```
-Agent "researcher" is a flat file and does not support operation "deep-analysis"
+Agent "code-reviewer" is a flat file and does not support operation "deep-analysis"
 ```
 
 ```
@@ -160,7 +220,7 @@ The `listOperations()` function returns all available operations for a directory
 
 ```typescript
 const ops = await listOperations("architect", searchPaths);
-// ["plan-authoring", "design-review", "code-review"]
+// ["design", "health-assessment", "sprint-brief", "sprint-review", "task-planning"]
 ```
 
 It reads the agent directory and returns all `.md` files except `agent.md`, with the extension stripped.

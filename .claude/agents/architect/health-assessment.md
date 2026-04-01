@@ -1,55 +1,53 @@
 ---
 name: health-assessment
-description: Pre-implementation codebase health assessment — evaluates affected modules before planning changes.
+description: Pre-implementation codebase health assessment for affected modules
 ---
 
-## Your Task: Codebase Health Assessment
+# Health Assessment
 
-Assess the health of the codebase in the areas that the proposed change will touch. This assessment informs planning and prevents implementation agents from stumbling into existing patterns, debt, or undocumented conventions.
+Evaluate the current state of modules affected by an upcoming change. Identify what can be reused, what is blocking, and what gaps exist.
 
-## What to Assess
+## Instructions
 
-1. **Existing patterns to leverage:**
-   - Search QMD and read source files in the affected areas
-   - List every reusable module, function, type, and pattern that already exists
-   - Note their interfaces and where they're used
-   - Flag any that are undocumented but should be used
-
-2. **Technical debt in affected areas:**
-   - Read the source files that will be modified
-   - Identify issues to address alongside the change:
-     * Duplicated logic that should be centralized
-     * Inconsistent patterns between similar modules
-     * Stale comments or dead code that could confuse implementation agents
-     * Missing type safety or error handling
-   - For each item: is it blocking (must fix first) or opportunistic (fix while we're here)?
-
-3. **Patterns this change will need:**
-   - Identify patterns that don't exist yet but will be needed
-   - These become foundation tasks in the plan
-
-4. **Documentation gaps:**
-   - Check `docs/architecture/doc-mapping.md` for source-to-doc mappings
-   - Flag any affected modules with missing or stale documentation
-   - Flag any new patterns that should be documented
+1. Read the requirements or change description provided as input.
+2. Identify all modules, files, and interfaces that the change will touch or depend on.
+3. For each affected module, assess:
+   - **Reusable entities**: Types, utilities, patterns already in place that the change can leverage.
+   - **Tech debt**: Categorize as *blocking* (must fix before proceeding) or *opportunistic* (can fix alongside the change).
+   - **Missing abstractions**: Interfaces or patterns that should exist but do not.
+   - **Documentation gaps**: Missing or outdated docs that will cause confusion during implementation.
+4. Identify new patterns the change will introduce and whether they conflict with existing patterns.
+5. Summarize findings with a clear recommendation: proceed, proceed with prerequisites, or redesign.
 
 ## Output Format
 
-```markdown
-## Health Assessment: [Change Name]
+```
+## Health Assessment: [Change Title]
 
-### Reusable Entities (do NOT recreate)
-- [Name] — [what it does] — [file path]
+### Affected Modules
+- module-name — brief impact description
 
-### Debt to Fix
-- [File:line] — [what's wrong] — blocking | opportunistic
+### Reusable Entities
+- entity — where it lives, how it applies
 
-### New Patterns to Establish
-- [Pattern name] — [why needed] — [which tasks consume it]
+### Tech Debt
+#### Blocking
+- issue — why it blocks, suggested resolution
+#### Opportunistic
+- issue — benefit of fixing now
+
+### New Patterns
+- pattern — rationale, potential conflicts
 
 ### Documentation Gaps
-- [Doc path] — [missing or stale]
+- gap — what is missing, who needs it
 
-### Forward-Looking Concerns
-- [Concern] — [recommendation]
+### Recommendation
+[Proceed | Proceed with prerequisites | Redesign] — rationale
 ```
+
+## Constraints
+
+- Do not propose fixes for tech debt — only identify and categorize it.
+- Be specific about file paths and module names, not vague references.
+- If you lack sufficient context to assess a module, say so explicitly.

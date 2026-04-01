@@ -22,6 +22,33 @@ export function interpolate(
 }
 
 // ---------------------------------------------------------------------------
+// Task body resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the task body for a stage. Reads from `task_file` if specified,
+ * otherwise returns the inline `task` string, otherwise the fallback.
+ *
+ * Throws if both `task` and `task_file` are set on the same stage.
+ */
+export async function resolveTaskBody(
+  stage: { task?: string; task_file?: string; name: string },
+  variables: Record<string, string>,
+  fallback: string,
+): Promise<string> {
+  if (stage.task && stage.task_file) {
+    throw new Error(
+      `Stage "${stage.name}": cannot specify both "task" and "task_file"`,
+    );
+  }
+  if (stage.task_file) {
+    const resolved = interpolate(stage.task_file, variables);
+    return readFile(resolved, "utf-8");
+  }
+  return stage.task ?? fallback;
+}
+
+// ---------------------------------------------------------------------------
 // Agent markdown loading
 // ---------------------------------------------------------------------------
 
@@ -75,6 +102,10 @@ export interface TaskContext {
   guidance?: string;
   /** Info about the deliverable the generator will produce. */
   deliverableInfo?: string;
+  /** Path to the ground truth file (for autoresearch evaluation). */
+  groundTruthPath?: string;
+  /** When true, appends the evaluator output format (### Overall: PASS/FAIL). */
+  evaluatorFormat?: boolean;
   /** Additional key-value context. */
   extra?: Record<string, string>;
 }
@@ -95,6 +126,10 @@ export function buildTaskContext(ctx: TaskContext): string {
 
   if (ctx.contractPath) {
     lines.push(`## Contract\n`, `Read the contract at: ${ctx.contractPath}`, "");
+  }
+
+  if (ctx.groundTruthPath) {
+    lines.push(`## Ground Truth\n`, `Compare the output against the expected result at: ${ctx.groundTruthPath}`, "");
   }
 
   if (ctx.inputs?.length) {
@@ -138,6 +173,21 @@ export function buildTaskContext(ctx: TaskContext): string {
     lines.push(
       `## Iteration\n`,
       `This is iteration ${ctx.iteration} of ${ctx.maxIterations}.`,
+      "",
+    );
+  }
+
+  if (ctx.evaluatorFormat) {
+    lines.push(
+      `## Evaluation Format\n`,
+      `Your evaluation MUST end with exactly one of these lines:\n`,
+      `### Overall: PASS\n`,
+      `or\n`,
+      `### Overall: FAIL\n`,
+      `Use a criterion results table to justify your decision:\n`,
+      `| # | Criterion | Result | Evidence |`,
+      `|---|-----------|--------|----------|`,
+      `| 1 | [name]    | PASS/FAIL | [specific evidence] |`,
       "",
     );
   }

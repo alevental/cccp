@@ -1,0 +1,43 @@
+name: incident-runbook
+description: Create an incident response runbook for a service.
+
+stages:
+  - name: service-assessment
+    type: agent
+    task: "Assess the service architecture and identify failure modes."
+    agent: architect
+    operation: health-assessment
+    output: "{artifact_dir}/service-assessment.md"
+
+  - name: runbook
+    type: pge
+    task: "Write the incident response runbook for this service."
+    inputs:
+      - "{artifact_dir}/service-assessment.md"
+    planner:
+      agent: ops-manager
+    generator:
+      agent: ops-manager
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/runbook.md"
+      guidance: "Must cover detection, triage, mitigation, and post-incident steps for each failure mode. Actionable by an on-call engineer."
+      max_iterations: 3
+
+  - name: devops-review
+    type: pge
+    task: "Review the runbook for technical accuracy and completeness."
+    inputs:
+      - "{artifact_dir}/runbook.md"
+      - "{artifact_dir}/service-assessment.md"
+    planner:
+      agent: devops
+    generator:
+      agent: devops
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/runbook-reviewed.md"
+      guidance: "All commands must be correct. Monitoring links and escalation paths must be complete."
+      max_iterations: 2

@@ -3,6 +3,7 @@ import { writeFile, mkdir, rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   interpolate,
+  resolveTaskBody,
   loadAgentMarkdown,
   buildTaskContext,
   writeSystemPromptFile,
@@ -39,6 +40,74 @@ describe("interpolate", () => {
 
   it("replaces multiple occurrences of the same variable", () => {
     expect(interpolate("{x}-{x}-{x}", { x: "1" })).toBe("1-1-1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveTaskBody
+// ---------------------------------------------------------------------------
+
+describe("resolveTaskBody", () => {
+  it("returns inline task when set", async () => {
+    const result = await resolveTaskBody(
+      { task: "Do the thing.", name: "s1" },
+      {},
+      "fallback",
+    );
+    expect(result).toBe("Do the thing.");
+  });
+
+  it("returns fallback when neither task nor task_file is set", async () => {
+    const result = await resolveTaskBody({ name: "s1" }, {}, "fallback text");
+    expect(result).toBe("fallback text");
+  });
+
+  it("reads task from a file when task_file is set", async () => {
+    const dir = tmpPath();
+    await mkdir(dir, { recursive: true });
+    const taskFile = join(dir, "task.md");
+    await writeFile(taskFile, "# Complex Task\n\nDo many things.", "utf-8");
+
+    const result = await resolveTaskBody(
+      { task_file: taskFile, name: "s1" },
+      {},
+      "fallback",
+    );
+    expect(result).toBe("# Complex Task\n\nDo many things.");
+  });
+
+  it("interpolates variables in task_file path", async () => {
+    const dir = tmpPath();
+    await mkdir(dir, { recursive: true });
+    const taskFile = join(dir, "task.md");
+    await writeFile(taskFile, "Task from file.", "utf-8");
+
+    const result = await resolveTaskBody(
+      { task_file: `${dir}/{filename}`, name: "s1" },
+      { filename: "task.md" },
+      "fallback",
+    );
+    expect(result).toBe("Task from file.");
+  });
+
+  it("throws when both task and task_file are set", async () => {
+    await expect(
+      resolveTaskBody(
+        { task: "inline", task_file: "some/file.md", name: "s1" },
+        {},
+        "fallback",
+      ),
+    ).rejects.toThrow(/cannot specify both "task" and "task_file"/);
+  });
+
+  it("throws when task_file does not exist", async () => {
+    await expect(
+      resolveTaskBody(
+        { task_file: "/nonexistent/task.md", name: "s1" },
+        {},
+        "fallback",
+      ),
+    ).rejects.toThrow();
   });
 });
 
@@ -172,6 +241,32 @@ describe("buildTaskContext", () => {
     });
     expect(result).toContain("## Deliverable");
     expect(result).toContain("The generator will produce: output.ts");
+  });
+
+  it("includes evaluator format when evaluatorFormat is true", () => {
+    const result = buildTaskContext({
+      task: "Evaluate the deliverable.",
+      evaluatorFormat: true,
+    });
+    expect(result).toContain("## Evaluation Format");
+    expect(result).toContain("### Overall: PASS");
+    expect(result).toContain("### Overall: FAIL");
+    expect(result).toContain("Criterion");
+  });
+
+  it("includes ground truth path section", () => {
+    const result = buildTaskContext({
+      task: "Evaluate the output.",
+      groundTruthPath: "/path/to/expected.md",
+    });
+    expect(result).toContain("## Ground Truth");
+    expect(result).toContain("/path/to/expected.md");
+  });
+
+  it("omits evaluator format when evaluatorFormat is false or absent", () => {
+    const result = buildTaskContext({ task: "Generate output." });
+    expect(result).not.toContain("Evaluation Format");
+    expect(result).not.toContain("### Overall:");
   });
 });
 

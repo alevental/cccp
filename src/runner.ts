@@ -6,8 +6,9 @@ import { AgentCrashError, MissingOutputError } from "./errors.js";
 import { FilesystemGateStrategy } from "./gate/gate-watcher.js";
 import { ConsoleLogger, type Logger } from "./logger.js";
 import { writeMcpConfigFile } from "./mcp/mcp-config.js";
+import { runAutoresearchCycle } from "./autoresearch.js";
 import { runPgeCycle } from "./pge.js";
-import { interpolate, loadAgentMarkdown, buildTaskContext, writeSystemPromptFile } from "./prompt.js";
+import { interpolate, resolveTaskBody, loadAgentMarkdown, buildTaskContext, writeSystemPromptFile } from "./prompt.js";
 import { updatePipelineStatus, notifyPipelineComplete } from "./tui/cmux.js";
 import {
   createState,
@@ -20,6 +21,7 @@ import {
 } from "./state.js";
 import type {
   AgentStage,
+  AutoresearchStage,
   HumanGateStage,
   PgeStage,
   RunContext,
@@ -54,8 +56,7 @@ async function runAgentStage(
   const start = Date.now();
   const vars = { ...ctx.variables, ...(stage.variables ?? {}) };
 
-  const taskDescription =
-    stage.task ?? `Execute stage: ${stage.name}`;
+  const taskDescription = await resolveTaskBody(stage, vars, `Execute stage: ${stage.name}`);
   const output = stage.output ? interpolate(stage.output, vars) : undefined;
   const inputs = stage.inputs?.map((i) => interpolate(i, vars));
 
@@ -237,6 +238,108 @@ async function runPgeStage(
 }
 
 // ---------------------------------------------------------------------------
+// Stage dispatch — type: autoresearch
+// ---------------------------------------------------------------------------
+
+async function runAutoresearchStage(
+  stage: AutoresearchStage,
+  ctx: RunContext,
+  state: PipelineState,
+): Promise<StageResult> {
+  const start = Date.now();
+  const result = await runAutoresearchCycle(stage, ctx, state, async (eventType, eventData) => {
+    if (eventType) {
+      await saveStateWithEvent(state, eventType, stage.name, eventData);
+    } else {
+      await saveState(state);
+    }
+  });
+
+  if (result.outcome === "pass") {
+    return {
+      stageName: stage.name,
+      status: "passed",
+      result,
+      durationMs: Date.now() - start,
+    };
+  }
+
+  if (result.outcome === "error") {
+    return {
+      stageName: stage.name,
+      status: "error",
+      result,
+      error: "Evaluation parse error",
+      durationMs: Date.now() - start,
+    };
+  }
+
+  // outcome === "fail" — apply escalation strategy
+  const strategy = stage.on_fail ?? "stop";
+  const iterLabel = result.maxIterations
+    ? `${result.iterations}/${result.maxIterations}`
+    : `${result.iterations}`;
+  switch (strategy) {
+    case "stop":
+      return {
+        stageName: stage.name,
+        status: "failed",
+        result,
+        error: `Failed after ${iterLabel} iterations`,
+        durationMs: Date.now() - start,
+      };
+
+    case "skip":
+      getLogger(ctx).log(`    escalation: skip — continuing pipeline`);
+      return {
+        stageName: stage.name,
+        status: "skipped",
+        result,
+        durationMs: Date.now() - start,
+      };
+
+    case "human_gate":
+      if (!ctx.gateStrategy) {
+        getLogger(ctx).log(`    escalation: human_gate — no gate strategy, stopping`);
+        return {
+          stageName: stage.name,
+          status: "failed",
+          result,
+          error: `Failed after ${iterLabel} iterations (no gate strategy configured)`,
+          durationMs: Date.now() - start,
+        };
+      }
+      getLogger(ctx).log(`    escalation: human_gate — awaiting approval`);
+      const gateInfo: GateInfo = {
+        stageName: stage.name,
+        status: "pending",
+        prompt: `Autoresearch stage "${stage.name}" failed after ${iterLabel} iterations. Approve to continue or reject to stop.`,
+      };
+      state.gate = gateInfo;
+      await saveState(state);
+      const gateResponse = await ctx.gateStrategy.waitForGate(gateInfo);
+      state.gate = undefined;
+      await saveState(state);
+      if (gateResponse.approved) {
+        getLogger(ctx).log(`    gate approved — continuing pipeline`);
+        return {
+          stageName: stage.name,
+          status: "skipped",
+          result,
+          durationMs: Date.now() - start,
+        };
+      }
+      return {
+        stageName: stage.name,
+        status: "failed",
+        result,
+        error: `Failed and gate rejected${gateResponse.feedback ? `: ${gateResponse.feedback}` : ""}`,
+        durationMs: Date.now() - start,
+      };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Stage dispatch — type: human_gate
 // ---------------------------------------------------------------------------
 
@@ -335,6 +438,9 @@ async function runStage(
 
     case "human_gate":
       return runHumanGateStage(stage, ctx, state);
+
+    case "autoresearch":
+      return runAutoresearchStage(stage, ctx, state);
   }
 }
 

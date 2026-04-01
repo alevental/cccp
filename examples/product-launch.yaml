@@ -1,0 +1,85 @@
+name: product-launch
+description: Product launch pipeline — positioning, launch plan, content creation.
+
+stages:
+  - name: competitive-landscape
+    type: agent
+    task: "Research the competitive landscape for the product launch."
+    agent: researcher
+    output: "{artifact_dir}/competitive-research.md"
+
+  - name: positioning
+    type: pge
+    task: "Define product positioning and messaging framework."
+    inputs:
+      - "{artifact_dir}/competitive-research.md"
+    planner:
+      agent: marketer
+      operation: positioning
+    generator:
+      agent: marketer
+      operation: positioning
+    evaluator:
+      agent: exec-reviewer
+    contract:
+      deliverable: "{artifact_dir}/positioning.md"
+      guidance: "Must include target audience, value propositions, competitive differentiators, and messaging pillars."
+      max_iterations: 3
+
+  - name: positioning-approval
+    type: human_gate
+    prompt: "Review positioning and messaging. Approve to proceed with launch planning."
+    artifacts:
+      - "{artifact_dir}/positioning.md"
+
+  - name: launch-plan
+    type: pge
+    task: "Create the launch plan with timeline and channel strategy."
+    inputs:
+      - "{artifact_dir}/positioning.md"
+    planner:
+      agent: marketer
+      operation: launch-plan
+    generator:
+      agent: marketer
+      operation: launch-plan
+    evaluator:
+      agent: exec-reviewer
+    contract:
+      deliverable: "{artifact_dir}/launch-plan.md"
+      guidance: "Must include timeline, channel strategy, content deliverables, success metrics, and dependencies."
+      max_iterations: 2
+
+  - name: blog-post
+    type: pge
+    task: "Write the launch blog post."
+    inputs:
+      - "{artifact_dir}/positioning.md"
+      - "{artifact_dir}/launch-plan.md"
+    planner:
+      agent: marketer
+      operation: content
+    generator:
+      agent: copywriter
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/blog-post.md"
+      guidance: "Must align with positioning. Engaging, clear, technically accurate."
+      max_iterations: 3
+
+  - name: release-notes
+    type: agent
+    task: "Write release notes based on the positioning and launch plan."
+    agent: copywriter
+    inputs:
+      - "{artifact_dir}/positioning.md"
+    output: "{artifact_dir}/release-notes.md"
+
+  - name: launch-approval
+    type: human_gate
+    prompt: "Review all launch materials. Approve to publish."
+    artifacts:
+      - "{artifact_dir}/launch-plan.md"
+      - "{artifact_dir}/blog-post.md"
+      - "{artifact_dir}/release-notes.md"

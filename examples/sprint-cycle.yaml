@@ -1,0 +1,67 @@
+name: sprint-cycle
+description: Single sprint execution — brief, implement, test, review.
+
+variables:
+  sprint: "1"
+
+stages:
+  - name: sprint-brief
+    type: agent
+    task: "Read the master plan and produce the sprint brief for sprint {sprint}."
+    agent: architect
+    operation: sprint-brief
+    output: "{artifact_dir}/sprint-{sprint}-brief.md"
+
+  - name: implement
+    type: pge
+    task: "Implement all tasks from the sprint brief."
+    plan: "{artifact_dir}/sprint-{sprint}-brief.md"
+    planner:
+      agent: architect
+      operation: task-planning
+    generator:
+      agent: implementer
+    evaluator:
+      agent: code-reviewer
+    contract:
+      deliverable: "{artifact_dir}/sprint-{sprint}-complete.md"
+      guidance: "All sprint brief tasks must be implemented with passing tests."
+      max_iterations: 5
+    on_fail: human_gate
+
+  - name: test-coverage
+    type: pge
+    task: "Verify and extend test coverage for sprint deliverables."
+    inputs:
+      - "{artifact_dir}/sprint-{sprint}-complete.md"
+    planner:
+      agent: qa-engineer
+      operation: test-planning
+    generator:
+      agent: qa-engineer
+      operation: test-authoring
+    evaluator:
+      agent: code-reviewer
+    contract:
+      deliverable: "{artifact_dir}/sprint-{sprint}-tests.md"
+      guidance: "Critical paths must be covered. No regressions introduced."
+      max_iterations: 3
+
+  - name: sprint-review
+    type: pge
+    task: "Review the sprint for quality and completeness."
+    inputs:
+      - "{artifact_dir}/sprint-{sprint}-complete.md"
+      - "{artifact_dir}/sprint-{sprint}-tests.md"
+    planner:
+      agent: architect
+      operation: sprint-review
+    generator:
+      agent: architect
+      operation: sprint-review
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/sprint-{sprint}-review.md"
+      guidance: "Assess code quality, architectural consistency, test coverage, and sprint completeness."
+      max_iterations: 2

@@ -14,7 +14,7 @@ program
   .description(
     "Claude Code and Cmux Pipeline Reagent — deterministic YAML-based pipeline orchestration",
   )
-  .version("0.1.0");
+  .version("0.2.0");
 
 program
   .command("run")
@@ -189,12 +189,27 @@ program
 
 program
   .command("init")
-  .description("Scaffold a cccp.yaml config and example pipeline in the current directory")
+  .description("Scaffold a minimal cccp.yaml, example pipeline, and core agents")
   .option("-d, --dir <path>", "Directory to scaffold in (defaults to cwd)")
   .action(async (opts) => {
     const dir = resolve(opts.dir ?? process.cwd());
     const { scaffoldProject } = await import("./scaffold/index.js");
     await scaffoldProject(dir);
+  });
+
+program
+  .command("examples")
+  .description("Scaffold the full set of template agents and example pipelines")
+  .option("-d, --dir <path>", "Directory to scaffold in (defaults to cwd)")
+  .option("--agents-only", "Scaffold agents only, no pipelines")
+  .option("--pipelines-only", "Scaffold pipelines only, no agents")
+  .action(async (opts) => {
+    const dir = resolve(opts.dir ?? process.cwd());
+    const { scaffoldExamples } = await import("./scaffold/index.js");
+    await scaffoldExamples(dir, {
+      agentsOnly: opts.agentsOnly,
+      pipelinesOnly: opts.pipelinesOnly,
+    });
   });
 
 program.parse();

@@ -287,6 +287,133 @@ stages:
     }
   });
 
+  it("loads a valid autoresearch stage", async () => {
+    const file = await writeTmpYaml(`
+name: autoresearch-test
+stages:
+  - name: tune-prompt
+    type: autoresearch
+    task: Optimize the prompt
+    artifact: prompt.md
+    ground_truth: expected.md
+    output: actual.md
+    adjuster:
+      agent: agents/adjuster.md
+    executor:
+      agent: agents/executor.md
+    evaluator:
+      agent: agents/eval.md
+    max_iterations: 5
+    on_fail: stop
+`);
+
+    const pipeline = await loadPipeline(file);
+    expect(pipeline.stages).toHaveLength(1);
+    const stage = pipeline.stages[0];
+    expect(stage.type).toBe("autoresearch");
+    if (stage.type === "autoresearch") {
+      expect(stage.artifact).toBe("prompt.md");
+      expect(stage.ground_truth).toBe("expected.md");
+      expect(stage.output).toBe("actual.md");
+      expect(stage.adjuster.agent).toBe("agents/adjuster.md");
+      expect(stage.executor.agent).toBe("agents/executor.md");
+      expect(stage.evaluator.agent).toBe("agents/eval.md");
+      expect(stage.max_iterations).toBe(5);
+      expect(stage.on_fail).toBe("stop");
+    }
+  });
+
+  it("loads autoresearch stage with no max_iterations (unlimited)", async () => {
+    const file = await writeTmpYaml(`
+name: unlimited-ar
+stages:
+  - name: tune
+    type: autoresearch
+    artifact: prompt.md
+    ground_truth: expected.md
+    output: actual.md
+    adjuster:
+      agent: adj.md
+    executor:
+      agent: exec.md
+    evaluator:
+      agent: eval.md
+`);
+
+    const pipeline = await loadPipeline(file);
+    const stage = pipeline.stages[0];
+    expect(stage.type).toBe("autoresearch");
+    if (stage.type === "autoresearch") {
+      expect(stage.max_iterations).toBeUndefined();
+    }
+  });
+
+  it("rejects autoresearch stage missing required fields", async () => {
+    const file = await writeTmpYaml(`
+name: bad-ar
+stages:
+  - name: broken
+    type: autoresearch
+    artifact: prompt.md
+    adjuster:
+      agent: adj.md
+    executor:
+      agent: exec.md
+    evaluator:
+      agent: eval.md
+`);
+
+    await expect(loadPipeline(file)).rejects.toThrow(
+      /Pipeline validation failed/,
+    );
+  });
+
+  it("accepts task_file on agent stage", async () => {
+    const file = await writeTmpYaml(`
+name: task-file-test
+stages:
+  - name: from-file
+    type: agent
+    agent: agents/writer.md
+    task_file: tasks/complex-task.md
+    output: output.md
+`);
+
+    const pipeline = await loadPipeline(file);
+    const stage = pipeline.stages[0];
+    expect(stage.type).toBe("agent");
+    if (stage.type === "agent") {
+      expect(stage.task_file).toBe("tasks/complex-task.md");
+      expect(stage.task).toBeUndefined();
+    }
+  });
+
+  it("accepts task_file on PGE stage", async () => {
+    const file = await writeTmpYaml(`
+name: pge-task-file
+stages:
+  - name: build
+    type: pge
+    task_file: tasks/build-spec.md
+    planner:
+      agent: plan.md
+    generator:
+      agent: gen.md
+    evaluator:
+      agent: eval.md
+    contract:
+      deliverable: out.md
+      max_iterations: 3
+`);
+
+    const pipeline = await loadPipeline(file);
+    const stage = pipeline.stages[0];
+    expect(stage.type).toBe("pge");
+    if (stage.type === "pge") {
+      expect(stage.task_file).toBe("tasks/build-spec.md");
+    }
+  });
+
   it("validates PGE stage with per-agent inputs", async () => {
     const file = await writeTmpYaml(`
 name: per-agent-inputs

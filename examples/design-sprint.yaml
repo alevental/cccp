@@ -1,0 +1,54 @@
+name: design-sprint
+description: Design sprint — UX research, design spec, review.
+
+stages:
+  - name: user-research
+    type: pge
+    task: "Synthesize user research findings for the design challenge."
+    planner:
+      agent: designer
+      operation: ux-research
+    generator:
+      agent: researcher
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/ux-research.md"
+      guidance: "Must include personas, user journey maps, and key pain points with evidence."
+      max_iterations: 2
+
+  - name: product-requirements
+    type: agent
+    task: "Extract product requirements from the UX research."
+    agent: product-manager
+    operation: spec-writing
+    inputs:
+      - "{artifact_dir}/ux-research.md"
+    output: "{artifact_dir}/requirements.md"
+
+  - name: design-spec
+    type: pge
+    task: "Write the design specification."
+    inputs:
+      - "{artifact_dir}/ux-research.md"
+      - "{artifact_dir}/requirements.md"
+    planner:
+      agent: designer
+      operation: design-spec
+    generator:
+      agent: designer
+      operation: design-spec
+    evaluator:
+      agent: designer
+      operation: design-review
+    contract:
+      deliverable: "{artifact_dir}/design-spec.md"
+      guidance: "Must include information architecture, interaction patterns, accessibility requirements, and edge cases."
+      max_iterations: 3
+
+  - name: design-approval
+    type: human_gate
+    prompt: "Review the design spec. Approve to proceed to implementation."
+    artifacts:
+      - "{artifact_dir}/design-spec.md"
+      - "{artifact_dir}/ux-research.md"

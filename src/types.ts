@@ -15,13 +15,15 @@ export interface Pipeline {
 }
 
 /** A single stage in a pipeline. Discriminated on `type`. */
-export type Stage = AgentStage | PgeStage | HumanGateStage;
+export type Stage = AgentStage | PgeStage | HumanGateStage | AutoresearchStage;
 
 /** Base fields shared by every stage type. */
 export interface StageBase {
   name: string;
   /** Task instructions passed to the agent as the primary directive. */
   task?: string;
+  /** Path to a file whose contents are used as the task body (mutually exclusive with `task`). */
+  task_file?: string;
   /** Named MCP profile (resolved from project cccp.yaml). */
   mcp_profile?: string;
   /** Stage-level variable overrides. */
@@ -90,6 +92,29 @@ export interface HumanGateStage extends StageBase {
   on_reject?: "retry" | "stop";
 }
 
+/** Autoresearch stage: iterative artifact optimization against ground truth. */
+export interface AutoresearchStage extends StageBase {
+  type: "autoresearch";
+  /** Path to the artifact being tuned (modified by adjuster on each iteration). */
+  artifact: string;
+  /** Path to the known correct output (ground truth for comparison). */
+  ground_truth: string;
+  /** Path where the executor writes its output. */
+  output: string;
+  /** Stage-level inputs shared across all agents. */
+  inputs?: string[];
+  /** Adjuster agent — reads evaluation feedback, modifies the artifact. */
+  adjuster: PgeAgentConfig;
+  /** Executor agent — runs the task using the current artifact. */
+  executor: PgeAgentConfig;
+  /** Evaluator agent — compares executor output against ground truth. */
+  evaluator: PgeAgentConfig;
+  /** Max iterations (optional — omit for unlimited). */
+  max_iterations?: number;
+  /** What to do when max iterations reached with FAIL. */
+  on_fail?: EscalationStrategy;
+}
+
 export type EscalationStrategy = "stop" | "human_gate" | "skip";
 
 // ---------------------------------------------------------------------------
@@ -111,14 +136,20 @@ export type PgeStep =
   | "evaluator_dispatched"
   | "routed";
 
+export type AutoresearchStep =
+  | "adjuster_dispatched"
+  | "executor_dispatched"
+  | "evaluator_dispatched"
+  | "routed";
+
 export interface StageState {
   name: string;
   type: string;
   status: StageStatus;
   /** Current PGE iteration (1-based). Only for type: pge. */
   iteration?: number;
-  /** Last completed PGE sub-step within the current iteration. */
-  pgeStep?: PgeStep;
+  /** Last completed sub-step within the current iteration (PGE or autoresearch). */
+  pgeStep?: PgeStep | AutoresearchStep;
   /** Paths to artifacts produced by this stage. */
   artifacts?: Record<string, string>;
   /** Duration in ms (set on completion). */
@@ -169,8 +200,8 @@ export interface ResumePoint {
   stageName: string;
   /** For PGE stages: which iteration to resume at. */
   resumeIteration?: number;
-  /** For PGE stages: which sub-step to resume at within the iteration. */
-  resumeStep?: PgeStep;
+  /** For PGE/autoresearch stages: which sub-step to resume at within the iteration. */
+  resumeStep?: PgeStep | AutoresearchStep;
 }
 
 /** Event in the state audit log. */
@@ -257,11 +288,29 @@ export interface PgeResult {
   durationMs: number;
 }
 
+/** Result of a full autoresearch cycle. */
+export interface AutoresearchResult {
+  /** Final evaluation outcome. */
+  outcome: "pass" | "fail" | "error";
+  /** Number of iterations executed. */
+  iterations: number;
+  /** Max iterations allowed (undefined = unlimited). */
+  maxIterations?: number;
+  /** Path to the final evaluation file. */
+  evaluationPath?: string;
+  /** Path to the final tuned artifact. */
+  artifactPath?: string;
+  /** Path to the executor's final output. */
+  outputPath?: string;
+  /** Duration in milliseconds (total across all iterations). */
+  durationMs: number;
+}
+
 /** Result of a single stage execution. */
 export interface StageResult {
   stageName: string;
   status: "passed" | "failed" | "skipped" | "error";
-  result?: AgentResult | PgeResult;
+  result?: AgentResult | PgeResult | AutoresearchResult;
   error?: string;
   durationMs: number;
 }

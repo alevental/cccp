@@ -3,7 +3,6 @@
 
 # Directories to search for agent definitions (in priority order).
 agent_paths:
-  - ./agents
   - ./.claude/agents
 
 # Named MCP server profiles.
@@ -21,19 +20,12 @@ agent_paths:
 #         command: npx
 #         args: [-y, figma-console-mcp]
 
+# Claude config directory for agent subprocesses.
+claude_config_dir: /Users/alevental/.claude-iceman713
+
 # Default artifact output directory pattern.
 # Supports {project} and {pipeline_name} variables.
 artifact_dir: docs/projects/{project}/{pipeline_name}
 
 # Default MCP profile applied when a stage doesn't specify one.
 # default_mcp_profile: base
-
-# Claude config directory for agent subprocesses.
-# Agents inherit auth, settings, and plugins from this profile.
-# Default: inherits CLAUDE_CONFIG_DIR from environment, or ~/.claude
-claude_config_dir: /Users/alevental/.claude-iceman713
-
-# Permission mode for agent subprocesses.
-# Pipeline agents run non-interactively, so they need pre-granted permissions.
-# Options: default, acceptEdits, bypassPermissions, auto
-permission_mode: bypassPermissions

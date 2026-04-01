@@ -9,7 +9,7 @@ CCCP provides a set of CLI commands for running pipelines, resuming interrupted 
 Run a pipeline from a YAML definition.
 
 ```
-cccp run -f <path> -p <name> [options]
+npx @alevental/cccp run -f <path> -p <name> [options]
 ```
 
 ### Required flags
@@ -64,23 +64,23 @@ Variables are merged in this order (later overrides earlier):
 
 ```bash
 # Basic run
-cccp run -f pipelines/build-docs.yaml -p my-project
+npx @alevental/cccp run -f pipelines/build-docs.yaml -p my-project
 
 # Dry run to preview prompts
-cccp run -f pipelines/build-docs.yaml -p my-project --dry-run
+npx @alevental/cccp run -f pipelines/build-docs.yaml -p my-project --dry-run
 
 # Headless (CI) with variables
-cccp run -f pipelines/build-docs.yaml -p my-project \
+npx @alevental/cccp run -f pipelines/build-docs.yaml -p my-project \
   --headless \
   -v branch=main \
   -v version=2.0
 
 # Custom artifact directory
-cccp run -f pipelines/build-docs.yaml -p my-project \
+npx @alevental/cccp run -f pipelines/build-docs.yaml -p my-project \
   -a /tmp/artifacts/run-001
 
 # Headless mode (auto-approve all gates)
-cccp run -f pipelines/build-docs.yaml -p my-project --headless
+npx @alevental/cccp run -f pipelines/build-docs.yaml -p my-project --headless
 ```
 
 ### Exit codes
@@ -95,7 +95,7 @@ cccp run -f pipelines/build-docs.yaml -p my-project --headless
 Resume an interrupted pipeline run from its saved state.
 
 ```
-cccp resume -p <name> -r <run-id-prefix> [options]
+npx @alevental/cccp resume -p <name> -r <run-id-prefix> [options]
 ```
 
 ### Required flags
@@ -125,7 +125,7 @@ For PGE stages, resume includes the iteration number and sub-step, so a crashed 
 ### Example
 
 ```bash
-cccp resume -p my-project -r a1b2c3d4
+npx @alevental/cccp resume -p my-project -r a1b2c3d4
 ```
 
 ---
@@ -135,7 +135,7 @@ cccp resume -p my-project -r a1b2c3d4
 Launch the TUI dashboard to monitor a running (or completed) pipeline.
 
 ```
-cccp dashboard -r <run-id-prefix> [options]
+npx @alevental/cccp dashboard -r <run-id-prefix> [options]
 ```
 
 ### Required flags
@@ -162,7 +162,7 @@ The standalone dashboard:
 
 ```bash
 # In a separate terminal while a pipeline is running
-cccp dashboard -r a1b2c3d4
+npx @alevental/cccp dashboard -r a1b2c3d4
 ```
 
 ---
@@ -172,7 +172,7 @@ cccp dashboard -r a1b2c3d4
 Start the CCCP MCP server for Claude Code integration.
 
 ```
-cccp mcp-server
+npx @alevental/cccp mcp-server
 ```
 
 No flags. The server runs on stdio and is designed to be registered in `.mcp.json`:
@@ -182,7 +182,7 @@ No flags. The server runs on stdio and is designed to be registered in `.mcp.jso
   "mcpServers": {
     "cccp": {
       "command": "npx",
-      "args": ["tsx", "src/cli.ts", "mcp-server"]
+      "args": ["@alevental/cccp", "mcp-server"]
     }
   }
 }
@@ -194,10 +194,10 @@ See [MCP Tools](mcp-tools.md) for the full tool reference.
 
 ## `cccp init`
 
-Scaffold a `cccp.yaml` config and example pipeline in the current directory.
+Scaffold a minimal `cccp.yaml`, example pipeline, and core agents.
 
 ```
-cccp init [options]
+npx @alevental/cccp init [options]
 ```
 
 ### Optional flags
@@ -210,12 +210,17 @@ cccp init [options]
 
 ```
 <dir>/
-  cccp.yaml                  -- project configuration
-  pipelines/example.yaml     -- example 3-stage pipeline
-  agents/researcher.md       -- example research agent
-  agents/planner.md          -- example planner agent (PGE planning)
-  agents/writer.md           -- example writer/generator agent
-  agents/reviewer.md         -- example reviewer/evaluator agent
+  cccp.yaml                          -- project configuration
+  pipelines/example.yaml             -- example 3-stage pipeline
+  .claude/agents/
+    researcher.md                    -- research agent
+    writer.md                        -- writer/generator agent
+    reviewer.md                      -- evaluator agent
+    architect/
+      agent.md                       -- base architect identity
+  .claude/skills/
+    research.md                      -- research skill
+    evaluate.md                      -- evaluation skill
 ```
 
 The generated pipeline includes all three stage types:
@@ -227,14 +232,39 @@ The generated pipeline includes all three stage types:
 
 ```bash
 # Scaffold in current directory
-cccp init
+npx @alevental/cccp init
 
 # Scaffold in a specific directory
-cccp init -d ~/projects/new-project
+npx @alevental/cccp init -d ~/projects/new-project
 
 # Run the example (dry run)
-cccp run -f pipelines/example.yaml -p test-project --dry-run
+npx @alevental/cccp run -f pipelines/example.yaml -p test-project --dry-run
 ```
+
+---
+
+## `cccp examples`
+
+Scaffold the full set of template agents and example pipelines.
+
+```
+npx @alevental/cccp examples [options]
+```
+
+### Optional flags
+
+| Flag | Description |
+|------|-------------|
+| `-d, --dir <path>` | Directory to scaffold in (defaults to `cwd`) |
+| `--agents-only` | Only scaffold agent files |
+| `--pipelines-only` | Only scaffold pipeline files |
+
+### What it generates
+
+- **44 agent files** across 18 identities (flat agents and directory agents with operations) in `.claude/agents/`
+- **11 example pipelines** covering engineering, product, marketing, growth, strategy, design, customer success, and operations in `pipelines/`
+
+Files that already exist are skipped -- running `cccp examples` is safe to repeat without overwriting your customizations.
 
 ## Related Documentation
 

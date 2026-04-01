@@ -3,3 +3,6 @@ dist/
 .cccp/
 docs/projects/
 *.tmp
+*.tgz
+examples/docs/
+examples/.cccp/

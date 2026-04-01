@@ -1,0 +1,51 @@
+name: quarterly-planning
+description: Quarterly planning cycle — competitive analysis, OKRs, roadmap.
+
+stages:
+  - name: competitive-analysis
+    type: pge
+    task: "Produce a competitive landscape analysis for this quarter."
+    planner:
+      agent: strategist
+      operation: competitive-analysis
+    generator:
+      agent: researcher
+    evaluator:
+      agent: exec-reviewer
+    contract:
+      deliverable: "{artifact_dir}/competitive-analysis.md"
+      guidance: "Must cover top competitors with recent moves, market positioning, and threat assessment."
+      max_iterations: 2
+
+  - name: metrics-review
+    type: agent
+    task: "Analyze last quarter's key metrics and produce a performance summary."
+    agent: analyst
+    output: "{artifact_dir}/metrics-review.md"
+
+  - name: quarterly-plan
+    type: pge
+    task: "Write the quarterly OKR plan."
+    inputs:
+      - "{artifact_dir}/competitive-analysis.md"
+      - "{artifact_dir}/metrics-review.md"
+    planner:
+      agent: strategist
+      operation: quarterly-planning
+    generator:
+      agent: strategist
+      operation: quarterly-planning
+    evaluator:
+      agent: exec-reviewer
+    contract:
+      deliverable: "{artifact_dir}/quarterly-plan.md"
+      guidance: "OKRs must be measurable and time-bound. Include resource allocation and key initiatives."
+      max_iterations: 3
+
+  - name: exec-approval
+    type: human_gate
+    prompt: "Review quarterly plan and OKRs. Approve to finalize."
+    artifacts:
+      - "{artifact_dir}/quarterly-plan.md"
+      - "{artifact_dir}/competitive-analysis.md"
+      - "{artifact_dir}/metrics-review.md"

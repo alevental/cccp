@@ -1,0 +1,41 @@
+name: business-case
+description: Build a business case for a new initiative.
+
+stages:
+  - name: market-research
+    type: agent
+    task: "Research the market opportunity for the proposed initiative."
+    agent: researcher
+    output: "{artifact_dir}/market-research.md"
+
+  - name: financial-analysis
+    type: agent
+    task: "Analyze the financial implications and produce a cost-benefit summary."
+    agent: analyst
+    output: "{artifact_dir}/financial-analysis.md"
+
+  - name: business-case
+    type: pge
+    task: "Write the business case for the initiative."
+    inputs:
+      - "{artifact_dir}/market-research.md"
+      - "{artifact_dir}/financial-analysis.md"
+    planner:
+      agent: strategist
+      operation: business-case
+    generator:
+      agent: strategist
+      operation: business-case
+    evaluator:
+      agent: exec-reviewer
+    contract:
+      deliverable: "{artifact_dir}/business-case.md"
+      guidance: "Must include problem statement, market opportunity, proposed solution, financial projections, risks, and recommendation."
+      max_iterations: 3
+
+  - name: exec-approval
+    type: human_gate
+    prompt: "Review the business case. Approve to proceed with the initiative."
+    artifacts:
+      - "{artifact_dir}/business-case.md"
+      - "{artifact_dir}/financial-analysis.md"

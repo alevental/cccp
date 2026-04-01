@@ -1,17 +1,26 @@
 {
-  "name": "cccp",
-  "version": "0.1.0",
+  "name": "@alevental/cccp",
+  "version": "0.2.0",
   "description": "Claude Code and Cmux Pipeline Reagent — deterministic YAML-based pipeline orchestration",
   "type": "module",
   "bin": {
-    "cccp": "./dist/cli.js"
+    "cccp": "dist/cli.js"
   },
+  "files": [
+    "dist",
+    "examples/*.yaml",
+    "examples/agents",
+    "examples/autoresearch-artifacts",
+    ".claude/skills",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
     "@inkjs/ui": "^2.0.0",

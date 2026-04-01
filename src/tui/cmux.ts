@@ -55,19 +55,30 @@ export async function notify(
   await cmux(...args);
 }
 
-/** Open a new split pane and return the surface ID. */
+/** Open a new split pane and return the surface ref (e.g., "surface:10"). */
 export async function newSplit(
   direction: "right" | "below" = "right",
 ): Promise<string> {
-  return cmux("new-split", direction);
+  const output = await cmux("new-split", direction);
+  // Parse "OK surface:N workspace:M" → "surface:N"
+  const match = output.match(/surface:\d+/);
+  return match?.[0] ?? "";
 }
 
-/** Send a command to a split pane surface. */
-export async function sendToSurface(
-  surfaceId: string,
-  command: string,
+/** Send text to a surface (does NOT press Enter). */
+export async function sendText(
+  surfaceRef: string,
+  text: string,
 ): Promise<void> {
-  await cmux("send-surface", "--surface", surfaceId, command);
+  await cmux("send", "--surface", surfaceRef, text);
+}
+
+/** Send a key press to a surface (e.g., "Enter", "Tab"). */
+export async function sendKey(
+  surfaceRef: string,
+  key: string,
+): Promise<void> {
+  await cmux("send-key", "--surface", surfaceRef, key);
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,25 @@
+name: prompt-tuning
+description: >
+  Autoresearch loop that tunes a summarization prompt until it produces output
+  matching a known-good expected result. Runs with unlimited iterations — the
+  loop continues until the evaluator returns PASS.
+
+stages:
+  - name: tune-summarization-prompt
+    type: autoresearch
+    task: >
+      Use the prompt artifact to summarize the source material.
+      Read the prompt at the artifact path, follow its instructions,
+      and apply them to the source material to produce a summary.
+    artifact: autoresearch-artifacts/prompt.md
+    ground_truth: autoresearch-artifacts/expected-output.md
+    output: "{artifact_dir}/actual-output.md"
+    inputs:
+      - autoresearch-artifacts/source-material.md
+    adjuster:
+      agent: prompt-tuner
+    executor:
+      agent: summarizer
+    evaluator:
+      agent: diff-evaluator
+    # No max_iterations — runs until PASS

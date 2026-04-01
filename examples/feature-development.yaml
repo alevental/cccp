@@ -1,0 +1,96 @@
+name: feature-development
+description: Full feature development cycle — spec, design, implement, test, ship.
+
+stages:
+  - name: product-spec
+    type: pge
+    task: "Write a product requirements document based on the feature brief."
+    inputs:
+      - "{artifact_dir}/feature-brief.md"
+    planner:
+      agent: product-manager
+      operation: spec-writing
+    generator:
+      agent: product-manager
+      operation: spec-writing
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/prd.md"
+      guidance: "Must include user stories, acceptance criteria, scope boundaries, success metrics, and dependencies."
+      max_iterations: 3
+
+  - name: spec-approval
+    type: human_gate
+    prompt: "Review the PRD. Approve to proceed to technical design."
+    artifacts:
+      - "{artifact_dir}/prd.md"
+
+  - name: technical-design
+    type: pge
+    task: "Design the technical architecture for this feature."
+    inputs:
+      - "{artifact_dir}/prd.md"
+    planner:
+      agent: architect
+      operation: design
+    generator:
+      agent: architect
+      operation: design
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/design.md"
+      guidance: "Architecture must address all PRD requirements. Include component diagram, API contracts, and data flow."
+      max_iterations: 3
+
+  - name: design-approval
+    type: human_gate
+    prompt: "Review the technical design. Approve to proceed to implementation."
+    artifacts:
+      - "{artifact_dir}/design.md"
+
+  - name: implementation
+    type: pge
+    task: "Implement the feature according to the design."
+    inputs:
+      - "{artifact_dir}/prd.md"
+      - "{artifact_dir}/design.md"
+    planner:
+      agent: architect
+      operation: task-planning
+    generator:
+      agent: implementer
+    evaluator:
+      agent: code-reviewer
+    contract:
+      deliverable: "{artifact_dir}/implementation-report.md"
+      guidance: "All PRD acceptance criteria must be met. Tests required for new code paths."
+      max_iterations: 5
+    on_fail: human_gate
+
+  - name: test-suite
+    type: pge
+    task: "Write comprehensive tests for the implemented feature."
+    inputs:
+      - "{artifact_dir}/design.md"
+      - "{artifact_dir}/implementation-report.md"
+    planner:
+      agent: qa-engineer
+      operation: test-planning
+    generator:
+      agent: qa-engineer
+      operation: test-authoring
+    evaluator:
+      agent: code-reviewer
+    contract:
+      deliverable: "{artifact_dir}/test-report.md"
+      guidance: "Critical paths must have coverage. Edge cases and error conditions must be tested."
+      max_iterations: 3
+
+  - name: ship-approval
+    type: human_gate
+    prompt: "Implementation and tests complete. Approve to ship."
+    artifacts:
+      - "{artifact_dir}/implementation-report.md"
+      - "{artifact_dir}/test-report.md"

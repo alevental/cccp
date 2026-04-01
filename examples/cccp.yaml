@@ -38,6 +38,9 @@ mcp_profiles:
         command: npx
         args: [-y, google-workspace-mcp]
 
+# Claude config directory for agent subprocesses.
+claude_config_dir: /Users/alevental/.claude-iceman713
+
 # Default artifact output directory pattern.
 artifact_dir: docs/projects/{project}/{pipeline_name}
 

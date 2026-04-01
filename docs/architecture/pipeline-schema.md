@@ -28,10 +28,11 @@ const StageSchema = z.discriminatedUnion("type", [
   AgentStageSchema,
   PgeStageSchema,
   HumanGateStageSchema,
+  AutoresearchStageSchema,
 ]);
 ```
 
-The `type` field is the discriminator. Valid values: `"agent"`, `"pge"`, `"human_gate"`.
+The `type` field is the discriminator. Valid values: `"agent"`, `"pge"`, `"human_gate"`, `"autoresearch"`.
 
 ### AgentStageSchema
 
@@ -39,6 +40,7 @@ The `type` field is the discriminator. Valid values: `"agent"`, `"pge"`, `"human
 const AgentStageSchema = z.object({
   name: z.string(),
   task: z.string().optional(),
+  task_file: z.string().optional(),
   type: z.literal("agent"),
   agent: z.string(),
   operation: z.string().optional(),
@@ -70,6 +72,7 @@ const PgeAgentConfigSchema = z.object({
 const PgeStageSchema = z.object({
   name: z.string(),
   task: z.string().optional(),
+  task_file: z.string().optional(),
   type: z.literal("pge"),
   plan: z.string().optional(),
   inputs: z.array(z.string()).optional(),
@@ -94,6 +97,7 @@ const PgeStageSchema = z.object({
 const HumanGateStageSchema = z.object({
   name: z.string(),
   task: z.string().optional(),
+  task_file: z.string().optional(),
   type: z.literal("human_gate"),
   mcp_profile: z.string().optional(),
   artifacts: z.array(z.string()).optional(),
@@ -129,6 +133,8 @@ export type Stage = AgentStage | PgeStage | HumanGateStage;
 export interface StageBase {
   name: string;
   task?: string;
+  /** Path to file containing task body (mutually exclusive with task). */
+  task_file?: string;
   /** Named MCP profile (resolved from project cccp.yaml). */
   mcp_profile?: string;
   /** Stage-level variable overrides. */
@@ -152,6 +158,7 @@ export interface AgentStage extends StageBase {
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `type` | `"agent"` | Yes | Stage type discriminator |
+| `task_file` | `string` | No | Path to file containing task (mutually exclusive with `task`) |
 | `agent` | `string` | Yes | Agent name or path |
 | `operation` | `string` | No | Operation for directory-style agents |
 | `inputs` | `string[]` | No | Input file paths (support variable interpolation) |

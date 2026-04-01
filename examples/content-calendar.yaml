@@ -1,0 +1,59 @@
+name: content-calendar
+description: Plan and produce a month of marketing content.
+
+stages:
+  - name: content-strategy
+    type: pge
+    task: "Create a content calendar for the upcoming month."
+    planner:
+      agent: marketer
+      operation: content
+    generator:
+      agent: marketer
+      operation: content
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/content-calendar.md"
+      guidance: "Must include 4 content pieces with topics, target audience, channel, and key messages."
+      max_iterations: 2
+
+  - name: calendar-approval
+    type: human_gate
+    prompt: "Review the content calendar. Approve to begin content production."
+    artifacts:
+      - "{artifact_dir}/content-calendar.md"
+
+  - name: article-1
+    type: pge
+    task: "Write the first article from the content calendar."
+    inputs:
+      - "{artifact_dir}/content-calendar.md"
+    planner:
+      agent: marketer
+      operation: content
+    generator:
+      agent: copywriter
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/article-1.md"
+      guidance: "Must align with content calendar brief. Engaging, clear, and SEO-aware."
+      max_iterations: 3
+
+  - name: article-2
+    type: pge
+    task: "Write the second article from the content calendar."
+    inputs:
+      - "{artifact_dir}/content-calendar.md"
+    planner:
+      agent: marketer
+      operation: content
+    generator:
+      agent: copywriter
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/article-2.md"
+      guidance: "Must align with content calendar brief. Engaging, clear, and SEO-aware."
+      max_iterations: 3

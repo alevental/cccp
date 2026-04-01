@@ -10,6 +10,7 @@ import type { Pipeline } from "./types.js";
 const AgentStageSchema = z.object({
   name: z.string(),
   task: z.string().optional(),
+  task_file: z.string().optional(),
   type: z.literal("agent"),
   agent: z.string(),
   operation: z.string().optional(),
@@ -31,6 +32,7 @@ const PgeAgentConfigSchema = z.object({
 const PgeStageSchema = z.object({
   name: z.string(),
   task: z.string().optional(),
+  task_file: z.string().optional(),
   type: z.literal("pge"),
   mcp_profile: z.string().optional(),
   plan: z.string().optional(),
@@ -48,9 +50,28 @@ const PgeStageSchema = z.object({
   variables: z.record(z.string()).optional(),
 });
 
+const AutoresearchStageSchema = z.object({
+  name: z.string(),
+  task: z.string().optional(),
+  task_file: z.string().optional(),
+  type: z.literal("autoresearch"),
+  mcp_profile: z.string().optional(),
+  artifact: z.string(),
+  ground_truth: z.string(),
+  output: z.string(),
+  inputs: z.array(z.string()).optional(),
+  adjuster: PgeAgentConfigSchema,
+  executor: PgeAgentConfigSchema,
+  evaluator: PgeAgentConfigSchema,
+  max_iterations: z.number().int().min(1).optional(),
+  on_fail: z.enum(["stop", "human_gate", "skip"]).optional(),
+  variables: z.record(z.string()).optional(),
+});
+
 const HumanGateStageSchema = z.object({
   name: z.string(),
   task: z.string().optional(),
+  task_file: z.string().optional(),
   type: z.literal("human_gate"),
   mcp_profile: z.string().optional(),
   artifacts: z.array(z.string()).optional(),
@@ -63,6 +84,7 @@ const StageSchema = z.discriminatedUnion("type", [
   AgentStageSchema,
   PgeStageSchema,
   HumanGateStageSchema,
+  AutoresearchStageSchema,
 ]);
 
 const PipelineSchema = z.object({
