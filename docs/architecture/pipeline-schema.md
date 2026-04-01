@@ -29,10 +29,11 @@ const StageSchema = z.discriminatedUnion("type", [
   PgeStageSchema,
   HumanGateStageSchema,
   AutoresearchStageSchema,
+  PipelineStageSchema,
 ]);
 ```
 
-The `type` field is the discriminator. Valid values: `"agent"`, `"pge"`, `"human_gate"`, `"autoresearch"`.
+The `type` field is the discriminator. Valid values: `"agent"`, `"pge"`, `"human_gate"`, `"autoresearch"`, `"pipeline"`.
 
 ### AgentStageSchema
 
@@ -107,6 +108,25 @@ const HumanGateStageSchema = z.object({
 });
 ```
 
+### AutoresearchStageSchema
+
+_See existing definition in source._
+
+### PipelineStageSchema
+
+```typescript
+const PipelineStageSchema = z.object({
+  name: z.string(),
+  task: z.string().optional(),
+  task_file: z.string().optional(),
+  type: z.literal("pipeline"),
+  file: z.string(),
+  artifact_dir: z.string().optional(),
+  on_fail: z.enum(["stop", "human_gate", "skip"]).optional(),
+  variables: z.record(z.string()).optional(),
+});
+```
+
 ## TypeScript Types
 
 ### Pipeline
@@ -124,7 +144,7 @@ export interface Pipeline {
 ### Stage (discriminated union)
 
 ```typescript
-export type Stage = AgentStage | PgeStage | HumanGateStage;
+export type Stage = AgentStage | PgeStage | HumanGateStage | AutoresearchStage | PipelineStage;
 ```
 
 ### StageBase (shared fields)
@@ -244,6 +264,24 @@ export interface HumanGateStage extends StageBase {
 | `artifacts` | `string[]` | No | File paths the reviewer should inspect |
 | `prompt` | `string` | No | Instructions for the reviewer |
 | `on_reject` | `"retry" \| "stop"` | No | Behavior on rejection (default: `"stop"`) |
+
+### PipelineStage
+
+```typescript
+export interface PipelineStage extends StageBase {
+  type: "pipeline";
+  file: string;
+  artifact_dir?: string;
+  on_fail?: EscalationStrategy;
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"pipeline"` | Yes | Stage type discriminator |
+| `file` | `string` | Yes | Path to sub-pipeline YAML |
+| `artifact_dir` | `string` | No | Override artifact directory for child |
+| `on_fail` | `EscalationStrategy` | No | Behavior on sub-pipeline failure (default: `"stop"`) |
 
 ### EscalationStrategy
 
@@ -367,6 +405,7 @@ export interface StageState {
   iteration?: number;        // PGE iteration (1-based)
   pgeStep?: PgeStep;         // Sub-step within PGE iteration
   artifacts?: Record<string, string>;
+  children?: PipelineState;
   durationMs?: number;
   error?: string;
 }

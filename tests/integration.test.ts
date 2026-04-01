@@ -458,3 +458,231 @@ stages:
     expect(dispatcher.calls).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Pipeline stage (sub-pipeline) tests
+// ---------------------------------------------------------------------------
+
+describe("Integration: pipeline stage (sub-pipeline)", () => {
+  it("executes a sub-pipeline inline", async () => {
+    const dir = tmpProjectDir();
+    await writeAgent(dir, "worker.md", "# Worker\nDo work.");
+
+    // Write sub-pipeline
+    const subDir = join(dir, "pipelines");
+    await mkdir(subDir, { recursive: true });
+    const subYaml = `
+name: sub-pipeline
+stages:
+  - name: sub-task
+    type: agent
+    agent: agents/worker.md
+    task: Do the sub-task
+    output: artifacts/sub-output.md
+`;
+    await writeFile(join(subDir, "sub.yaml"), subYaml, "utf-8");
+
+    // Write main pipeline referencing the sub-pipeline
+    const pipeline = await writePipeline(dir, `
+name: parent-pipeline
+stages:
+  - name: run-sub
+    type: pipeline
+    file: pipelines/sub.yaml
+`);
+
+    const dispatcher = new ScriptedDispatcher([
+      async (opts) => {
+        if (opts.expectedOutput) {
+          await mkdir(resolve(opts.expectedOutput, ".."), { recursive: true });
+          await writeFile(opts.expectedOutput, "# Sub output", "utf-8");
+        }
+        return { exitCode: 0, outputPath: opts.expectedOutput, outputExists: true, durationMs: 30 };
+      },
+    ]);
+
+    const ctx = buildTestContext({ projectDir: dir, pipeline, dispatcher });
+    const result = await runPipeline(ctx);
+
+    expect(result.status).toBe("passed");
+    expect(result.stages).toHaveLength(1);
+    expect(result.stages[0].stageName).toBe("run-sub");
+    expect(result.stages[0].status).toBe("passed");
+    expect(dispatcher.calls).toHaveLength(1);
+    expect(dispatcher.calls[0].userPrompt).toContain("Do the sub-task");
+  });
+
+  it("sub-pipeline failure propagates to parent", async () => {
+    const dir = tmpProjectDir();
+    await writeAgent(dir, "crasher.md", "# Crasher\nCrashes.");
+
+    const subDir = join(dir, "pipelines");
+    await mkdir(subDir, { recursive: true });
+    await writeFile(join(subDir, "crash-sub.yaml"), `
+name: crash-sub
+stages:
+  - name: crash-task
+    type: agent
+    agent: agents/crasher.md
+    task: This will crash
+`, "utf-8");
+
+    const pipeline = await writePipeline(dir, `
+name: parent-with-crash
+stages:
+  - name: run-crash
+    type: pipeline
+    file: pipelines/crash-sub.yaml
+`);
+
+    const dispatcher = new ScriptedDispatcher([
+      async () => ({ exitCode: 1, outputExists: false, durationMs: 10 }),
+    ]);
+
+    const ctx = buildTestContext({ projectDir: dir, pipeline, dispatcher });
+    const result = await runPipeline(ctx);
+
+    expect(result.status).toBe("failed");
+    expect(result.stages[0].status).toBe("failed");
+    expect(result.stages[0].error).toContain("crash-sub");
+  });
+
+  it("on_fail: skip allows parent to continue", async () => {
+    const dir = tmpProjectDir();
+    await writeAgent(dir, "crasher.md", "# Crasher");
+    await writeAgent(dir, "writer.md", "# Writer");
+
+    const subDir = join(dir, "pipelines");
+    await mkdir(subDir, { recursive: true });
+    await writeFile(join(subDir, "fail-sub.yaml"), `
+name: fail-sub
+stages:
+  - name: fail-task
+    type: agent
+    agent: agents/crasher.md
+    task: This will fail
+`, "utf-8");
+
+    const pipeline = await writePipeline(dir, `
+name: skip-on-fail
+stages:
+  - name: may-fail
+    type: pipeline
+    file: pipelines/fail-sub.yaml
+    on_fail: skip
+  - name: after-fail
+    type: agent
+    agent: agents/writer.md
+    task: This should still run
+    output: artifacts/after.md
+`);
+
+    const dispatcher = new ScriptedDispatcher([
+      // Sub-pipeline agent crashes
+      async () => ({ exitCode: 1, outputExists: false, durationMs: 10 }),
+      // After-fail agent succeeds
+      async (opts) => {
+        if (opts.expectedOutput) {
+          await mkdir(resolve(opts.expectedOutput, ".."), { recursive: true });
+          await writeFile(opts.expectedOutput, "# After", "utf-8");
+        }
+        return { exitCode: 0, outputPath: opts.expectedOutput, outputExists: true, durationMs: 20 };
+      },
+    ]);
+
+    const ctx = buildTestContext({ projectDir: dir, pipeline, dispatcher });
+    const result = await runPipeline(ctx);
+
+    expect(result.status).toBe("passed");
+    expect(result.stages).toHaveLength(2);
+    expect(result.stages[0].status).toBe("skipped");
+    expect(result.stages[1].status).toBe("passed");
+    expect(dispatcher.calls).toHaveLength(2);
+  });
+
+  it("detects circular pipeline dependencies", async () => {
+    const dir = tmpProjectDir();
+
+    // Pipeline A references pipeline B, B references A
+    const subDir = join(dir, "pipelines");
+    await mkdir(subDir, { recursive: true });
+    await writeFile(join(subDir, "a.yaml"), `
+name: pipeline-a
+stages:
+  - name: call-b
+    type: pipeline
+    file: pipelines/b.yaml
+`, "utf-8");
+    await writeFile(join(subDir, "b.yaml"), `
+name: pipeline-b
+stages:
+  - name: call-a
+    type: pipeline
+    file: pipelines/a.yaml
+`, "utf-8");
+
+    // Main references A
+    const pipeline = await writePipeline(dir, `
+name: cycle-test
+stages:
+  - name: start
+    type: pipeline
+    file: pipelines/a.yaml
+`);
+
+    const dispatcher = new ScriptedDispatcher([]);
+    const ctx = buildTestContext({ projectDir: dir, pipeline, dispatcher });
+    const result = await runPipeline(ctx);
+
+    // Circular dependency causes the nested sub-pipeline to error, which propagates as failed.
+    expect(result.status).toBe("failed");
+    expect(result.stages[0].status).toBe("failed");
+    expect(result.stages[0].error).toContain("pipeline-a");
+  });
+
+  it("passes variables to sub-pipeline explicitly", async () => {
+    const dir = tmpProjectDir();
+    await writeAgent(dir, "worker.md", "# Worker");
+
+    const subDir = join(dir, "pipelines");
+    await mkdir(subDir, { recursive: true });
+    await writeFile(join(subDir, "var-sub.yaml"), `
+name: var-sub
+variables:
+  tag: default
+stages:
+  - name: greet
+    type: agent
+    agent: agents/worker.md
+    task: Write the output
+    output: "{artifact_dir}/{tag}/greet.md"
+`, "utf-8");
+
+    const pipeline = await writePipeline(dir, `
+name: var-parent
+stages:
+  - name: run-with-vars
+    type: pipeline
+    file: pipelines/var-sub.yaml
+    variables:
+      tag: from-parent
+`);
+
+    const dispatcher = new ScriptedDispatcher([
+      async (opts) => {
+        if (opts.expectedOutput) {
+          await mkdir(resolve(opts.expectedOutput, ".."), { recursive: true });
+          await writeFile(opts.expectedOutput, "# Greeting", "utf-8");
+        }
+        return { exitCode: 0, outputPath: opts.expectedOutput, outputExists: true, durationMs: 20 };
+      },
+    ]);
+
+    const ctx = buildTestContext({ projectDir: dir, pipeline, dispatcher });
+    const result = await runPipeline(ctx);
+
+    expect(result.status).toBe("passed");
+    // The variable override should appear in the resolved output path
+    expect(dispatcher.calls[0].expectedOutput).toContain("from-parent");
+  });
+});

@@ -15,7 +15,7 @@ export interface Pipeline {
 }
 
 /** A single stage in a pipeline. Discriminated on `type`. */
-export type Stage = AgentStage | PgeStage | HumanGateStage | AutoresearchStage;
+export type Stage = AgentStage | PgeStage | HumanGateStage | AutoresearchStage | PipelineStage;
 
 /** Base fields shared by every stage type. */
 export interface StageBase {
@@ -115,6 +115,17 @@ export interface AutoresearchStage extends StageBase {
   on_fail?: EscalationStrategy;
 }
 
+/** Sub-pipeline stage — invokes another pipeline YAML inline. */
+export interface PipelineStage extends StageBase {
+  type: "pipeline";
+  /** Path to the sub-pipeline YAML file (supports variable interpolation). */
+  file: string;
+  /** Override artifact directory for the sub-pipeline. */
+  artifact_dir?: string;
+  /** What to do if the sub-pipeline fails. */
+  on_fail?: EscalationStrategy;
+}
+
 export type EscalationStrategy = "stop" | "human_gate" | "skip";
 
 // ---------------------------------------------------------------------------
@@ -156,6 +167,8 @@ export interface StageState {
   durationMs?: number;
   /** Error message if status is error/failed. */
   error?: string;
+  /** Nested pipeline state for type: pipeline stages. */
+  children?: PipelineState;
 }
 
 export interface GateInfo {
@@ -256,6 +269,8 @@ export interface RunContext {
   dispatcher?: import("./dispatcher.js").AgentDispatcher;
   /** Tracks temp files for cleanup. */
   tempTracker?: import("./temp-tracker.js").TempFileTracker;
+  /** Pipeline file paths visited in the current execution chain (cycle detection). */
+  visitedPipelines?: Set<string>;
 }
 
 /** Result of dispatching a single agent. */

@@ -104,6 +104,13 @@ stages:
       max_iterations: 3
     on_fail: stop              # stop | skip | human_gate
 
+  # Sub-pipeline composition
+  - name: documentation
+    type: pipeline
+    file: pipelines/build-docs.yaml
+    variables:
+      source: "{artifact_dir}/design.md"
+
   # Human approval gate
   - name: approval
     type: human_gate
@@ -119,6 +126,7 @@ stages:
 | `agent` | Dispatch one agent, collect output |
 | `pge` | Dispatch planner -> evaluator writes contract -> dispatch generator -> dispatch evaluator -> parse `### Overall: PASS/FAIL` -> retry generator/evaluator on FAIL up to `max_iterations` |
 | `autoresearch` | Iterative artifact optimization — adjust artifact, execute task, evaluate against ground truth, retry on FAIL |
+| `pipeline` | Invoke another pipeline YAML as a sub-pipeline — runs inline, shares the parent run lifecycle |
 | `human_gate` | Block until approved via MCP tool call or state file edit |
 
 ### Variables

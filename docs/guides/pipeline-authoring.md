@@ -59,7 +59,7 @@ All stages share these base fields:
 | `name` | `string` | Yes | Unique stage identifier |
 | `task` | `string` | No | Task instruction for the agent |
 | `task_file` | `string` | No | Path to file containing task (mutually exclusive with `task`) |
-| `type` | `"agent" \| "pge" \| "autoresearch" \| "human_gate"` | Yes | Stage discriminator |
+| `type` | `"agent" \| "pge" \| "autoresearch" \| "pipeline" \| "human_gate"` | Yes | Stage discriminator |
 | `mcp_profile` | `string` | No | Named MCP profile from `cccp.yaml` |
 | `variables` | `Record<string, string>` | No | Stage-level variable overrides |
 
@@ -213,6 +213,37 @@ Blocks the pipeline until a human approves or rejects.
 
 Gate responses come through the MCP server (`cccp_gate_respond` tool) or direct database update. See [Gate System](../architecture/gate-system.md).
 
+---
+
+### `pipeline` -- Sub-Pipeline Composition
+
+Invokes another pipeline YAML as a sub-pipeline. The sub-pipeline runs inline within the parent, shares the same run lifecycle, and its stages appear in the TUI and state tree. This enables composing reusable pipeline fragments without copy-pasting stages.
+
+```yaml
+- name: documentation
+  type: pipeline
+  task: "Build project documentation from research output."
+  file: pipelines/build-docs.yaml
+  artifact_dir: "{artifact_dir}/docs"    # Optional: scope child artifacts
+  on_fail: human_gate                     # Optional: stop | human_gate | skip
+  variables:                              # Optional: passed to sub-pipeline
+    source: "{artifact_dir}/research.md"
+    format: markdown
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `file` | `string` | Yes | Path to the sub-pipeline YAML file |
+| `artifact_dir` | `string` | No | Override artifact directory for the child pipeline (defaults to parent's) |
+| `on_fail` | `EscalationStrategy` | No | Behavior on sub-pipeline failure (default: `"stop"`) |
+| `variables` | `Record<string, string>` | No | Variables passed to the sub-pipeline |
+
+**Variable isolation:** The sub-pipeline does **not** inherit parent variables implicitly. Only variables explicitly listed in the `variables` field are passed. Built-in variables (`{project}`, `{project_dir}`, `{artifact_dir}`, `{pipeline_name}`) are recomputed for the sub-pipeline context.
+
+**Cycle detection:** Pipeline nesting is limited to a maximum depth of 5. If a sub-pipeline references itself (directly or transitively), CCCP detects the cycle and fails with an error before execution. The runner tracks visited pipeline file paths to prevent infinite recursion.
+
+**State model:** The sub-pipeline's state is stored as a nested `PipelineState` inside the parent's `StageState` (the `children` field). This keeps the sub-pipeline self-contained and enables recursive resume.
+
 ## Complete Example: Cross-Functional Pipeline
 
 This example (from `product-launch.yaml`) shows a cross-functional pipeline spanning research, marketing, and content creation:
@@ -350,7 +381,7 @@ Pipeline validation failed for pipelines/build-docs.yaml:
 
 The schema enforces:
 - At least one stage
-- Valid `type` discriminator (`agent`, `pge`, `human_gate`)
+- Valid `type` discriminator (`agent`, `pge`, `autoresearch`, `pipeline`, `human_gate`)
 - PGE stages must have `planner`, `generator`, and `evaluator`
 - `max_iterations` between 1 and 10
 - `on_fail` must be one of `stop`, `human_gate`, `skip`

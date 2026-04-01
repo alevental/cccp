@@ -17,7 +17,7 @@ variables:                      # Optional. Default variables for all stages.
   key: "value"
 stages:                         # Required. At least one stage.
   - name: string                # Required. Unique stage identifier.
-    type: agent | pge | autoresearch | human_gate
+    type: agent | pge | autoresearch | pipeline | human_gate
     # ... stage-specific fields
 ```
 
@@ -189,6 +189,36 @@ Pause pipeline for human approval.
 | `on_reject` | string | No | `"stop"` (default) or `"retry"` |
 
 In `--headless` mode, all gates are auto-approved.
+
+## Stage Type: `pipeline`
+
+Sub-pipeline composition. Invokes another pipeline YAML inline within the parent.
+
+```yaml
+- name: run-docs
+  type: pipeline
+  file: pipelines/build-docs.yaml        # Required. Path to sub-pipeline YAML.
+  variables:                              # Optional. Explicit variables for the child.
+    source: "{artifact_dir}/research.md"
+  artifact_dir: "{artifact_dir}/docs"     # Optional. Override artifact dir for child.
+  on_fail: skip                           # Optional. Default: "stop".
+```
+
+| Field | Type | Required | Constraints | Description |
+|-------|------|----------|-------------|-------------|
+| `file` | string | Yes | - | Path to sub-pipeline YAML (resolved relative to parent pipeline dir, supports variable interpolation) |
+| `variables` | map | No | - | Variables passed to sub-pipeline (child does NOT inherit parent's custom vars) |
+| `artifact_dir` | string | No | - | Override artifact directory for the child pipeline |
+| `on_fail` | string | No | stop/human_gate/skip | Behavior if sub-pipeline fails |
+
+### Pipeline Composition Mechanics
+
+- Sub-pipeline runs inline — its stages execute sequentially as part of the parent run
+- Child state is nested inside parent's stage state (not a separate run)
+- Variables are **explicit pass-through only**: child gets built-in vars (`{project}`, `{project_dir}`, `{artifact_dir}`, `{pipeline_name}`) recomputed for its context, plus any `variables` explicitly passed
+- Circular dependencies are detected (max depth 5) and cause the stage to error
+- Resume works across pipeline boundaries
+- `on_fail` strategies work the same as PGE/autoresearch stages
 
 ## Variables
 
@@ -460,6 +490,41 @@ stages:
     # No max_iterations — runs until PASS
 ```
 
+### Example 4: Pipeline Composition (Sub-Pipelines)
+
+Master pipeline that delegates to reusable sub-pipelines.
+
+```yaml
+name: full-build
+description: Master build — research, then delegate docs and tests to sub-pipelines.
+
+stages:
+  - name: research
+    type: agent
+    task: "Research the project and produce a summary."
+    agent: researcher
+    output: "{artifact_dir}/research.md"
+
+  - name: documentation
+    type: pipeline
+    file: pipelines/build-docs.yaml
+    variables:
+      source: "{artifact_dir}/research.md"
+    on_fail: human_gate
+
+  - name: test-suite
+    type: pipeline
+    file: pipelines/run-tests.yaml
+    artifact_dir: "{artifact_dir}/tests"
+    on_fail: skip
+
+  - name: ship-approval
+    type: human_gate
+    prompt: "Docs and tests complete. Approve to ship."
+    artifacts:
+      - "{artifact_dir}/research.md"
+```
+
 ## Patterns
 
 ### Input Chaining
@@ -550,6 +615,43 @@ For complex tasks that don't fit inline in YAML:
 ```
 
 The path is interpolated with variables before reading.
+
+### Sub-Pipeline Composition
+
+Break large pipelines into reusable pieces:
+
+```yaml
+# pipelines/sprint.yaml — reusable sprint execution
+name: sprint-execution
+stages:
+  - name: implement
+    type: pge
+    plan: "{artifact_dir}/brief.md"
+    planner:
+      agent: architect
+      operation: task-planning
+    generator:
+      agent: implementer
+    evaluator:
+      agent: code-reviewer
+    contract:
+      deliverable: "{artifact_dir}/sprint-complete.md"
+      max_iterations: 5
+
+# pipelines/master.yaml — composes sprint pipelines
+name: master-plan
+stages:
+  - name: plan
+    type: agent
+    agent: architect
+    operation: sprint-brief
+    output: "{artifact_dir}/brief.md"
+  - name: execute
+    type: pipeline
+    file: pipelines/sprint.yaml
+```
+
+Child pipelines share `{project}` and `{project_dir}` but get their own `{pipeline_name}` and optionally scoped `{artifact_dir}`.
 
 ## Validation
 

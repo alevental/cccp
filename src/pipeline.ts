@@ -80,11 +80,23 @@ const HumanGateStageSchema = z.object({
   variables: z.record(z.string()).optional(),
 });
 
+const PipelineStageSchema = z.object({
+  name: z.string(),
+  task: z.string().optional(),
+  task_file: z.string().optional(),
+  type: z.literal("pipeline"),
+  file: z.string(),
+  artifact_dir: z.string().optional(),
+  on_fail: z.enum(["stop", "human_gate", "skip"]).optional(),
+  variables: z.record(z.string()).optional(),
+});
+
 const StageSchema = z.discriminatedUnion("type", [
   AgentStageSchema,
   PgeStageSchema,
   HumanGateStageSchema,
   AutoresearchStageSchema,
+  PipelineStageSchema,
 ]);
 
 const PipelineSchema = z.object({

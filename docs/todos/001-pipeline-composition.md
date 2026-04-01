@@ -1,10 +1,10 @@
 # TODO-001: Pipeline Composition — Sub-Pipeline Stages
 
-**Status:** open
+**Status:** done
 **Priority:** medium
 **Type:** feature
 **Created:** 2026-03-27
-**Updated:** 2026-03-27
+**Updated:** 2026-04-01
 
 ## Context
 
@@ -53,22 +53,22 @@ The main complexity is in the **state model** and the consumers that read it.
 
 ### Implementation
 
-- [ ] Add `PipelineStage` interface to `src/types.ts`, add to `Stage` union
-- [ ] Add `children?: PipelineState` to `StageState`
-- [ ] Add `PipelineStageSchema` to Zod discriminated union in `src/pipeline.ts`
-- [ ] Add `visitedPipelines?: Set<string>` to `RunContext` in `src/types.ts`
-- [ ] Implement `runPipelineStage()` in `src/runner.ts` — load sub-pipeline, build child context, call `runPipeline()` recursively, map result
-- [ ] Add cycle detection check before recursive call
-- [ ] Update `findResumePoint()` in `src/state.ts` to walk nested state tree
-- [ ] Update TUI `StageList` in `src/tui/components.tsx` for recursive rendering with indentation
-- [ ] Update MCP tools (status, artifacts) in `src/mcp/mcp-server.ts` to walk nested state
-- [ ] Add tests: happy path, resume across boundary, cycle detection, variable isolation, dry-run
+- [x] Add `PipelineStage` interface to `src/types.ts`, add to `Stage` union
+- [x] Add `children?: PipelineState` to `StageState`
+- [x] Add `PipelineStageSchema` to Zod discriminated union in `src/pipeline.ts`
+- [x] Add `visitedPipelines?: Set<string>` to `RunContext` in `src/types.ts`
+- [x] Implement `runPipelineStage()` in `src/runner.ts` — load sub-pipeline, build child context, call `runPipeline()` recursively, map result
+- [x] Add cycle detection check before recursive call
+- [x] Update `findResumePoint()` in `src/state.ts` to walk nested state tree
+- [x] Update TUI `StageList` in `src/tui/components.tsx` for recursive rendering with indentation
+- [x] Update MCP tools (status, artifacts) in `src/mcp/mcp-server.ts` to walk nested state
+- [x] Add tests: happy path, resume across boundary, cycle detection, variable isolation, dry-run
 
-### Open questions
+### Open questions (resolved)
 
-- [ ] Should `on_fail` be supported on pipeline stages? (e.g., if the sub-pipeline fails, skip/gate/stop)
-- [ ] Should the sub-pipeline's gate stages use the parent's gate strategy, or can it be overridden?
-- [ ] What happens if a sub-pipeline is resumed standalone (`cccp resume`) vs as part of the parent?
+- [x] Should `on_fail` be supported on pipeline stages? **YES** — supported, same as PGE/autoresearch (`stop`, `human_gate`, `skip`)
+- [x] Should the sub-pipeline's gate stages use the parent's gate strategy, or can it be overridden? **Inherited from parent** — the sub-pipeline uses the parent's gate strategy
+- [x] What happens if a sub-pipeline is resumed standalone (`cccp resume`) vs as part of the parent? **Not supported** — child state is embedded in the parent's `StageState.children`, so standalone resume of a sub-pipeline is not possible; resume the parent instead
 
 ## References
 

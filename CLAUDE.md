@@ -28,7 +28,7 @@ npx @alevental/cccp examples              # scaffold all agents + example pipeli
 
 - **Pipeline YAML** → Zod-validated into typed `Pipeline` objects (`src/pipeline.ts`)
 - **Types**: all domain types in `src/types.ts` (Pipeline, Stage, RunContext, PipelineState, StageState, etc.)
-- **Stage types**: `agent` (single dispatch), `pge` (Plan-Generate-Evaluate cycle with retry), `autoresearch` (iterative artifact optimization), `human_gate` (approval gate)
+- **Stage types**: `agent` (single dispatch), `pge` (Plan-Generate-Evaluate cycle with retry), `autoresearch` (iterative artifact optimization), `pipeline` (sub-pipeline composition), `human_gate` (approval gate)
 - **Agent dispatch**: injectable `AgentDispatcher` interface (`src/dispatcher.ts`); default spawns `claude -p --output-format stream-json` (`src/agent.ts`)
 - **PGE cycle**: planner -> evaluator (contract mode) -> generator -> evaluator (evaluation mode) -> regex parse `### Overall: PASS/FAIL` -> route (`src/pge.ts`, `src/evaluator.ts`). Planner and contract run once; generator/evaluator loop retries on FAIL. State passed by reference with `onProgress` callback.
 - **State**: SQLite at `.cccp/cccp.db` via sql.js, atomic flush, stage-level + PGE-iteration-level resume (`src/state.ts`, `src/db.ts`)

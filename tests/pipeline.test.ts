@@ -454,4 +454,39 @@ stages:
       expect(stage.evaluator.inputs).toEqual(["docs/review-checklist.md"]);
     }
   });
+
+  it("accepts a pipeline stage with file and variables", async () => {
+    const file = await writeTmpYaml(`
+name: composition-test
+stages:
+  - name: run-sub
+    type: pipeline
+    file: pipelines/sub-pipeline.yaml
+    variables:
+      sprint: "3"
+    artifact_dir: "{artifact_dir}/sub"
+    on_fail: skip
+`);
+
+    const pipeline = await loadPipeline(file);
+    const stage = pipeline.stages[0];
+    expect(stage.type).toBe("pipeline");
+    if (stage.type === "pipeline") {
+      expect(stage.file).toBe("pipelines/sub-pipeline.yaml");
+      expect(stage.variables).toEqual({ sprint: "3" });
+      expect(stage.artifact_dir).toBe("{artifact_dir}/sub");
+      expect(stage.on_fail).toBe("skip");
+    }
+  });
+
+  it("rejects a pipeline stage without file", async () => {
+    const file = await writeTmpYaml(`
+name: bad-pipeline-stage
+stages:
+  - name: missing-file
+    type: pipeline
+`);
+
+    await expect(loadPipeline(file)).rejects.toThrow(/Pipeline validation failed/);
+  });
 });
