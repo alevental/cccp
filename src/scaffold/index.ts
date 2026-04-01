@@ -124,6 +124,39 @@ async function scaffoldSkills(targetDir: string): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------
+// MCP server registration
+// ---------------------------------------------------------------------------
+
+/**
+ * Ensure the cccp MCP server is registered in `.mcp.json`.
+ * Creates the file if it doesn't exist. Adds the entry if missing.
+ * Returns true if the file was created or modified.
+ */
+async function ensureMcpServer(dir: string): Promise<boolean> {
+  const mcpPath = resolve(dir, ".mcp.json");
+  const entry = { command: "npx", args: ["@alevental/cccp", "mcp-server"] };
+
+  let config: Record<string, unknown>;
+  try {
+    const raw = await readFile(mcpPath, "utf-8");
+    config = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    config = {};
+  }
+
+  if (!config.mcpServers || typeof config.mcpServers !== "object") {
+    config.mcpServers = {};
+  }
+
+  const servers = config.mcpServers as Record<string, unknown>;
+  if (servers.cccp) return false; // already registered
+
+  servers.cccp = entry;
+  await writeFile(mcpPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // cccp init — minimal scaffold
 // ---------------------------------------------------------------------------
 
@@ -152,6 +185,9 @@ export async function scaffoldProject(dir: string): Promise<void> {
   // Skills
   const skillCount = await scaffoldSkills(dir);
 
+  // MCP server registration
+  const mcpUpdated = await ensureMcpServer(dir);
+
   console.log(`Scaffolded CCCP project in ${dir}:\n`);
   console.log(`  cccp.yaml                               — project configuration`);
   console.log(`  pipelines/example.yaml                   — example pipeline\n`);
@@ -162,6 +198,9 @@ export async function scaffoldProject(dir: string): Promise<void> {
   if (skillCount > 0) {
     console.log(`  .claude/skills/cccp-run/SKILL.md         — /cccp-run skill`);
     console.log(`  .claude/skills/cccp-pipeline/SKILL.md    — /cccp-pipeline skill\n`);
+  }
+  if (mcpUpdated) {
+    console.log(`  .mcp.json                                — MCP server (cccp) registered\n`);
   }
   console.log(`Run with: npx @alevental/cccp run -f pipelines/example.yaml -p my-project --dry-run`);
   console.log(`\nFor all agents and example pipelines: npx @alevental/cccp examples`);

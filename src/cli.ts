@@ -14,7 +14,7 @@ program
   .description(
     "Claude Code and Cmux Pipeline Reagent — deterministic YAML-based pipeline orchestration",
   )
-  .version("0.2.0");
+  .version("0.2.1");
 
 program
   .command("run")
