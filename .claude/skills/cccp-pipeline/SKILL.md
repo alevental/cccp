@@ -658,7 +658,7 @@ Child pipelines share `{project}` and `{project_dir}` but get their own `{pipeli
 Dry-run to verify a pipeline without executing:
 
 ```bash
-npx @alevental/cccp run -f pipeline.yaml -p test --dry-run
+npx @alevental/cccp@latest run -f pipeline.yaml -p test --dry-run
 ```
 
 This shows all assembled prompts, resolved agent paths, and interpolated variables without dispatching any agents.

@@ -6,14 +6,14 @@ allowed-tools: Bash(npx:*), mcp__cccp__*
 
 # Running CCCP Pipelines
 
-All commands use `npx @alevental/cccp` — no global install required.
+All commands use `npx @alevental/cccp@latest` — no global install required.
 
 ## CLI Commands
 
 ### `run` — Execute a pipeline
 
 ```bash
-npx @alevental/cccp run -f <pipeline.yaml> -p <project> [options]
+npx @alevental/cccp@latest run -f <pipeline.yaml> -p <project> [options]
 ```
 
 | Flag | Required | Description |
@@ -27,19 +27,19 @@ npx @alevental/cccp run -f <pipeline.yaml> -p <project> [options]
 | `-v, --var <key=value>` | No | Set pipeline variable (repeatable) |
 
 **Recommended workflow:**
-1. Dry-run first: `npx @alevental/cccp run -f pipeline.yaml -p myproject --dry-run`
-2. Full run: `npx @alevental/cccp run -f pipeline.yaml -p myproject`
-3. Headless (CI): `npx @alevental/cccp run -f pipeline.yaml -p myproject --headless`
+1. Dry-run first: `npx @alevental/cccp@latest run -f pipeline.yaml -p myproject --dry-run`
+2. Full run: `npx @alevental/cccp@latest run -f pipeline.yaml -p myproject`
+3. Headless (CI): `npx @alevental/cccp@latest run -f pipeline.yaml -p myproject --headless`
 
 **Variables:** Override pipeline defaults from CLI:
 ```bash
-npx @alevental/cccp run -f sprint.yaml -p app -v sprint=3 -v env=staging
+npx @alevental/cccp@latest run -f sprint.yaml -p app -v sprint=3 -v env=staging
 ```
 
 ### `resume` — Resume an interrupted run
 
 ```bash
-npx @alevental/cccp resume -p <project> -r <run-id-prefix> [options]
+npx @alevental/cccp@latest resume -p <project> -r <run-id-prefix> [options]
 ```
 
 | Flag | Required | Description |
@@ -54,7 +54,7 @@ Skips completed stages and resumes from the first incomplete stage. For PGE stag
 ### `dashboard` — Monitor a run
 
 ```bash
-npx @alevental/cccp dashboard -r <run-id-prefix> [-d <project-dir>]
+npx @alevental/cccp@latest dashboard -r <run-id-prefix> [-d <project-dir>]
 ```
 
 Launches a standalone TUI dashboard. Can run in a separate terminal or cmux pane while the pipeline executes.
@@ -62,7 +62,7 @@ Launches a standalone TUI dashboard. Can run in a separate terminal or cmux pane
 ### `mcp-server` — Start the MCP server
 
 ```bash
-npx @alevental/cccp mcp-server
+npx @alevental/cccp@latest mcp-server
 ```
 
 Exposes five tools over stdio: `cccp_runs`, `cccp_status`, `cccp_gate_respond`, `cccp_logs`, `cccp_artifacts`.
@@ -73,7 +73,7 @@ Register in `.mcp.json`:
   "mcpServers": {
     "cccp": {
       "command": "npx",
-      "args": ["@alevental/cccp", "mcp-server"]
+      "args": ["@alevental/cccp@latest", "mcp-server"]
     }
   }
 }
@@ -82,13 +82,13 @@ Register in `.mcp.json`:
 ### `init` — Scaffold a new project
 
 ```bash
-npx @alevental/cccp init [-d <dir>]
+npx @alevental/cccp@latest init [-d <dir>]
 ```
 
 ### `examples` — Scaffold all agents and example pipelines
 
 ```bash
-npx @alevental/cccp examples [-d <dir>] [--agents-only] [--pipelines-only]
+npx @alevental/cccp@latest examples [-d <dir>] [--agents-only] [--pipelines-only]
 ```
 
 ## Gate Interaction
@@ -114,7 +114,7 @@ When running inside a cmux workspace (`CMUX_WORKSPACE_ID` is set), CCCP automati
 cmux new-split right          # Returns surface:N
 
 # Send a dashboard command to the new pane
-cmux send --surface surface:1 "npx @alevental/cccp dashboard -r abc12345"
+cmux send --surface surface:1 "npx @alevental/cccp@latest dashboard -r abc12345"
 cmux send-key --surface surface:1 Enter
 
 # Check status from sidebar
