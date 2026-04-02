@@ -95,7 +95,8 @@ function packageSkillsDir(): string {
 /**
  * Copy skill directories from the package into the target project.
  * Each skill is a directory with a SKILL.md file.
- * Returns the number of skills written.
+ * Skills are always overwritten — they are package-owned, not user-customized.
+ * Returns the number of skills written or updated.
  */
 async function scaffoldSkills(targetDir: string): Promise<number> {
   const srcSkillsDir = packageSkillsDir();
@@ -113,7 +114,10 @@ async function scaffoldSkills(targetDir: string): Promise<number> {
       const destSkillDir = resolve(destSkillsDir, skillName);
       await mkdir(destSkillDir, { recursive: true });
       const content = await readFile(srcSkillFile, "utf-8");
-      if (await writeIfMissing(resolve(destSkillDir, "SKILL.md"), content)) count++;
+      const destPath = resolve(destSkillDir, "SKILL.md");
+      // Always overwrite skills — they ship with the package and should stay current.
+      await writeFile(destPath, content, "utf-8");
+      count++;
     }
   } catch {
     // .claude/skills/ may not exist in all installations
