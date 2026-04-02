@@ -98,7 +98,7 @@ function packageSkillsDir(): string {
  * Skills are always overwritten — they are package-owned, not user-customized.
  * Returns the number of skills written or updated.
  */
-async function scaffoldSkills(targetDir: string): Promise<number> {
+export async function scaffoldSkills(targetDir: string): Promise<number> {
   const srcSkillsDir = packageSkillsDir();
   const destSkillsDir = resolve(targetDir, ".claude", "skills");
   let count = 0;
@@ -170,8 +170,8 @@ async function ensureMcpServer(dir: string): Promise<boolean> {
 export async function scaffoldProject(dir: string): Promise<void> {
   await mkdir(dir, { recursive: true });
 
-  // Config
-  await writeFile(resolve(dir, "cccp.yaml"), cccpYaml, "utf-8");
+  // Config (write only if missing — user may have customized it)
+  await writeIfMissing(resolve(dir, "cccp.yaml"), cccpYaml);
 
   // Skills
   const skillCount = await scaffoldSkills(dir);

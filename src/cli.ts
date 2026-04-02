@@ -208,6 +208,21 @@ program
   });
 
 program
+  .command("update-skills")
+  .description("Update /cccp-run and /cccp-pipeline skills to the latest version")
+  .option("-d, --dir <path>", "Project directory (defaults to cwd)")
+  .action(async (opts) => {
+    const dir = resolve(opts.dir ?? process.cwd());
+    const { scaffoldSkills } = await import("./scaffold/index.js");
+    const count = await scaffoldSkills(dir);
+    if (count > 0) {
+      console.log(`Updated ${count} skill(s) in .claude/skills/`);
+    } else {
+      console.log("No skills to update.");
+    }
+  });
+
+program
   .command("examples")
   .description("Scaffold the full set of template agents and example pipelines")
   .option("-d, --dir <path>", "Directory to scaffold in (defaults to cwd)")
