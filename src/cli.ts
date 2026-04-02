@@ -24,7 +24,7 @@ program
   .description(
     "Claude Code and Cmux Pipeline Reagent — deterministic YAML-based pipeline orchestration",
   )
-  .version("0.5.3");
+  .version("0.5.4");
 
 program
   .command("run")
@@ -132,6 +132,10 @@ program
   )
   .option("--headless", "Auto-approve all gates")
   .option(
+    "--session-id <id>",
+    "MCP session ID for gate notification routing",
+  )
+  .option(
     "--from <stage>",
     "Clean-reset and resume from this named stage (resets it and all subsequent stages)",
   )
@@ -145,6 +149,11 @@ program
     if (!existingState) {
       console.error(`No run matching "${opts.run}". Use \`cccp runs\` to list available runs.`);
       process.exit(1);
+    }
+
+    // --- Update session affinity for gate notifications ---
+    if (opts.sessionId) {
+      existingState.sessionId = opts.sessionId;
     }
 
     // --- Clean reset from a named stage ---
@@ -178,6 +187,7 @@ program
       projectConfig,
       headless: opts.headless,
       showTui,
+      sessionId: opts.sessionId,
     });
 
     if (showTui) {

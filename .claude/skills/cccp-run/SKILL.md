@@ -58,6 +58,7 @@ npx @alevental/cccp@latest resume -p <project> -r <run-id-prefix> [options]
 | `-r, --run <id-prefix>` | Yes | Run ID or prefix (8+ characters) |
 | `-d, --project-dir <path>` | No | Project directory (default: cwd) |
 | `--headless` | No | Auto-approve all gates |
+| `--session-id <id>` | No | MCP session ID for gate notification routing (updates the run's session affinity) |
 | `--from <stage>` | No | Clean-reset and resume from this named stage |
 
 Without `--from`: skips completed stages and resumes from the first incomplete stage. For PGE stages, resumes at the correct iteration and sub-step.

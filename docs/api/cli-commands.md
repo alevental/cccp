@@ -111,6 +111,7 @@ npx @alevental/cccp resume -p <name> -r <run-id-prefix> [options]
 |------|-------------|
 | `-d, --project-dir <path>` | Project directory (defaults to `cwd`) |
 | `--headless` | Auto-approve all gates |
+| `--session-id <id>` | MCP session ID for gate notification routing (updates the run's session affinity) |
 | `--from <stage>` | Clean-reset and resume from this named stage (see below) |
 
 ### Resume behavior
