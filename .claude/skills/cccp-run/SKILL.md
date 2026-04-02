@@ -85,6 +85,14 @@ Register in `.mcp.json`:
 npx @alevental/cccp@latest init [-d <dir>]
 ```
 
+### `update-skills` — Update skills to latest version
+
+```bash
+npx @alevental/cccp@latest update-skills [-d <dir>]
+```
+
+Updates `/cccp-run` and `/cccp-pipeline` skills to the version shipped with the installed package. Does not touch agents, pipelines, `cccp.yaml`, or any other files.
+
 ### `examples` — Scaffold all agents and example pipelines
 
 ```bash

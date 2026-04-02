@@ -743,3 +743,13 @@ npx @alevental/cccp@latest run -f pipeline.yaml -p test --dry-run
 ```
 
 This shows all assembled prompts, resolved agent paths, and interpolated variables without dispatching any agents.
+
+## Updating This Skill
+
+This skill ships with the `@alevental/cccp` package. To get the latest version (e.g. after a package update):
+
+```bash
+npx @alevental/cccp@latest update-skills
+```
+
+This overwrites `/cccp-pipeline` and `/cccp-run` skills with the latest content without touching agents, pipelines, or project config.
