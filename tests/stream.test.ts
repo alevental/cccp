@@ -353,6 +353,76 @@ describe("StreamParser — real nested format", () => {
 });
 
 // ---------------------------------------------------------------------------
+// StreamParser — tool tracking cleanup (memory management)
+// ---------------------------------------------------------------------------
+
+describe("StreamParser — tool tracking cleanup", () => {
+  it("frees seenToolIds and toolIdToName after tool_result arrives", () => {
+    const parser = new StreamParser("test-agent");
+
+    // Tool use
+    parser.feed(JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [{ type: "tool_use", name: "Read", id: "toolu_clean1", input: { file_path: "a.ts" } }],
+      },
+    }) + "\n");
+
+    // Verify tracked
+    expect(parser.getActivity().toolCallCount).toBe(1);
+
+    // Tool result
+    parser.feed(JSON.stringify({
+      type: "user",
+      message: {
+        content: [{ type: "tool_result", tool_use_id: "toolu_clean1" }],
+      },
+    }) + "\n");
+    parser.flush();
+
+    // After result, feeding the same tool ID again should be treated as new
+    // (because seenToolIds was cleaned up). This verifies the ID was removed.
+    parser.feed(JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [{ type: "tool_use", name: "Read", id: "toolu_clean1", input: { file_path: "b.ts" } }],
+      },
+    }) + "\n");
+    parser.flush();
+
+    // If cleanup happened, this would be counted again (toolCallCount = 2).
+    expect(parser.getActivity().toolCallCount).toBe(2);
+  });
+
+  it("does not leak tracking state over many tool cycles", () => {
+    const parser = new StreamParser("test-agent");
+
+    // Simulate 100 tool use/result cycles
+    for (let i = 0; i < 100; i++) {
+      parser.feed(JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{ type: "tool_use", name: "Bash", id: `tool_${i}`, input: { command: "echo hi" } }],
+        },
+      }) + "\n");
+
+      parser.feed(JSON.stringify({
+        type: "user",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: `tool_${i}` }],
+        },
+      }) + "\n");
+    }
+    parser.flush();
+
+    const activity = parser.getActivity();
+    expect(activity.toolCallCount).toBe(100);
+    // Tool history is capped at 10
+    expect(activity.toolHistory).toHaveLength(10);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // StreamParser — file logging
 // ---------------------------------------------------------------------------
 

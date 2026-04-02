@@ -204,6 +204,49 @@ describe("CccpDatabase — events", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Events — pruning
+// ---------------------------------------------------------------------------
+
+describe("CccpDatabase — event pruning", () => {
+  it("pruneEvents keeps only the most recent N events", async () => {
+    const dir = tmpProjectDir();
+    const db = await CccpDatabase.open(dir);
+    const state = makeState();
+    db.insertRun(state, "/artifacts");
+
+    // Insert 10 events
+    for (let i = 0; i < 10; i++) {
+      db.appendEvent(state.runId, `event_${i}`, undefined, { index: i });
+    }
+    expect(db.getEvents(state.runId)).toHaveLength(10);
+
+    // Prune to 3
+    db.pruneEvents(state.runId, 3);
+
+    const remaining = db.getEvents(state.runId);
+    expect(remaining).toHaveLength(3);
+    // Should keep the last 3 (event_7, event_8, event_9)
+    expect(remaining[0].eventType).toBe("event_7");
+    expect(remaining[1].eventType).toBe("event_8");
+    expect(remaining[2].eventType).toBe("event_9");
+    db.close();
+  });
+
+  it("pruneEvents is a no-op when fewer events than limit", async () => {
+    const dir = tmpProjectDir();
+    const db = await CccpDatabase.open(dir);
+    const state = makeState();
+    db.insertRun(state, "/artifacts");
+
+    db.appendEvent(state.runId, "only_one");
+    db.pruneEvents(state.runId, 500);
+
+    expect(db.getEvents(state.runId)).toHaveLength(1);
+    db.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Checkpoints
 // ---------------------------------------------------------------------------
 

@@ -316,6 +316,9 @@ export class StreamParser extends EventEmitter {
               );
               this.markToolDone(block.tool_use_id);
             }
+            // Free tracking entries — no longer needed after result arrives.
+            this.toolIdToName.delete(block.tool_use_id);
+            this.seenToolIds.delete(block.tool_use_id);
           }
         }
       }

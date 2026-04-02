@@ -31,6 +31,10 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
   const [startTime] = useState(Date.now());
   const [elapsed, setElapsed] = useState(0);
   const lastEventId = useRef(0);
+  // Track last-seen state for change detection without stale closure issues.
+  const lastStagesJson = useRef<string>(JSON.stringify(initialState.stages));
+  const lastStatus = useRef(initialState.status);
+  const lastGateStatus = useRef(initialState.gate?.status);
 
   // Debounce activity updates.
   const lastActivityTime = useRef(0);
@@ -85,11 +89,15 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
         const updated = await loadState(runId, projectDir);
         if (!updated) return;
 
+        const stagesJson = JSON.stringify(updated.stages);
         if (
-          updated.status !== state.status ||
-          JSON.stringify(updated.stages) !== JSON.stringify(state.stages) ||
-          updated.gate?.status !== state.gate?.status
+          updated.status !== lastStatus.current ||
+          stagesJson !== lastStagesJson.current ||
+          updated.gate?.status !== lastGateStatus.current
         ) {
+          lastStatus.current = updated.status;
+          lastStagesJson.current = stagesJson;
+          lastGateStatus.current = updated.gate?.status;
           setState(updated);
 
           if (

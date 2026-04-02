@@ -1,11 +1,21 @@
 #!/usr/bin/env node
 
 import { resolve } from "node:path";
+import { getHeapStatistics } from "node:v8";
 import { Command } from "commander";
 import { loadProjectConfig } from "./config.js";
 import { loadPipeline } from "./pipeline.js";
 import { runPipeline } from "./runner.js";
 import { buildRunContext, resolveArtifactDir, parseCLIVars } from "./context.js";
+
+// Warn if heap limit is below 8 GB — long pipelines can exceed the default ~4 GB.
+const heapLimitMb = Math.round(getHeapStatistics().heap_size_limit / 1024 / 1024);
+if (heapLimitMb < 8000) {
+  console.error(
+    `[cccp] heap limit is ${heapLimitMb} MB. For long pipelines, increase with:\n` +
+    `  NODE_OPTIONS="--max-old-space-size=8192" npx @alevental/cccp run ...`,
+  );
+}
 
 const program = new Command();
 
@@ -14,7 +24,7 @@ program
   .description(
     "Claude Code and Cmux Pipeline Reagent — deterministic YAML-based pipeline orchestration",
   )
-  .version("0.3.0");
+  .version("0.3.1");
 
 program
   .command("run")

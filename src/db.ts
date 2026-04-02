@@ -52,6 +52,7 @@ export function dbPath(projectDir: string): string {
 export class CccpDatabase {
   private db: Database;
   private filePath: string;
+  private flushCount = 0;
 
   private constructor(db: Database, filePath: string) {
     this.db = db;
@@ -352,6 +353,20 @@ export class CccpDatabase {
     );
   }
 
+  /**
+   * Remove old events for a run, keeping only the most recent `keep` entries.
+   * Prevents the append-only events table (and sql.js WASM memory) from
+   * growing without bound during long pipeline runs.
+   */
+  pruneEvents(runId: string, keep: number = 500): void {
+    this.db.run(
+      `DELETE FROM events WHERE run_id = ? AND id NOT IN (
+        SELECT id FROM events WHERE run_id = ? ORDER BY id DESC LIMIT ?
+      )`,
+      [runId, runId, keep],
+    );
+  }
+
   getEvents(runId: string, sinceId?: number): StateEvent[] {
     const sql = sinceId != null
       ? `SELECT * FROM events WHERE run_id = ? AND id > ? ORDER BY id`
@@ -411,13 +426,32 @@ export class CccpDatabase {
    * Atomically write the database to disk (write to .tmp then rename).
    */
   flush(): void {
+    // Periodically prune old events to cap DB size for long-running pipelines.
+    this.flushCount++;
+    if (this.flushCount % 50 === 0) {
+      this.pruneAllEvents();
+    }
+
     const data = this.db.export();
-    const buffer = Buffer.from(data);
     const dir = dirname(this.filePath);
     mkdirSync(dir, { recursive: true });
     const tmp = join(dir, `.cccp-db-${randomUUID()}.tmp`);
-    writeFileSync(tmp, buffer);
+    // Write Uint8Array directly — avoids a full copy through Buffer.from().
+    writeFileSync(tmp, data);
     renameSync(tmp, this.filePath);
+  }
+
+  /**
+   * Prune events for all active runs. Called periodically during flush.
+   */
+  private pruneAllEvents(): void {
+    const results = this.db.exec(
+      `SELECT DISTINCT run_id FROM events`,
+    );
+    if (results.length === 0) return;
+    for (const row of results[0].values) {
+      this.pruneEvents(row[0] as string);
+    }
   }
 
   /**
