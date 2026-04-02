@@ -11,7 +11,7 @@ import {
   buildTaskContext,
   writeSystemPromptFile,
 } from "./prompt.js";
-import { mergeInputs, resolveAndLoad } from "./stage-helpers.js";
+import { mergeInputs, resolveAndLoad, resolveModelEffort } from "./stage-helpers.js";
 import { updatePgeProgress, setStageArtifact } from "./state.js";
 import type { AutoresearchStage, AutoresearchResult, RunContext, PipelineState } from "./types.js";
 
@@ -142,6 +142,7 @@ export async function runAutoresearchCycle(
         permissionMode: ctx.projectConfig?.permission_mode,
         agentName: `${stage.name}-adjuster`,
         streamLogDir: resolve(ctx.artifactDir, ".cccp"),
+        ...resolveModelEffort(stage.adjuster, stage, ctx.pipeline, "adjuster"),
         onActivity: (activity) => activityBus.emit("activity", activity),
         quiet: ctx.quiet,
       });
@@ -192,6 +193,7 @@ export async function runAutoresearchCycle(
       permissionMode: ctx.projectConfig?.permission_mode,
       agentName: `${stage.name}-executor`,
       streamLogDir: resolve(ctx.artifactDir, ".cccp"),
+      ...resolveModelEffort(stage.executor, stage, ctx.pipeline, "executor"),
       onActivity: (activity) => activityBus.emit("activity", activity),
       quiet: ctx.quiet,
     });
@@ -239,6 +241,7 @@ export async function runAutoresearchCycle(
       permissionMode: ctx.projectConfig?.permission_mode,
       agentName: `${stage.name}-evaluator`,
       streamLogDir: resolve(ctx.artifactDir, ".cccp"),
+      ...resolveModelEffort(stage.evaluator, stage, ctx.pipeline, "evaluator"),
       onActivity: (activity) => activityBus.emit("activity", activity),
       quiet: ctx.quiet,
     });

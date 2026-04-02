@@ -434,6 +434,39 @@ The schema enforces:
 - Unique stage names across the entire pipeline (including inside groups)
 - No conflicting output paths within a parallel group
 
+## Model and Effort Tuning
+
+Control model and effort per-agent to optimize cost and speed. Set defaults at the pipeline level, override per-phase or per-agent.
+
+```yaml
+name: cost-optimized
+effort: high                          # pipeline default
+phase_defaults:
+  planner:
+    effort: medium                    # planning doesn't need deep reasoning
+  evaluator:
+    model: haiku
+    effort: low                       # evaluations are fast checks
+
+stages:
+  - name: implement
+    type: pge
+    planner:
+      agent: architect
+    generator:
+      agent: implementer
+      model: opus                     # generator needs full power
+    evaluator:
+      agent: reviewer
+    contract:
+      deliverable: "{artifact_dir}/output.md"
+      max_iterations: 3
+```
+
+Resolution order: agent config > stage level > `phase_defaults` > pipeline level.
+
+See [Pipeline Schema](../architecture/pipeline-schema.md#model-and-effort-resolution) for full details.
+
 ## Related Documentation
 
 - [Pipeline Schema](../architecture/pipeline-schema.md) -- complete Zod schema reference

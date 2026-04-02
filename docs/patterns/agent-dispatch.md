@@ -63,6 +63,13 @@ function buildArgs(opts: DispatchOptions): string[] {
   const mode = opts.permissionMode ?? "bypassPermissions";
   args.push("--permission-mode", mode);
 
+  if (opts.model) {
+    args.push("--model", opts.model);
+  }
+  if (opts.effort) {
+    args.push("--effort", opts.effort);
+  }
+
   return args;
 }
 ```
@@ -79,6 +86,8 @@ function buildArgs(opts: DispatchOptions): string[] {
 | `--strict-mcp-config` | (flag) | Agent ONLY gets servers in its MCP config |
 | `--allowedTools` | Comma-separated list | Restricts which tools the agent can use |
 | `--permission-mode` | `bypassPermissions` | Agents run non-interactively (default) |
+| `--model` | Model alias or name | Override model for this dispatch (optional) |
+| `--effort` | `low`/`medium`/`high`/`max` | Override effort level for this dispatch (optional) |
 
 ### Why `--append-system-prompt-file` (not `--system-prompt-file`)
 
@@ -120,6 +129,10 @@ export interface DispatchOptions {
   permissionMode?: string;
   /** Suppress agent stderr (when TUI dashboard is rendering). */
   quiet?: boolean;
+  /** Model override for this agent dispatch (--model flag). */
+  model?: string;
+  /** Effort level override for this agent dispatch (--effort flag). */
+  effort?: string;
 }
 ```
 

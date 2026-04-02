@@ -8,7 +8,7 @@ A standalone TypeScript CLI that provides deterministic YAML-based pipeline orch
 
 ```bash
 npm install
-npm test              # vitest — 234 tests, ~5s
+npm test              # vitest — 243 tests, ~5s
 npm run typecheck     # tsc --noEmit
 npx tsx src/cli.ts    # run CLI in dev mode (use instead of `npm run dev`)
 ```
@@ -30,7 +30,7 @@ npx @alevental/cccp examples              # scaffold all agents + example pipeli
 - **Types**: all domain types in `src/types.ts` (Pipeline, Stage, RunContext, PipelineState, StageState, etc.)
 - **Stage types**: `agent` (single dispatch), `pge` (Plan-Generate-Evaluate cycle with retry), `autoresearch` (iterative artifact optimization), `pipeline` (sub-pipeline composition), `human_gate` (approval gate). Stages can be wrapped in `parallel` blocks for concurrent execution.
 - **Parallel execution**: `parallel` groups in pipeline YAML run their stages concurrently via `Promise.all()`. Supports `fail_fast` (default) and `wait_all` failure modes. Constraints: no `human_gate` or `pipeline` stages inside groups, unique outputs per group. Resume re-runs only incomplete stages within a group. (`src/runner.ts`, `src/types.ts`)
-- **Agent dispatch**: injectable `AgentDispatcher` interface (`src/dispatcher.ts`); default spawns `claude -p --output-format stream-json` (`src/agent.ts`)
+- **Agent dispatch**: injectable `AgentDispatcher` interface (`src/dispatcher.ts`); default spawns `claude -p --output-format stream-json` (`src/agent.ts`). Per-agent `model` and `effort` overrides are passed as `--model` and `--effort` CLI flags. Resolution order: agent config > stage level > `phase_defaults` > pipeline level (`src/stage-helpers.ts`)
 - **PGE cycle**: planner -> evaluator (contract mode) -> generator -> evaluator (evaluation mode) -> regex parse `### Overall: PASS/FAIL` -> route (`src/pge.ts`, `src/evaluator.ts`). Planner prompt explicitly frames the task as planning (not execution) with bookended instructions. Planner and contract run once; generator/evaluator loop retries on FAIL. State passed by reference with `onProgress` callback.
 - **State**: SQLite at `.cccp/cccp.db` via sql.js, atomic flush, stage-level + PGE-iteration-level resume. `resetFromStage()` enables clean reset from a named stage onward (clears state, events, checkpoints, and artifact files). (`src/state.ts`, `src/db.ts`)
 - **Template agents**: 18 agents (7 directory + 11 flat) in `.claude/agents/`, usable both as Claude Code subagents and CCCP pipeline agents. Agent definitions are pure role/identity — pipeline-specific instructions (evaluation format, file I/O) are injected by the runner at dispatch time. Directory agents: `architect`, `product-manager`, `marketer`, `qa-engineer`, `strategist`, `designer`, `customer-success`. Flat agents: `researcher`, `reviewer`, `implementer`, `code-reviewer`, `copywriter`, `analyst`, `exec-reviewer`, `growth-strategist`, `ops-manager`, `devops`, `writer`.

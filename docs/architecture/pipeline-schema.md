@@ -13,10 +13,29 @@ The pipeline YAML is validated at load time using Zod schemas. Invalid files pro
 ### PipelineSchema
 
 ```typescript
+const ModelSchema = z.string().optional();
+const EffortSchema = z.enum(["low", "medium", "high", "max"]).optional();
+
+const PhaseModelEffortSchema = z.object({
+  model: ModelSchema,
+  effort: EffortSchema,
+}).optional();
+
+const PhaseDefaultsSchema = z.object({
+  planner: PhaseModelEffortSchema,
+  generator: PhaseModelEffortSchema,
+  evaluator: PhaseModelEffortSchema,
+  adjuster: PhaseModelEffortSchema,
+  executor: PhaseModelEffortSchema,
+}).optional();
+
 const PipelineSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
   variables: z.record(z.string()).optional(),
+  model: ModelSchema,
+  effort: EffortSchema,
+  phase_defaults: PhaseDefaultsSchema,
   stages: z.array(StageEntrySchema).min(1),
 });
 ```
@@ -74,6 +93,9 @@ const AgentStageSchema = z.object({
   inputs: z.array(z.string()).optional(),
   output: z.string().optional(),
   allowed_tools: z.array(z.string()).optional(),
+  human_review: z.boolean().optional(),
+  model: ModelSchema,
+  effort: EffortSchema,
   variables: z.record(z.string()).optional(),
 });
 ```
@@ -89,6 +111,8 @@ const PgeAgentConfigSchema = z.object({
   mcp_profile: z.string().optional(),
   allowed_tools: z.array(z.string()).optional(),
   inputs: z.array(z.string()).optional(),
+  model: ModelSchema,
+  effort: EffortSchema,
 });
 ```
 
@@ -100,9 +124,11 @@ const PgeStageSchema = z.object({
   task: z.string().optional(),
   task_file: z.string().optional(),
   type: z.literal("pge"),
+  mcp_profile: z.string().optional(),
+  model: ModelSchema,
+  effort: EffortSchema,
   plan: z.string().optional(),
   inputs: z.array(z.string()).optional(),
-  mcp_profile: z.string().optional(),
   planner: PgeAgentConfigSchema,
   generator: PgeAgentConfigSchema,
   evaluator: PgeAgentConfigSchema,
@@ -157,11 +183,28 @@ const PipelineStageSchema = z.object({
 ### Pipeline
 
 ```typescript
+export type EffortLevel = "low" | "medium" | "high" | "max";
+
+export interface PhaseModelEffort {
+  model?: string;
+  effort?: EffortLevel;
+}
+
+export interface PhaseDefaults {
+  planner?: PhaseModelEffort;
+  generator?: PhaseModelEffort;
+  evaluator?: PhaseModelEffort;
+  adjuster?: PhaseModelEffort;
+  executor?: PhaseModelEffort;
+}
+
 export interface Pipeline {
   name: string;
   description?: string;
-  /** Default variables available to all stages. */
   variables?: Record<string, string>;
+  model?: string;
+  effort?: EffortLevel;
+  phase_defaults?: PhaseDefaults;
   stages: StageEntry[];
 }
 ```
@@ -212,6 +255,9 @@ export interface AgentStage extends StageBase {
   inputs?: string[];
   output?: string;
   allowed_tools?: string[];
+  human_review?: boolean;
+  model?: string;
+  effort?: EffortLevel;
 }
 ```
 
@@ -224,6 +270,9 @@ export interface AgentStage extends StageBase {
 | `inputs` | `string[]` | No | Input file paths (support variable interpolation) |
 | `output` | `string` | No | Expected output path (verified after execution) |
 | `allowed_tools` | `string[]` | No | Tool allowlist for the agent |
+| `human_review` | `boolean` | No | Fire a human review gate after completion |
+| `model` | `string` | No | Model override (`haiku`, `sonnet`, `opus`, or full model name) |
+| `effort` | `EffortLevel` | No | Effort level override (`low`, `medium`, `high`, `max`) |
 
 ### PgeAgentConfig
 
@@ -236,6 +285,8 @@ export interface PgeAgentConfig {
   mcp_profile?: string;
   allowed_tools?: string[];
   inputs?: string[];
+  model?: string;
+  effort?: EffortLevel;
 }
 ```
 
@@ -246,6 +297,8 @@ export interface PgeAgentConfig {
 | `mcp_profile` | `string` | No | MCP profile override (takes precedence over stage-level) |
 | `allowed_tools` | `string[]` | No | Tool allowlist |
 | `inputs` | `string[]` | No | Agent-specific input files (merged with stage-level `inputs`) |
+| `model` | `string` | No | Model override for this agent (highest priority) |
+| `effort` | `EffortLevel` | No | Effort override for this agent (highest priority) |
 
 ### PgeStage
 
@@ -254,6 +307,8 @@ export interface PgeStage extends StageBase {
   type: "pge";
   plan?: string;
   inputs?: string[];
+  model?: string;
+  effort?: EffortLevel;
   planner: PgeAgentConfig;
   generator: PgeAgentConfig;
   evaluator: PgeAgentConfig;
@@ -264,6 +319,7 @@ export interface PgeStage extends StageBase {
     guidance?: string;
   };
   on_fail?: EscalationStrategy;
+  human_review?: boolean;
 }
 ```
 
@@ -272,11 +328,14 @@ export interface PgeStage extends StageBase {
 | `type` | `"pge"` | Yes | Stage type discriminator |
 | `plan` | `string` | No | Path to plan document containing the task reference |
 | `inputs` | `string[]` | No | Stage-level input files shared across all agents |
+| `model` | `string` | No | Stage-level model default (inherited by sub-agents unless overridden) |
+| `effort` | `EffortLevel` | No | Stage-level effort default (inherited by sub-agents unless overridden) |
 | `planner` | `PgeAgentConfig` | Yes | Planner agent configuration |
 | `generator` | `PgeAgentConfig` | Yes | Generator agent configuration |
 | `evaluator` | `PgeAgentConfig` | Yes | Evaluator agent configuration |
 | `contract` | object | Yes | Contract specification |
 | `on_fail` | `EscalationStrategy` | No | What to do when max iterations fail (default: `"stop"`) |
+| `human_review` | `boolean` | No | Fire a human review gate after completion |
 
 #### Contract fields
 
@@ -497,6 +556,40 @@ import { loadPipeline } from "./pipeline.js";
 //   - stages.0.type: Invalid discriminator value
 //   - stages.1.contract.max_iterations: Number must be less than or equal to 10
 const pipeline = await loadPipeline("pipelines/my-pipeline.yaml");
+```
+
+## Model and Effort Resolution
+
+Model and effort can be set at four levels. Resolution order (highest priority first):
+
+1. **Agent config** -- `planner.effort`, `generator.model`, etc.
+2. **Stage level** -- `effort` or `model` on the stage itself
+3. **Phase defaults** -- `phase_defaults.planner.effort`, etc. at pipeline level
+4. **Pipeline level** -- `model` or `effort` at the top of the YAML
+
+At dispatch time, `resolveModelEffort()` in `src/stage-helpers.ts` walks this chain and passes the resolved values as `--model` and `--effort` flags to the `claude` CLI.
+
+```yaml
+name: my-pipeline
+effort: high                      # 4. pipeline default
+phase_defaults:                   # 3. per-phase defaults
+  planner:
+    effort: medium
+  evaluator:
+    model: haiku
+    effort: low
+
+stages:
+  - name: spec
+    type: pge
+    effort: high                  # 2. stage default (redundant here)
+    planner:
+      agent: architect
+      effort: low                 # 1. agent override (wins)
+    generator:
+      agent: implementer          # inherits effort: high from stage
+    evaluator:
+      agent: reviewer             # inherits model: haiku, effort: low from phase_defaults
 ```
 
 ## Related Documentation

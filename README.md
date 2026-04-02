@@ -144,6 +144,20 @@ stages:
 
 Stages can also be wrapped in a `parallel` block to run concurrently. See the [pipeline skill](.claude/skills/cccp-pipeline/SKILL.md) for the full schema.
 
+### Model and effort
+
+Control which Claude model and effort level each agent uses. Set defaults at the pipeline level, override per-phase or per-agent:
+
+```yaml
+name: my-pipeline
+effort: high
+phase_defaults:
+  planner: { effort: medium }
+  evaluator: { model: haiku, effort: low }
+```
+
+Resolution: agent config > stage level > `phase_defaults` > pipeline level. Valid effort values: `low`, `medium`, `high`, `max`.
+
 ### Variables
 
 Built-in variables available in all string fields:

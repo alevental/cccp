@@ -34,6 +34,10 @@ export interface DispatchOptions {
   permissionMode?: string;
   /** Suppress agent stderr (when TUI dashboard is rendering). */
   quiet?: boolean;
+  /** Model override for this agent dispatch (--model flag). */
+  model?: string;
+  /** Effort level override for this agent dispatch (--effort flag). */
+  effort?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -63,6 +67,13 @@ function buildArgs(opts: DispatchOptions): string[] {
   // Permission mode — default to bypassPermissions for pipeline agents.
   const mode = opts.permissionMode ?? "bypassPermissions";
   args.push("--permission-mode", mode);
+
+  if (opts.model) {
+    args.push("--model", opts.model);
+  }
+  if (opts.effort) {
+    args.push("--effort", opts.effort);
+  }
 
   return args;
 }

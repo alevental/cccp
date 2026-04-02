@@ -11,7 +11,7 @@ import {
   buildTaskContext,
   writeSystemPromptFile,
 } from "./prompt.js";
-import { mergeInputs, resolveAndLoad } from "./stage-helpers.js";
+import { mergeInputs, resolveAndLoad, resolveModelEffort } from "./stage-helpers.js";
 import { updatePgeProgress, setStageArtifact } from "./state.js";
 import type { PgeStage, PgeResult, RunContext, PipelineState } from "./types.js";
 
@@ -181,6 +181,7 @@ export async function runPgeCycle(
       permissionMode: ctx.projectConfig?.permission_mode,
       agentName: `${stage.name}-planner`,
       streamLogDir: resolve(ctx.artifactDir, ".cccp"),
+      ...resolveModelEffort(stage.planner, stage, ctx.pipeline, "planner"),
       onActivity: (activity) => activityBus.emit("activity", activity),
       quiet: ctx.quiet,
     });
@@ -230,6 +231,7 @@ export async function runPgeCycle(
       permissionMode: ctx.projectConfig?.permission_mode,
       agentName: `${stage.name}-contract`,
       streamLogDir: resolve(ctx.artifactDir, ".cccp"),
+      ...resolveModelEffort(stage.evaluator, stage, ctx.pipeline, "evaluator"),
       onActivity: (activity) => activityBus.emit("activity", activity),
       quiet: ctx.quiet,
     });
@@ -303,6 +305,7 @@ export async function runPgeCycle(
       permissionMode: ctx.projectConfig?.permission_mode,
       agentName: `${stage.name}-generator`,
       streamLogDir: resolve(ctx.artifactDir, ".cccp"),
+      ...resolveModelEffort(stage.generator, stage, ctx.pipeline, "generator"),
       onActivity: (activity) => activityBus.emit("activity", activity),
       quiet: ctx.quiet,
     });
@@ -350,6 +353,7 @@ export async function runPgeCycle(
       permissionMode: ctx.projectConfig?.permission_mode,
       agentName: `${stage.name}-evaluator`,
       streamLogDir: resolve(ctx.artifactDir, ".cccp"),
+      ...resolveModelEffort(stage.evaluator, stage, ctx.pipeline, "evaluator"),
       onActivity: (activity) => activityBus.emit("activity", activity),
       quiet: ctx.quiet,
     });
@@ -515,6 +519,7 @@ export async function dispatchEvaluatorWithFeedback(
     permissionMode: ctx.projectConfig?.permission_mode,
     agentName: `${stage.name}-evaluator-review`,
     streamLogDir: resolve(ctx.artifactDir, ".cccp"),
+    ...resolveModelEffort(stage.evaluator, stage, ctx.pipeline, "evaluator"),
     onActivity: (activity) => activityBus.emit("activity", activity),
     quiet: ctx.quiet,
   });

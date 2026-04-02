@@ -15,6 +15,24 @@ name: string                    # Required. Pipeline identifier.
 description: string             # Optional. Human-readable description.
 variables:                      # Optional. Default variables for all stages.
   key: "value"
+model: string                   # Optional. Pipeline-level default model.
+effort: low|medium|high|max     # Optional. Pipeline-level default effort.
+phase_defaults:                 # Optional. Per-phase model/effort defaults.
+  planner:
+    model: string
+    effort: low|medium|high|max
+  generator:
+    model: string
+    effort: low|medium|high|max
+  evaluator:
+    model: string
+    effort: low|medium|high|max
+  adjuster:
+    model: string
+    effort: low|medium|high|max
+  executor:
+    model: string
+    effort: low|medium|high|max
 stages:                         # Required. At least one stage.
   - name: string                # Required. Unique stage identifier.
     type: agent | pge | autoresearch | pipeline | human_gate
@@ -61,6 +79,8 @@ Single agent dispatch. Simplest stage type.
 | `inputs` | string[] | No | File paths passed to agent (interpolated) |
 | `output` | string | No | Expected output path (stage fails if missing after execution) |
 | `allowed_tools` | string[] | No | Allowlist of tools the agent can use |
+| `model` | string | No | Model override (`haiku`, `sonnet`, `opus`, or full model name) |
+| `effort` | string | No | Effort level override (`low`, `medium`, `high`, `max`) |
 
 ## Stage Type: `pge`
 
@@ -70,12 +90,15 @@ Plan-Generate-Evaluate cycle with retry loop.
 - name: implementation
   type: pge
   task: "Implement the feature."
+  model: opus                          # Optional. Stage-level model default.
+  effort: high                         # Optional. Stage-level effort default.
   plan: "{artifact_dir}/plan.md"       # Optional. Plan document path.
   inputs:                              # Optional. Shared across all agents.
     - "{artifact_dir}/design.md"
   planner:                             # Required. Planner agent config.
     agent: architect
     operation: task-planning
+    effort: medium                     # Optional. Per-agent override.
     inputs:                            # Optional. Planner-specific inputs.
       - "{artifact_dir}/requirements.md"
   generator:                           # Required. Generator agent config.
@@ -100,6 +123,8 @@ Plan-Generate-Evaluate cycle with retry loop.
 | `mcp_profile` | string | No | Agent-specific MCP profile (overrides stage-level) |
 | `allowed_tools` | string[] | No | Tool allowlist |
 | `inputs` | string[] | No | Agent-specific inputs (merged with stage `inputs`) |
+| `model` | string | No | Model override for this agent (highest priority) |
+| `effort` | string | No | Effort override for this agent (highest priority) |
 
 ### PGE Contract Fields
 
@@ -339,6 +364,58 @@ stages:
 ```
 
 Override at CLI: `cccp run -f sprint.yaml -p app -v sprint=3`
+
+## Model and Effort
+
+Control which Claude model and effort level each agent dispatch uses. Both are optional — omitting them inherits from the Claude Code environment.
+
+### Resolution Order (highest priority wins)
+
+1. **Agent config** — `planner.effort: medium`, `generator.model: sonnet`
+2. **Stage level** — `effort: high` on the PGE/agent stage
+3. **Phase defaults** — `phase_defaults.planner.effort: medium` at pipeline level
+4. **Pipeline level** — `effort: high` at the top of the YAML
+
+### Valid Values
+
+- **`model`**: Any Claude CLI model alias (`haiku`, `sonnet`, `opus`) or full model name (`claude-sonnet-4-6`)
+- **`effort`**: `low`, `medium`, `high`, `max` (max is Opus only)
+
+### Example
+
+```yaml
+name: my-pipeline
+effort: high
+phase_defaults:
+  planner:
+    effort: medium          # all planners use medium unless overridden
+  evaluator:
+    model: haiku
+    effort: low             # evaluators are cheap and fast
+
+stages:
+  - name: implement
+    type: pge
+    planner:
+      agent: architect
+      # inherits effort: medium from phase_defaults.planner
+    generator:
+      agent: implementer
+      model: sonnet         # agent-level override
+    evaluator:
+      agent: reviewer
+      # inherits model: haiku, effort: low from phase_defaults.evaluator
+    contract:
+      deliverable: "{artifact_dir}/output.md"
+      max_iterations: 3
+
+  - name: quick-check
+    type: agent
+    agent: analyst
+    model: haiku
+    effort: low             # stage-level override for simple agent stage
+    output: "{artifact_dir}/analysis.md"
+```
 
 ## Agent Resolution
 

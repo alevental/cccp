@@ -8,6 +8,9 @@ import { isParallelGroup } from "./types.js";
 // Zod schemas — validate raw YAML into typed Pipeline objects
 // ---------------------------------------------------------------------------
 
+const ModelSchema = z.string().optional();
+const EffortSchema = z.enum(["low", "medium", "high", "max"]).optional();
+
 const AgentStageSchema = z.object({
   name: z.string(),
   task: z.string().optional(),
@@ -20,6 +23,8 @@ const AgentStageSchema = z.object({
   output: z.string().optional(),
   allowed_tools: z.array(z.string()).optional(),
   human_review: z.boolean().optional(),
+  model: ModelSchema,
+  effort: EffortSchema,
   variables: z.record(z.string()).optional(),
 });
 
@@ -29,6 +34,8 @@ const PgeAgentConfigSchema = z.object({
   mcp_profile: z.string().optional(),
   allowed_tools: z.array(z.string()).optional(),
   inputs: z.array(z.string()).optional(),
+  model: ModelSchema,
+  effort: EffortSchema,
 });
 
 const PgeStageSchema = z.object({
@@ -37,6 +44,8 @@ const PgeStageSchema = z.object({
   task_file: z.string().optional(),
   type: z.literal("pge"),
   mcp_profile: z.string().optional(),
+  model: ModelSchema,
+  effort: EffortSchema,
   plan: z.string().optional(),
   inputs: z.array(z.string()).optional(),
   planner: PgeAgentConfigSchema,
@@ -59,6 +68,8 @@ const AutoresearchStageSchema = z.object({
   task_file: z.string().optional(),
   type: z.literal("autoresearch"),
   mcp_profile: z.string().optional(),
+  model: ModelSchema,
+  effort: EffortSchema,
   artifact: z.string(),
   ground_truth: z.string(),
   output: z.string(),
@@ -111,10 +122,26 @@ const ParallelGroupSchema = z.object({
 
 const StageEntrySchema = z.union([StageSchema, ParallelGroupSchema]);
 
+const PhaseModelEffortSchema = z.object({
+  model: ModelSchema,
+  effort: EffortSchema,
+}).optional();
+
+const PhaseDefaultsSchema = z.object({
+  planner: PhaseModelEffortSchema,
+  generator: PhaseModelEffortSchema,
+  evaluator: PhaseModelEffortSchema,
+  adjuster: PhaseModelEffortSchema,
+  executor: PhaseModelEffortSchema,
+}).optional();
+
 const PipelineSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
   variables: z.record(z.string()).optional(),
+  model: ModelSchema,
+  effort: EffortSchema,
+  phase_defaults: PhaseDefaultsSchema,
   stages: z.array(StageEntrySchema).min(1),
 }).superRefine((pipeline, ctx) => {
   // Collect all stage names and validate parallel group constraints.

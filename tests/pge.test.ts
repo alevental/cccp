@@ -595,4 +595,193 @@ describe("PGE cycle with PgeCycleOptions", () => {
     // Generator prompt should NOT contain gate feedback
     expect(dispatches[0]).not.toContain("Gate Feedback");
   });
+
+  it("threads model/effort overrides to each dispatch", async () => {
+    const dir = tmpPath();
+    const artifactDir = join(dir, "artifacts");
+    const agentsDir = join(dir, "agents");
+    await mkdir(agentsDir, { recursive: true });
+    await writeFile(join(agentsDir, "planner.md"), "# Planner", "utf-8");
+    await writeFile(join(agentsDir, "gen.md"), "# Generator", "utf-8");
+    await writeFile(join(agentsDir, "eval.md"), "# Evaluator", "utf-8");
+
+    // Track model/effort per dispatch
+    const captured: { agentName?: string; model?: string; effort?: string }[] = [];
+    let count = 0;
+    let evalIndex = 0;
+
+    const trackingDispatcher: AgentDispatcher = {
+      async dispatch(opts: DispatchOptions): Promise<AgentResult> {
+        count++;
+        captured.push({ agentName: opts.agentName, model: opts.model, effort: opts.effort });
+        if (opts.expectedOutput) {
+          await mkdir(join(opts.expectedOutput, ".."), { recursive: true }).catch(() => {});
+          if (count === 1) {
+            await writeFile(opts.expectedOutput, "# Task Plan\n\n1. Do it\n", "utf-8");
+          } else if (count === 2) {
+            await writeFile(opts.expectedOutput, "## Contract\n\n### Criteria\n\n1. OK\n", "utf-8");
+          } else {
+            const geIndex = count - 2;
+            if (geIndex % 2 === 1) {
+              await writeFile(opts.expectedOutput, "# Output\n", "utf-8");
+            } else {
+              await writeFile(opts.expectedOutput, "### Overall: PASS\n", "utf-8");
+            }
+          }
+        }
+        return { exitCode: 0, outputPath: opts.expectedOutput, outputExists: true, durationMs: 100 };
+      },
+    };
+
+    const { runPgeCycle } = await import("../src/pge.js");
+
+    const stage: PgeStage = {
+      name: "effort-test",
+      type: "pge",
+      effort: "high",
+      model: "opus",
+      planner: { agent: "agents/planner.md", effort: "medium" },
+      generator: { agent: "agents/gen.md", model: "sonnet" },
+      evaluator: { agent: "agents/eval.md" },
+      contract: {
+        deliverable: "artifacts/effort-test/output.md",
+        max_iterations: 3,
+      },
+    };
+
+    const ctx: RunContext = {
+      project: "test",
+      projectDir: dir,
+      artifactDir: artifactDir,
+      pipelineFile: "test.yaml",
+      pipeline: { name: "test", effort: "low", stages: [stage] },
+      dryRun: false,
+      variables: { project: "test", project_dir: dir, artifact_dir: artifactDir, pipeline_name: "test" },
+      agentSearchPaths: [agentsDir],
+      dispatcher: trackingDispatcher,
+    };
+
+    const state = createState("test", "test", "test.yaml", [stage], artifactDir);
+    const result = await runPgeCycle(stage, ctx, state);
+
+    expect(result.outcome).toBe("pass");
+    expect(captured).toHaveLength(4);
+
+    // Planner: agent override effort=medium, inherits model=opus from stage
+    expect(captured[0].agentName).toContain("planner");
+    expect(captured[0].effort).toBe("medium");
+    expect(captured[0].model).toBe("opus");
+
+    // Contract: uses evaluator config (no overrides), inherits from stage
+    expect(captured[1].agentName).toContain("contract");
+    expect(captured[1].effort).toBe("high");
+    expect(captured[1].model).toBe("opus");
+
+    // Generator: agent override model=sonnet, inherits effort=high from stage
+    expect(captured[2].agentName).toContain("generator");
+    expect(captured[2].model).toBe("sonnet");
+    expect(captured[2].effort).toBe("high");
+
+    // Evaluator: no overrides, inherits from stage
+    expect(captured[3].agentName).toContain("evaluator");
+    expect(captured[3].effort).toBe("high");
+    expect(captured[3].model).toBe("opus");
+  });
+
+  it("applies phase_defaults when stage and agent don't override", async () => {
+    const dir = tmpPath();
+    const artifactDir = join(dir, "artifacts");
+    const agentsDir = join(dir, "agents");
+    await mkdir(agentsDir, { recursive: true });
+    await writeFile(join(agentsDir, "planner.md"), "# Planner", "utf-8");
+    await writeFile(join(agentsDir, "gen.md"), "# Generator", "utf-8");
+    await writeFile(join(agentsDir, "eval.md"), "# Evaluator", "utf-8");
+
+    const captured: { agentName?: string; model?: string; effort?: string }[] = [];
+    let count = 0;
+
+    const trackingDispatcher: AgentDispatcher = {
+      async dispatch(opts: DispatchOptions): Promise<AgentResult> {
+        count++;
+        captured.push({ agentName: opts.agentName, model: opts.model, effort: opts.effort });
+        if (opts.expectedOutput) {
+          await mkdir(join(opts.expectedOutput, ".."), { recursive: true }).catch(() => {});
+          if (count === 1) {
+            await writeFile(opts.expectedOutput, "# Task Plan\n\n1. Do it\n", "utf-8");
+          } else if (count === 2) {
+            await writeFile(opts.expectedOutput, "## Contract\n\n### Criteria\n\n1. OK\n", "utf-8");
+          } else {
+            const geIndex = count - 2;
+            if (geIndex % 2 === 1) {
+              await writeFile(opts.expectedOutput, "# Output\n", "utf-8");
+            } else {
+              await writeFile(opts.expectedOutput, "### Overall: PASS\n", "utf-8");
+            }
+          }
+        }
+        return { exitCode: 0, outputPath: opts.expectedOutput, outputExists: true, durationMs: 100 };
+      },
+    };
+
+    const { runPgeCycle } = await import("../src/pge.js");
+
+    // No stage-level or agent-level overrides — only phase_defaults + pipeline default
+    const stage: PgeStage = {
+      name: "phase-test",
+      type: "pge",
+      planner: { agent: "agents/planner.md" },
+      generator: { agent: "agents/gen.md" },
+      evaluator: { agent: "agents/eval.md" },
+      contract: {
+        deliverable: "artifacts/phase-test/output.md",
+        max_iterations: 3,
+      },
+    };
+
+    const ctx: RunContext = {
+      project: "test",
+      projectDir: dir,
+      artifactDir: artifactDir,
+      pipelineFile: "test.yaml",
+      pipeline: {
+        name: "test",
+        effort: "high",
+        phase_defaults: {
+          planner: { effort: "medium" },
+          evaluator: { model: "haiku", effort: "low" },
+        },
+        stages: [stage],
+      },
+      dryRun: false,
+      variables: { project: "test", project_dir: dir, artifact_dir: artifactDir, pipeline_name: "test" },
+      agentSearchPaths: [agentsDir],
+      dispatcher: trackingDispatcher,
+    };
+
+    const state = createState("test", "test", "test.yaml", [stage], artifactDir);
+    const result = await runPgeCycle(stage, ctx, state);
+
+    expect(result.outcome).toBe("pass");
+    expect(captured).toHaveLength(4);
+
+    // Planner: phase_defaults planner effort=medium, no model phase default → pipeline model (undefined)
+    expect(captured[0].agentName).toContain("planner");
+    expect(captured[0].effort).toBe("medium");
+    expect(captured[0].model).toBeUndefined();
+
+    // Contract: uses evaluator phase defaults → model=haiku, effort=low
+    expect(captured[1].agentName).toContain("contract");
+    expect(captured[1].model).toBe("haiku");
+    expect(captured[1].effort).toBe("low");
+
+    // Generator: no phase default for generator → falls back to pipeline effort=high
+    expect(captured[2].agentName).toContain("generator");
+    expect(captured[2].effort).toBe("high");
+    expect(captured[2].model).toBeUndefined();
+
+    // Evaluator: phase_defaults evaluator → model=haiku, effort=low
+    expect(captured[3].agentName).toContain("evaluator");
+    expect(captured[3].model).toBe("haiku");
+    expect(captured[3].effort).toBe("low");
+  });
 });

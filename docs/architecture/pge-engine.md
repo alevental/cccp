@@ -85,6 +85,14 @@ The evaluator reads the task plan, considers any guidance and template, and writ
 - The contract reflects the evaluator's understanding of what "done" means
 - Custom templates can guide the contract's structure via `contract.template`
 
+## Model and effort resolution
+
+Each dispatch in the PGE cycle resolves `model` and `effort` independently via `resolveModelEffort()` in `src/stage-helpers.ts`. Resolution order: agent config > stage level > `phase_defaults` > pipeline level.
+
+This allows fine-grained control, e.g. planners using `medium` effort while generators use `high`. The resolved values are passed as `--model` and `--effort` flags to the `claude` CLI subprocess.
+
+The contract-writer dispatch uses the **evaluator's** model/effort config, since it dispatches the evaluator agent.
+
 ## Input merging
 
 Inputs are available at two levels and merged before dispatch:

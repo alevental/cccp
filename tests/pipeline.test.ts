@@ -554,4 +554,166 @@ stages:
       expect(stage.human_review).toBeUndefined();
     }
   });
+
+  it("accepts model and effort on agent stage", async () => {
+    const file = await writeTmpYaml(`
+name: model-effort-agent
+stages:
+  - name: quick-task
+    type: agent
+    agent: agents/analyst.md
+    model: haiku
+    effort: low
+    output: out.md
+`);
+
+    const pipeline = await loadPipeline(file);
+    const stage = pipeline.stages[0];
+    expect(stage.type).toBe("agent");
+    if (stage.type === "agent") {
+      expect(stage.model).toBe("haiku");
+      expect(stage.effort).toBe("low");
+    }
+  });
+
+  it("accepts model and effort at pipeline level", async () => {
+    const file = await writeTmpYaml(`
+name: pipeline-defaults
+model: sonnet
+effort: high
+stages:
+  - name: task
+    type: agent
+    agent: agents/writer.md
+    output: out.md
+`);
+
+    const pipeline = await loadPipeline(file);
+    expect(pipeline.model).toBe("sonnet");
+    expect(pipeline.effort).toBe("high");
+  });
+
+  it("accepts model and effort on PGE stage and per-agent configs", async () => {
+    const file = await writeTmpYaml(`
+name: pge-model-effort
+stages:
+  - name: spec-writing
+    type: pge
+    model: opus
+    effort: high
+    planner:
+      agent: agents/planner.md
+      effort: medium
+    generator:
+      agent: agents/gen.md
+      model: sonnet
+    evaluator:
+      agent: agents/eval.md
+    contract:
+      deliverable: spec.md
+      max_iterations: 3
+`);
+
+    const pipeline = await loadPipeline(file);
+    const stage = pipeline.stages[0];
+    expect(stage.type).toBe("pge");
+    if (stage.type === "pge") {
+      expect(stage.model).toBe("opus");
+      expect(stage.effort).toBe("high");
+      expect(stage.planner.effort).toBe("medium");
+      expect(stage.planner.model).toBeUndefined();
+      expect(stage.generator.model).toBe("sonnet");
+      expect(stage.generator.effort).toBeUndefined();
+      expect(stage.evaluator.model).toBeUndefined();
+      expect(stage.evaluator.effort).toBeUndefined();
+    }
+  });
+
+  it("accepts model and effort on autoresearch stage", async () => {
+    const file = await writeTmpYaml(`
+name: autoresearch-model-effort
+stages:
+  - name: tune
+    type: autoresearch
+    model: opus
+    effort: high
+    artifact: prompt.md
+    ground_truth: expected.md
+    output: actual.md
+    adjuster:
+      agent: agents/adjuster.md
+      effort: medium
+    executor:
+      agent: agents/executor.md
+    evaluator:
+      agent: agents/eval.md
+    max_iterations: 5
+`);
+
+    const pipeline = await loadPipeline(file);
+    const stage = pipeline.stages[0];
+    expect(stage.type).toBe("autoresearch");
+    if (stage.type === "autoresearch") {
+      expect(stage.model).toBe("opus");
+      expect(stage.effort).toBe("high");
+      expect(stage.adjuster.effort).toBe("medium");
+    }
+  });
+
+  it("rejects invalid effort value", async () => {
+    const file = await writeTmpYaml(`
+name: bad-effort
+stages:
+  - name: task
+    type: agent
+    agent: agents/writer.md
+    effort: turbo
+    output: out.md
+`);
+
+    await expect(loadPipeline(file)).rejects.toThrow("Pipeline validation failed");
+  });
+
+  it("accepts phase_defaults at pipeline level", async () => {
+    const file = await writeTmpYaml(`
+name: phase-defaults
+effort: high
+phase_defaults:
+  planner:
+    effort: medium
+  evaluator:
+    model: haiku
+    effort: low
+  adjuster:
+    effort: medium
+stages:
+  - name: task
+    type: agent
+    agent: agents/writer.md
+    output: out.md
+`);
+
+    const pipeline = await loadPipeline(file);
+    expect(pipeline.phase_defaults?.planner?.effort).toBe("medium");
+    expect(pipeline.phase_defaults?.evaluator?.model).toBe("haiku");
+    expect(pipeline.phase_defaults?.evaluator?.effort).toBe("low");
+    expect(pipeline.phase_defaults?.adjuster?.effort).toBe("medium");
+    expect(pipeline.phase_defaults?.generator).toBeUndefined();
+    expect(pipeline.phase_defaults?.executor).toBeUndefined();
+  });
+
+  it("rejects invalid effort in phase_defaults", async () => {
+    const file = await writeTmpYaml(`
+name: bad-phase-effort
+phase_defaults:
+  planner:
+    effort: extreme
+stages:
+  - name: task
+    type: agent
+    agent: agents/writer.md
+`);
+
+    await expect(loadPipeline(file)).rejects.toThrow("Pipeline validation failed");
+  });
 });

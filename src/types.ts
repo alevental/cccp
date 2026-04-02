@@ -5,12 +5,36 @@ import type { GateStrategy } from "./gate/gate-strategy.js";
 // Pipeline YAML structure types
 // ---------------------------------------------------------------------------
 
+/** Valid effort levels for agent dispatch. */
+export type EffortLevel = "low" | "medium" | "high" | "max";
+
+/** Per-phase model/effort defaults (e.g., all planners use medium effort). */
+export interface PhaseModelEffort {
+  model?: string;
+  effort?: EffortLevel;
+}
+
+/** Pipeline-level defaults keyed by PGE/autoresearch phase name. */
+export interface PhaseDefaults {
+  planner?: PhaseModelEffort;
+  generator?: PhaseModelEffort;
+  evaluator?: PhaseModelEffort;
+  adjuster?: PhaseModelEffort;
+  executor?: PhaseModelEffort;
+}
+
 /** Top-level pipeline definition loaded from YAML. */
 export interface Pipeline {
   name: string;
   description?: string;
   /** Default variables available to all stages. */
   variables?: Record<string, string>;
+  /** Pipeline-level default model (inherited by stages unless overridden). */
+  model?: string;
+  /** Pipeline-level default effort (inherited by stages unless overridden). */
+  effort?: EffortLevel;
+  /** Per-phase model/effort defaults. Resolution: agent > stage > phase_defaults > pipeline. */
+  phase_defaults?: PhaseDefaults;
   stages: StageEntry[];
 }
 
@@ -40,6 +64,10 @@ export interface AgentStage extends StageBase {
   allowed_tools?: string[];
   /** Fire a human review gate after successful completion. */
   human_review?: boolean;
+  /** Model override for this agent dispatch. */
+  model?: string;
+  /** Effort level override for this agent dispatch. */
+  effort?: EffortLevel;
 }
 
 /** Shared agent config for planner, generator, and evaluator in PGE stages. */
@@ -50,6 +78,10 @@ export interface PgeAgentConfig {
   allowed_tools?: string[];
   /** Agent-specific input files (merged with stage-level inputs at dispatch). */
   inputs?: string[];
+  /** Model override for this agent dispatch. */
+  model?: string;
+  /** Effort level override for this agent dispatch. */
+  effort?: EffortLevel;
 }
 
 /** Plan-Generate-Evaluate stage with retry loop. */
@@ -59,6 +91,10 @@ export interface PgeStage extends StageBase {
   plan?: string;
   /** Stage-level inputs shared across all agents (planner, generator, evaluator). */
   inputs?: string[];
+  /** Stage-level default model (inherited by sub-agents unless overridden). */
+  model?: string;
+  /** Stage-level default effort (inherited by sub-agents unless overridden). */
+  effort?: EffortLevel;
   /** Planner agent — reads plan + codebase, writes task-plan.md. */
   planner: PgeAgentConfig;
   /** Generator agent — reads contract + task plan, produces deliverable. */
@@ -107,6 +143,10 @@ export interface AutoresearchStage extends StageBase {
   output: string;
   /** Stage-level inputs shared across all agents. */
   inputs?: string[];
+  /** Stage-level default model (inherited by sub-agents unless overridden). */
+  model?: string;
+  /** Stage-level default effort (inherited by sub-agents unless overridden). */
+  effort?: EffortLevel;
   /** Adjuster agent — reads evaluation feedback, modifies the artifact. */
   adjuster: PgeAgentConfig;
   /** Executor agent — runs the task using the current artifact. */

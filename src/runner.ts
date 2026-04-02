@@ -135,6 +135,8 @@ async function runAgentStage(
       permissionMode: ctx.projectConfig?.permission_mode,
       onActivity: (activity) => activityBus.emit("activity", activity),
       quiet: ctx.quiet,
+      model: stage.model ?? ctx.pipeline.model,
+      effort: stage.effort ?? ctx.pipeline.effort,
     });
 
     if (result.exitCode !== 0) {

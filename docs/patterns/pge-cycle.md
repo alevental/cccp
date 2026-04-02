@@ -388,6 +388,12 @@ export interface PgeResult {
 }
 ```
 
+## Model and Effort
+
+Each PGE sub-agent (planner, generator, evaluator) can use a different model and effort level. This is useful for cost optimization — planners and evaluators often don't need the same reasoning depth as generators.
+
+Resolution order: agent config > stage level > `phase_defaults` > pipeline level. See [Pipeline Schema](../architecture/pipeline-schema.md#model-and-effort-resolution) for full details.
+
 ## Related Documentation
 
 - [Pipeline Authoring](../guides/pipeline-authoring.md) -- PGE stage YAML syntax
