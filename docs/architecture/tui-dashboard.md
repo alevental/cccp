@@ -10,17 +10,17 @@ The CCCP dashboard is an Ink-based (React for the terminal) real-time UI that sh
 
 ## Dashboard Modes
 
-### Inline mode (`cccp run`)
+### Inline mode (`cccp run` and `cccp resume`)
 
-When running `cccp run` without `--headless` or `--dry-run`, the dashboard renders inline. It receives activity updates through the in-process [activity bus](streaming.md#activity-bus):
+When running `cccp run` or `cccp resume` without `--headless` (and without `--dry-run` for `run`), the dashboard renders inline. It receives activity updates through the in-process [activity bus](streaming.md#activity-bus):
 
 ```typescript
-const dashboard = startDashboard(artifactDir, projectDir, initialState);
+const dashboard = startDashboard(runId, projectDir, initialState);
 // ... pipeline runs ...
 dashboard.unmount();
 ```
 
-The `startDashboard()` function sets `useEventBus={true}` on the Dashboard component.
+The `startDashboard()` function sets `useEventBus={true}` on the Dashboard component. Both `run` and `resume` use this inline mode since the pipeline executes in the same process.
 
 ### Standalone mode (`cccp dashboard`)
 

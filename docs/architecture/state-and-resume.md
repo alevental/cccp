@@ -128,6 +128,8 @@ The runner writes state; the MCP server, gate watcher, and dashboard read it. Sy
 
 The runner uses this to skip completed stages and restart from the right point. For PGE stages that were `in_progress`, the resume point includes `resumeIteration` and `resumeStep` (though current implementation restarts the full PGE cycle from the interrupted stage — sub-step resume is tracked for future use).
 
+The `resume` CLI command launches the inline TUI dashboard (via `startDashboard()` with `useEventBus={true}`) identically to `cccp run`, using `QuietLogger` to suppress raw console output. The `--headless` flag disables the TUI on resume just as it does on fresh runs.
+
 ## State lifecycle
 
 1. **Created**: `createState()` called by the runner at pipeline start

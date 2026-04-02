@@ -139,12 +139,34 @@ export async function runPgeCycle(
 
     const plannerInputs = mergeInputs(stage.inputs, stage.planner.inputs, vars);
     const planFile = stage.plan ? interpolate(stage.plan, vars) : undefined;
+
+    // Frame the planner's task explicitly as planning — not execution.
+    // Without this framing, the planner receives the raw stage task (e.g.
+    // "Create a wireframe") and produces the deliverable instead of a plan.
+    const plannerTask = [
+      `You are a **planner**. Your job is to produce a task plan — a detailed, structured breakdown of work that a separate **generator agent** will read and execute after you. You are NOT producing the deliverable yourself. Do not attempt to do the work — only plan it.`,
+      ``,
+      `The generator agent will receive your plan alongside a contract (acceptance criteria). Your plan should give the generator a clear roadmap: what to build, in what order, what decisions to make, what constraints to respect, and what pitfalls to avoid. Write as if you are briefing a capable colleague who will do the hands-on work.`,
+      ``,
+      `## Work to be Planned`,
+      ``,
+      taskBody,
+    ].join("\n");
+
+    // Append a closing reminder to any user-provided guidance so the planner
+    // re-reads the planning instruction after absorbing all other context.
+    const plannerClosing =
+      `**Remember: you are writing a PLAN, not executing the task.** Your output is a task plan document — a structured decomposition of the work described above. Another agent reads this plan and produces the actual deliverable. Do not create the deliverable, prototype it, or include finished content. Focus entirely on planning: break the work into steps, specify the approach for each step, identify dependencies and sequencing, flag risks or ambiguities, and provide enough detail that the generator agent can execute without guesswork.`;
+    const plannerGuidance = stage.contract.guidance
+      ? `${stage.contract.guidance}\n\n${plannerClosing}`
+      : plannerClosing;
+
     const plannerPrompt = buildTaskContext({
-      task: taskBody,
+      task: plannerTask,
       planFile,
       inputs: plannerInputs.length > 0 ? plannerInputs : undefined,
       output: taskPlanPath,
-      guidance: stage.contract.guidance,
+      guidance: plannerGuidance,
     });
 
     const plannerSystemFile = await writeSystemPromptFile(plannerAgent.markdown, ctx.tempTracker);

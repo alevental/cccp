@@ -58,14 +58,21 @@ The PGE cycle is a contract-based quality loop. A planner agent produces a task 
 
 The planner agent runs once before the generate-evaluate loop. It reads the plan document (if provided via the `plan` field) and the codebase, then writes a `task-plan.md` file with a detailed breakdown of the work.
 
+The planner's user prompt explicitly frames the task as **planning, not execution**. The raw stage task (e.g. "Create a wireframe") is wrapped with bookended instructions:
+
+1. **Opening framing** — identifies the agent as a planner producing a task plan for a separate generator agent to execute. Instructs the planner not to produce the deliverable itself.
+2. **Task body** — the stage `task` field, presented under a "Work to be Planned" heading (not "Task").
+3. **Closing reminder** — appended to the Guidance section, reiterating that the output must be a plan document, not the deliverable or any finished content.
+
 The planner receives:
 
 - **System prompt:** The planner agent's markdown definition (via `--append-system-prompt-file`)
 - **User prompt (task context):** Built by `buildTaskContext()` with:
-  - Task instruction from the stage (`task` field)
+  - Planning framing + stage task instruction (wrapped, not raw)
   - Plan document path (if `plan` is specified)
   - Effective inputs (stage-level + planner-specific)
   - Output path (`task-plan.md` in the stage directory)
+  - Guidance with closing planning reminder
 
 ### Input merging
 

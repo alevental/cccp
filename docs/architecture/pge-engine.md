@@ -59,7 +59,7 @@ runPgeCycle(stage, ctx)
 
 4. **State is updated at every sub-step.** Planner dispatched, contract dispatched, generator dispatched, evaluator dispatched, routed. This enables resume at any point within an iteration.
 
-5. **The planner runs once, before the generate-evaluate loop.** The planner produces a task plan that feeds into both the contract writer and the generator.
+5. **The planner runs once, before the generate-evaluate loop.** The planner produces a task plan that feeds into both the contract writer and the generator. The planner's user prompt explicitly frames the task as planning (not execution) with bookended instructions -- an opening framing that identifies the agent as a planner producing work for a separate generator, and a closing reminder to not produce the deliverable itself.
 
 6. **The evaluator serves dual roles.** In contract mode, it reads the task plan and writes a contract with verifiable acceptance criteria. In evaluation mode, it reads the contract and deliverable and writes an evaluation.
 

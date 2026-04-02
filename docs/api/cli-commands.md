@@ -122,6 +122,12 @@ npx @alevental/cccp resume -p <name> -r <run-id-prefix> [options]
 
 For PGE stages, resume includes the iteration number and sub-step, so a crashed generator or evaluator can be retried without restarting the entire PGE cycle.
 
+### TUI behavior
+
+- TUI dashboard is shown by default (identical to `cccp run`)
+- Disabled when `--headless` is set
+- When TUI is active, console output from agents is suppressed (`quiet: true`)
+
 ### Example
 
 ```bash

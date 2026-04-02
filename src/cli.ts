@@ -24,7 +24,7 @@ program
   .description(
     "Claude Code and Cmux Pipeline Reagent — deterministic YAML-based pipeline orchestration",
   )
-  .version("0.3.1");
+  .version("0.5.1");
 
 program
   .command("run")
@@ -151,6 +151,8 @@ program
     const pipelineFile = resolve(existingState.pipelineFile);
     const pipeline = await loadPipeline(pipelineFile);
 
+    const showTui = !opts.headless;
+
     const ctx = buildRunContext({
       project: opts.project,
       projectDir,
@@ -159,11 +161,23 @@ program
       artifactDir: existingState.artifactDir,
       projectConfig,
       headless: opts.headless,
+      showTui,
     });
 
-    const result = await runPipeline(ctx, { existingState });
+    if (showTui) {
+      const { startDashboard } = await import("./tui/dashboard.js");
 
-    process.exit(result.status === "passed" ? 0 : 1);
+      const dashboard = startDashboard(existingState.runId, projectDir, existingState);
+      const result = await runPipeline(ctx, { existingState });
+
+      await new Promise((r) => setTimeout(r, 500));
+      dashboard.unmount();
+
+      process.exit(result.status === "passed" ? 0 : 1);
+    } else {
+      const result = await runPipeline(ctx, { existingState });
+      process.exit(result.status === "passed" ? 0 : 1);
+    }
   });
 
 program
