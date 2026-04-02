@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-import type { Pipeline } from "./types.js";
+import type { Pipeline, Stage } from "./types.js";
+import { isParallelGroup } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Zod schemas — validate raw YAML into typed Pipeline objects
@@ -99,11 +100,73 @@ const StageSchema = z.discriminatedUnion("type", [
   PipelineStageSchema,
 ]);
 
+const ParallelGroupSchema = z.object({
+  parallel: z.object({
+    on_failure: z.enum(["fail_fast", "wait_all"]).optional(),
+    stages: z.array(StageSchema).min(2, "Parallel groups must contain at least 2 stages"),
+  }),
+});
+
+const StageEntrySchema = z.union([StageSchema, ParallelGroupSchema]);
+
 const PipelineSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
   variables: z.record(z.string()).optional(),
-  stages: z.array(StageSchema).min(1),
+  stages: z.array(StageEntrySchema).min(1),
+}).superRefine((pipeline, ctx) => {
+  // Collect all stage names and validate parallel group constraints.
+  const allNames = new Set<string>();
+  const issues: string[] = [];
+
+  for (const entry of pipeline.stages) {
+    if ("parallel" in entry && !("type" in entry)) {
+      // Parallel group — validate inner stages
+      const group = entry as z.infer<typeof ParallelGroupSchema>;
+      const groupOutputs = new Map<string, string>(); // output path → stage name
+
+      for (const stage of group.parallel.stages) {
+        // No human_gate inside parallel groups
+        if (stage.type === "human_gate") {
+          issues.push(`Stage '${stage.name}' is type human_gate and cannot be inside a parallel group (gates block execution)`);
+        }
+        // No pipeline stages inside parallel groups
+        if (stage.type === "pipeline") {
+          issues.push(`Stage '${stage.name}' is type pipeline and cannot be inside a parallel group`);
+        }
+        // Duplicate name check
+        if (allNames.has(stage.name)) {
+          issues.push(`Duplicate stage name '${stage.name}'`);
+        }
+        allNames.add(stage.name);
+
+        // Conflicting output paths within group
+        const outputPath =
+          stage.type === "agent" ? stage.output :
+          stage.type === "pge" ? stage.contract?.deliverable :
+          stage.type === "autoresearch" ? stage.output :
+          undefined;
+        if (outputPath) {
+          const existing = groupOutputs.get(outputPath);
+          if (existing) {
+            issues.push(`Stages '${existing}' and '${stage.name}' in the same parallel group both write to '${outputPath}'`);
+          }
+          groupOutputs.set(outputPath, stage.name);
+        }
+      }
+    } else {
+      // Regular stage
+      const stage = entry as z.infer<typeof StageSchema>;
+      if (allNames.has(stage.name)) {
+        issues.push(`Duplicate stage name '${stage.name}'`);
+      }
+      allNames.add(stage.name);
+    }
+  }
+
+  for (const issue of issues) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue });
+  }
 });
 
 // ---------------------------------------------------------------------------

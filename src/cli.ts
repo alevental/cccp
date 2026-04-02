@@ -83,7 +83,7 @@ program
     });
 
     if (showTui) {
-      const { createState, saveState } = await import("./state.js");
+      const { createState, flattenStageEntries, saveState } = await import("./state.js");
       const { startDashboard } = await import("./tui/dashboard.js");
 
       // Create initial state so the dashboard has something to render.
@@ -91,7 +91,7 @@ program
         pipeline.name,
         opts.project,
         pipelineFile,
-        pipeline.stages.map((s: any) => ({ name: s.name, type: s.type })),
+        flattenStageEntries(pipeline.stages),
         artifactDir,
         projectDir,
       );

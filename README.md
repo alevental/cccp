@@ -70,7 +70,7 @@ npx @alevental/cccp run -f pipelines/example.yaml -p my-project
 
 ## Pipeline YAML
 
-Pipelines are sequences of typed stages:
+Pipelines are sequences of typed stages, with optional parallel groups for concurrent execution:
 
 ```yaml
 name: my-pipeline
@@ -111,6 +111,19 @@ stages:
     variables:
       source: "{artifact_dir}/design.md"
 
+  # Run independent stages concurrently
+  - parallel:
+      on_failure: wait_all
+      stages:
+        - name: blog-post
+          type: agent
+          agent: copywriter
+          output: "{artifact_dir}/blog-post.md"
+        - name: release-notes
+          type: agent
+          agent: copywriter
+          output: "{artifact_dir}/release-notes.md"
+
   # Human approval gate
   - name: approval
     type: human_gate
@@ -128,6 +141,8 @@ stages:
 | `autoresearch` | Iterative artifact optimization — adjust artifact, execute task, evaluate against ground truth, retry on FAIL |
 | `pipeline` | Invoke another pipeline YAML as a sub-pipeline — runs inline, shares the parent run lifecycle |
 | `human_gate` | Block until approved via MCP tool call or state file edit |
+
+Stages can also be wrapped in a `parallel` block to run concurrently. See the [pipeline skill](.claude/skills/cccp-pipeline/SKILL.md) for the full schema.
 
 ### Variables
 
@@ -296,7 +311,7 @@ Without cmux, CCCP falls back to plain terminal output.
 ## Development
 
 ```bash
-npm test           # run all tests (181 tests)
+npm test           # run all tests (206 tests)
 npm run typecheck  # tsc --noEmit
 npm run test:watch # watch mode
 npm run build      # compile TypeScript to dist/

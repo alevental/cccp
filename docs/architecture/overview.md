@@ -12,7 +12,11 @@ Reads YAML pipeline definitions and validates them against a Zod schema. Produce
 ### Stage types
 - **`agent`** — Dispatch one agent via `claude -p`, collect output file
 - **`pge`** — Plan-Generate-Evaluate cycle: dispatch planner -> dispatch evaluator (contract mode) -> dispatch generator -> dispatch evaluator (evaluation mode) -> parse `### Overall: PASS/FAIL` -> retry generator/evaluator loop on FAIL up to max_iterations
+- **`autoresearch`** — Iterative artifact optimization: adjust artifact, execute task, evaluate against ground truth, retry on FAIL
+- **`pipeline`** — Invoke another pipeline YAML as a sub-pipeline, runs inline with nested state
 - **`human_gate`** — Block pipeline until approved via MCP tool call or state file edit
+
+Stages can be wrapped in `parallel` blocks for concurrent execution. Independent stages within a group run simultaneously as separate subprocesses. Supports `fail_fast` (default) and `wait_all` failure modes.
 
 ### Agent dispatch (`src/agent.ts`)
 Each agent runs as a separate `claude --bare -p` subprocess with:
@@ -74,7 +78,9 @@ CLI (cli.ts)
   → loads YAML → Pipeline (pipeline.ts)
   → loads cccp.yaml → ProjectConfig (config.ts)
   → resolves agents → search paths (agent-resolver.ts)
-  → runs stages sequentially (runner.ts)
+  → runs stages sequentially or in parallel groups (runner.ts)
+      → sequential stages: one at a time in YAML order
+      → parallel groups: concurrent dispatch via Promise.all()
       → agent stages: resolve → dispatch → check output
       → pge stages: plan → contract → generate → evaluate → route
       → gate stages: write pending → elicitation/MCP/poll → approve/reject

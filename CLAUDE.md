@@ -8,7 +8,7 @@ A standalone TypeScript CLI that provides deterministic YAML-based pipeline orch
 
 ```bash
 npm install
-npm test              # vitest — 181 tests, ~5s
+npm test              # vitest — 206 tests, ~5s
 npm run typecheck     # tsc --noEmit
 npx tsx src/cli.ts    # run CLI in dev mode (use instead of `npm run dev`)
 ```
@@ -28,7 +28,8 @@ npx @alevental/cccp examples              # scaffold all agents + example pipeli
 
 - **Pipeline YAML** → Zod-validated into typed `Pipeline` objects (`src/pipeline.ts`)
 - **Types**: all domain types in `src/types.ts` (Pipeline, Stage, RunContext, PipelineState, StageState, etc.)
-- **Stage types**: `agent` (single dispatch), `pge` (Plan-Generate-Evaluate cycle with retry), `autoresearch` (iterative artifact optimization), `pipeline` (sub-pipeline composition), `human_gate` (approval gate)
+- **Stage types**: `agent` (single dispatch), `pge` (Plan-Generate-Evaluate cycle with retry), `autoresearch` (iterative artifact optimization), `pipeline` (sub-pipeline composition), `human_gate` (approval gate). Stages can be wrapped in `parallel` blocks for concurrent execution.
+- **Parallel execution**: `parallel` groups in pipeline YAML run their stages concurrently via `Promise.all()`. Supports `fail_fast` (default) and `wait_all` failure modes. Constraints: no `human_gate` or `pipeline` stages inside groups, unique outputs per group. Resume re-runs only incomplete stages within a group. (`src/runner.ts`, `src/types.ts`)
 - **Agent dispatch**: injectable `AgentDispatcher` interface (`src/dispatcher.ts`); default spawns `claude -p --output-format stream-json` (`src/agent.ts`)
 - **PGE cycle**: planner -> evaluator (contract mode) -> generator -> evaluator (evaluation mode) -> regex parse `### Overall: PASS/FAIL` -> route (`src/pge.ts`, `src/evaluator.ts`). Planner and contract run once; generator/evaluator loop retries on FAIL. State passed by reference with `onProgress` callback.
 - **State**: SQLite at `.cccp/cccp.db` via sql.js, atomic flush, stage-level + PGE-iteration-level resume (`src/state.ts`, `src/db.ts`)

@@ -220,6 +220,87 @@ Sub-pipeline composition. Invokes another pipeline YAML inline within the parent
 - Resume works across pipeline boundaries
 - `on_fail` strategies work the same as PGE/autoresearch stages
 
+## Parallel Execution Groups
+
+Run independent stages concurrently. Stages in a `parallel` block execute simultaneously as separate subprocesses, reducing total pipeline runtime when stages don't depend on each other's outputs.
+
+### When to Use Parallel Groups
+
+Use parallel groups when stages share the same inputs but produce independent outputs. Common patterns:
+
+- **Content fan-out**: After research/positioning is complete, multiple content pieces (blog post, release notes, social copy, changelog) can all be written simultaneously since they read the same source material
+- **Multi-perspective analysis**: Run competitive analysis, market sizing, and customer research in parallel when they all stem from the same brief
+- **Independent code tasks**: After a design is approved, implementation of separate modules or writing tests alongside documentation can happen concurrently
+- **Multi-format generation**: Produce different output formats (PDF report, slide deck, executive summary) from the same source artifact in parallel
+
+The key question is: **does stage B need to read stage A's output?** If not, they can be parallel.
+
+```yaml
+- parallel:
+    on_failure: wait_all              # Optional. "fail_fast" (default) or "wait_all".
+    stages:
+      - name: blog-post
+        type: pge
+        task: "Write the launch blog post."
+        # ... full stage config
+      - name: release-notes
+        type: agent
+        task: "Write release notes."
+        agent: copywriter
+        output: "{artifact_dir}/release-notes.md"
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `on_failure` | string | No | `"fail_fast"` (default): stop group on first failure. `"wait_all"`: let all stages finish. |
+| `stages` | Stage[] | Yes | At least 2 stages. Each stage uses the standard schema. |
+
+### Constraints
+
+- **No `human_gate` inside parallel groups** — gates block execution and cannot run alongside other stages
+- **No `pipeline` stages inside parallel groups** — sub-pipelines have complex state interactions
+- **No conflicting outputs** — stages in the same group cannot write to the same `output` or `contract.deliverable` path
+- **Unique stage names** — all stage names must be unique across the entire pipeline (including inside groups)
+
+### Failure Handling
+
+| Mode | Behavior |
+|------|----------|
+| `fail_fast` (default) | When one stage fails, remaining unstarted stages are skipped. Already-running stages finish naturally. Pipeline stops after the group. |
+| `wait_all` | All stages run to completion regardless of individual failures. Pipeline stops after the group if any stage failed. |
+
+### Resume
+
+When resuming a pipeline that was interrupted during a parallel group, only the stages that didn't complete are re-executed. Completed stages within the group are skipped.
+
+### Example: Parallel Content Creation
+
+```yaml
+stages:
+  - name: positioning
+    type: pge
+    # ... defines positioning strategy
+
+  - parallel:
+      on_failure: wait_all
+      stages:
+        - name: blog-post
+          type: pge
+          task: "Write the launch blog post."
+          inputs:
+            - "{artifact_dir}/positioning.md"
+          # ... PGE config
+        - name: release-notes
+          type: agent
+          task: "Write release notes."
+          agent: copywriter
+          output: "{artifact_dir}/release-notes.md"
+
+  - name: launch-approval
+    type: human_gate
+    prompt: "Review all materials."
+```
+
 ## Variables
 
 ### Syntax

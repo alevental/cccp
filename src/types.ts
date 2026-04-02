@@ -11,7 +11,7 @@ export interface Pipeline {
   description?: string;
   /** Default variables available to all stages. */
   variables?: Record<string, string>;
-  stages: Stage[];
+  stages: StageEntry[];
 }
 
 /** A single stage in a pipeline. Discriminated on `type`. */
@@ -129,6 +129,27 @@ export interface PipelineStage extends StageBase {
 export type EscalationStrategy = "stop" | "human_gate" | "skip";
 
 // ---------------------------------------------------------------------------
+// Parallel execution groups
+// ---------------------------------------------------------------------------
+
+/** A group of stages that execute concurrently. */
+export interface ParallelGroup {
+  parallel: {
+    /** Failure handling: fail_fast cancels pending siblings, wait_all lets all finish. Default: fail_fast. */
+    on_failure?: "fail_fast" | "wait_all";
+    stages: Stage[];
+  };
+}
+
+/** An entry in the top-level stages array: either a single stage or a parallel group. */
+export type StageEntry = Stage | ParallelGroup;
+
+/** Type guard: is this StageEntry a ParallelGroup? */
+export function isParallelGroup(entry: StageEntry): entry is ParallelGroup {
+  return "parallel" in entry && !("type" in entry);
+}
+
+// ---------------------------------------------------------------------------
 // State types
 // ---------------------------------------------------------------------------
 
@@ -169,6 +190,8 @@ export interface StageState {
   error?: string;
   /** Nested pipeline state for type: pipeline stages. */
   children?: PipelineState;
+  /** Group ID for stages in a parallel group (e.g. "parallel-0"). Informational for TUI display. */
+  groupId?: string;
 }
 
 export interface GateInfo {

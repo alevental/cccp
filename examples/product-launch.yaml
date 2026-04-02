@@ -50,31 +50,35 @@ stages:
       guidance: "Must include timeline, channel strategy, content deliverables, success metrics, and dependencies."
       max_iterations: 2
 
-  - name: blog-post
-    type: pge
-    task: "Write the launch blog post."
-    inputs:
-      - "{artifact_dir}/positioning.md"
-      - "{artifact_dir}/launch-plan.md"
-    planner:
-      agent: marketer
-      operation: content
-    generator:
-      agent: copywriter
-    evaluator:
-      agent: reviewer
-    contract:
-      deliverable: "{artifact_dir}/blog-post.md"
-      guidance: "Must align with positioning. Engaging, clear, technically accurate."
-      max_iterations: 3
+  # Blog post and release notes are independent — run them in parallel.
+  - parallel:
+      on_failure: wait_all
+      stages:
+        - name: blog-post
+          type: pge
+          task: "Write the launch blog post."
+          inputs:
+            - "{artifact_dir}/positioning.md"
+            - "{artifact_dir}/launch-plan.md"
+          planner:
+            agent: marketer
+            operation: content
+          generator:
+            agent: copywriter
+          evaluator:
+            agent: reviewer
+          contract:
+            deliverable: "{artifact_dir}/blog-post.md"
+            guidance: "Must align with positioning. Engaging, clear, technically accurate."
+            max_iterations: 3
 
-  - name: release-notes
-    type: agent
-    task: "Write release notes based on the positioning and launch plan."
-    agent: copywriter
-    inputs:
-      - "{artifact_dir}/positioning.md"
-    output: "{artifact_dir}/release-notes.md"
+        - name: release-notes
+          type: agent
+          task: "Write release notes based on the positioning and launch plan."
+          agent: copywriter
+          inputs:
+            - "{artifact_dir}/positioning.md"
+          output: "{artifact_dir}/release-notes.md"
 
   - name: launch-approval
     type: human_gate

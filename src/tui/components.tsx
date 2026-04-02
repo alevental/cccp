@@ -45,35 +45,81 @@ interface StageListProps {
   state: PipelineState;
 }
 
+function StageRow({ name, stage }: { name: string; stage: StageState }) {
+  const icon = stageIcon(stage.status);
+  const color = stageColor(stage.status);
+  const iterInfo =
+    stage.type === "pge" && stage.iteration
+      ? ` (${stage.iteration})`
+      : "";
+  const duration =
+    stage.durationMs != null
+      ? ` ${(stage.durationMs / 1000).toFixed(1)}s`
+      : "";
+  const gateTag = stage.type === "human_gate" ? " \u2691" : "";
+
+  if (stage.status === "in_progress") {
+    return (
+      <Text color="yellow">
+        <Spinner type="dots" /> {name}{iterInfo}{gateTag}
+      </Text>
+    );
+  }
+  return (
+    <Text color={color}>
+      {icon} {name}{iterInfo}{duration}{gateTag}
+    </Text>
+  );
+}
+
 export function StageList({ state }: StageListProps) {
+  // Group consecutive stages by groupId for visual bracketing.
+  const rows: Array<{ kind: "stage"; name: string } | { kind: "group-start" } | { kind: "group-end" }> = [];
+  let currentGroupId: string | undefined;
+
+  for (const name of state.stageOrder) {
+    const stage = state.stages[name];
+    const groupId = stage.groupId;
+
+    if (groupId && groupId !== currentGroupId) {
+      // Entering a new parallel group
+      if (currentGroupId) rows.push({ kind: "group-end" });
+      rows.push({ kind: "group-start" });
+      currentGroupId = groupId;
+    } else if (!groupId && currentGroupId) {
+      // Leaving a parallel group
+      rows.push({ kind: "group-end" });
+      currentGroupId = undefined;
+    }
+
+    rows.push({ kind: "stage", name });
+  }
+  if (currentGroupId) rows.push({ kind: "group-end" });
+
   return (
     <Box flexDirection="column" minWidth={24}>
       <Text bold underline>Stages</Text>
-      {state.stageOrder.map((name) => {
-        const stage = state.stages[name];
-        const icon = stageIcon(stage.status);
-        const color = stageColor(stage.status);
-        const iterInfo =
-          stage.type === "pge" && stage.iteration
-            ? ` (${stage.iteration})`
-            : "";
-        const duration =
-          stage.durationMs != null
-            ? ` ${(stage.durationMs / 1000).toFixed(1)}s`
-            : "";
-        const gateTag = stage.type === "human_gate" ? " \u2691" : "";
-
+      {rows.map((row, i) => {
+        if (row.kind === "group-start") {
+          return (
+            <Box key={`gs-${i}`}>
+              <Text dimColor>{" "}{"\u2560"} parallel:</Text>
+            </Box>
+          );
+        }
+        if (row.kind === "group-end") {
+          return (
+            <Box key={`ge-${i}`}>
+              <Text dimColor>{" "}{"\u255A"}{"\u2550"}{"\u2550"}</Text>
+            </Box>
+          );
+        }
+        const stage = state.stages[row.name];
+        const indent = stage.groupId ? " \u2551  " : " ";
         return (
-          <Box key={name}>
-            {stage.status === "in_progress" ? (
-              <Text color="yellow">
-                {" "}<Spinner type="dots" /> {name}{iterInfo}{gateTag}
-              </Text>
-            ) : (
-              <Text color={color}>
-                {" "}{icon} {name}{iterInfo}{duration}{gateTag}
-              </Text>
-            )}
+          <Box key={row.name}>
+            <Text dimColor>{indent}</Text>
+            <StageRow name={row.name} stage={stage} />
           </Box>
         );
       })}
@@ -93,25 +139,14 @@ export function StageList({ state }: StageListProps) {
 // ---------------------------------------------------------------------------
 
 interface AgentActivityPanelProps {
-  activity: AgentActivity | null;
+  activities: Map<string, AgentActivity>;
 }
 
-export function AgentActivityPanel({ activity }: AgentActivityPanelProps) {
-  if (!activity) {
-    return (
-      <Box flexDirection="column" flexGrow={1} marginLeft={1}>
-        <Text bold underline>Agent Activity</Text>
-        <Text dimColor>Waiting for agent activity...</Text>
-      </Box>
-    );
-  }
-
+function SingleAgentDetail({ activity }: { activity: AgentActivity }) {
   const recentTools = activity.toolHistory?.slice(-8) ?? [];
 
   return (
-    <Box flexDirection="column" flexGrow={1} marginLeft={1}>
-      <Text bold underline>Agent Activity</Text>
-
+    <Box flexDirection="column">
       {/* Agent name + model */}
       <Box>
         <Text bold>[{activity.agent}]</Text>
@@ -160,6 +195,52 @@ export function AgentActivityPanel({ activity }: AgentActivityPanelProps) {
           {activity.totalCostUsd > 0 && ` | $${activity.totalCostUsd.toFixed(4)}`}
         </Text>
       </Box>
+    </Box>
+  );
+}
+
+function CompactAgentRow({ activity }: { activity: AgentActivity }) {
+  const activeTool = activity.toolHistory?.filter(t => t.status === "active").at(-1);
+  return (
+    <Box>
+      <Text bold>[{activity.agent}]</Text>
+      {activeTool && <Text color="cyan"> {"\u25B6"} {activeTool.name}</Text>}
+      <Text dimColor>
+        {" "}({activity.inputTokens.toLocaleString()}/{activity.outputTokens.toLocaleString()} tok)
+      </Text>
+    </Box>
+  );
+}
+
+export function AgentActivityPanel({ activities }: AgentActivityPanelProps) {
+  const entries = [...activities.values()];
+
+  if (entries.length === 0) {
+    return (
+      <Box flexDirection="column" flexGrow={1} marginLeft={1}>
+        <Text bold underline>Agent Activity</Text>
+        <Text dimColor>Waiting for agent activity...</Text>
+      </Box>
+    );
+  }
+
+  // Single agent: show full detail view (backwards-compatible).
+  if (entries.length === 1) {
+    return (
+      <Box flexDirection="column" flexGrow={1} marginLeft={1}>
+        <Text bold underline>Agent Activity</Text>
+        <SingleAgentDetail activity={entries[0]} />
+      </Box>
+    );
+  }
+
+  // Multiple agents: compact stacked view.
+  return (
+    <Box flexDirection="column" flexGrow={1} marginLeft={1}>
+      <Text bold underline>Agent Activity ({entries.length} agents)</Text>
+      {entries.map((a) => (
+        <CompactAgentRow key={a.agent} activity={a} />
+      ))}
     </Box>
   );
 }

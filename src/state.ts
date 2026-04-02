@@ -5,12 +5,14 @@ import type {
   PipelineState,
   StageState,
   StageStatus,
+  StageEntry,
   PgeStep,
   AutoresearchStep,
   GateInfo,
   ResumePoint,
   DiscoveredRun,
 } from "./types.js";
+import { isParallelGroup } from "./types.js";
 
 export type {
   PipelineState,
@@ -49,6 +51,35 @@ function resolveProjectDir(state?: PipelineState | null): string {
 }
 
 // ---------------------------------------------------------------------------
+// Stage entry flattening (parallel groups → flat stage list)
+// ---------------------------------------------------------------------------
+
+/**
+ * Flatten a mixed StageEntry[] (which may contain ParallelGroups) into a flat
+ * array of stage descriptors. Stages inside parallel groups get a `groupId`
+ * so the TUI and runner can reconstruct group boundaries.
+ */
+export function flattenStageEntries(
+  entries: StageEntry[],
+): Array<{ name: string; type: string; groupId?: string }> {
+  const result: Array<{ name: string; type: string; groupId?: string }> = [];
+  let groupIndex = 0;
+
+  for (const entry of entries) {
+    if (isParallelGroup(entry)) {
+      const groupId = `parallel-${groupIndex++}`;
+      for (const stage of entry.parallel.stages) {
+        result.push({ name: stage.name, type: stage.type, groupId });
+      }
+    } else {
+      result.push({ name: entry.name, type: entry.type });
+    }
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Create / Load / Save
 // ---------------------------------------------------------------------------
 
@@ -59,7 +90,7 @@ export function createState(
   pipeline: string,
   project: string,
   pipelineFile: string,
-  stages: Array<{ name: string; type: string }>,
+  stages: Array<{ name: string; type: string; groupId?: string }>,
   artifactDir: string,
   projectDir?: string,
 ): PipelineState {
@@ -67,11 +98,13 @@ export function createState(
   const order: string[] = [];
 
   for (const s of stages) {
-    stageMap[s.name] = {
+    const stageState: StageState = {
       name: s.name,
       type: s.type,
       status: "pending",
     };
+    if (s.groupId) stageState.groupId = s.groupId;
+    stageMap[s.name] = stageState;
     order.push(s.name);
   }
 

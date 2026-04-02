@@ -1,6 +1,6 @@
 # Pipeline Authoring
 
-Pipelines are YAML files that define a sequence of stages to execute. Each stage dispatches an agent, runs a PGE cycle, or blocks for human approval.
+Pipelines are YAML files that define stages to execute. Each stage dispatches an agent, runs a PGE cycle, or blocks for human approval. Stages run sequentially by default, but independent stages can be grouped in `parallel` blocks for concurrent execution.
 
 **Source files:**
 - [`src/pipeline.ts`](../../src/pipeline.ts) -- Zod schema and loader
@@ -35,7 +35,7 @@ stages:                                  # Required: at least one stage
 | `name` | `string` | Yes | Pipeline identifier (used in state, artifacts, display) |
 | `description` | `string` | No | Human-readable description |
 | `variables` | `Record<string, string>` | No | Default variables available to all stages |
-| `stages` | `Stage[]` | Yes | Ordered list of stages (minimum 1) |
+| `stages` | `StageEntry[]` | Yes | Ordered list of stages and parallel groups (minimum 1) |
 
 ### Variable interpolation
 
@@ -244,9 +244,50 @@ Invokes another pipeline YAML as a sub-pipeline. The sub-pipeline runs inline wi
 
 **State model:** The sub-pipeline's state is stored as a nested `PipelineState` inside the parent's `StageState` (the `children` field). This keeps the sub-pipeline self-contained and enables recursive resume.
 
+---
+
+### `parallel` -- Parallel Execution Group
+
+Wraps multiple stages for concurrent execution. Use when stages share the same inputs but produce independent outputs.
+
+```yaml
+- parallel:
+    on_failure: wait_all               # Optional: fail_fast (default) | wait_all
+    stages:
+      - name: blog-post
+        type: pge
+        task: "Write the launch blog post."
+        # ... full PGE config
+      - name: release-notes
+        type: agent
+        task: "Write release notes."
+        agent: copywriter
+        output: "{artifact_dir}/release-notes.md"
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `on_failure` | `"fail_fast" \| "wait_all"` | No | Failure handling mode (default: `"fail_fast"`) |
+| `stages` | `Stage[]` | Yes | At least 2 stages, each using the standard stage schema |
+
+**Failure modes:**
+
+| Mode | Behavior |
+|------|----------|
+| `fail_fast` (default) | On first failure, unstarted siblings are skipped. Already-running subprocesses finish naturally. Pipeline stops after the group. |
+| `wait_all` | All stages run to completion regardless of failures. Pipeline stops after the group if any stage failed. |
+
+**Constraints:**
+- No `human_gate` stages inside parallel groups (gates block execution)
+- No `pipeline` stages inside parallel groups
+- No conflicting `output` or `contract.deliverable` paths within a group
+- Stage names must be unique across the entire pipeline
+
+**When to use:** Content fan-out (blog post + release notes + changelog from same positioning), multi-perspective analysis (competitive + market + customer research from same brief), independent module implementation after a design is approved.
+
 ## Complete Example: Cross-Functional Pipeline
 
-This example (from `product-launch.yaml`) shows a cross-functional pipeline spanning research, marketing, and content creation:
+This example (from `product-launch.yaml`) shows a cross-functional pipeline with parallel content creation:
 
 ```yaml
 name: product-launch
@@ -286,32 +327,34 @@ stages:
     artifacts:
       - "{artifact_dir}/positioning.md"
 
-  # Stage 4: Content creation with copywriter and general reviewer
-  - name: blog-post
-    type: pge
-    task: "Write the launch blog post."
-    inputs:
-      - "{artifact_dir}/positioning.md"
-    planner:
-      agent: marketer
-      operation: content
-    generator:
-      agent: copywriter
-    evaluator:
-      agent: reviewer
-    contract:
-      deliverable: "{artifact_dir}/blog-post.md"
-      guidance: "Must align with positioning. Engaging, clear, technically accurate."
-      max_iterations: 3
+  # Blog post and release notes are independent — run them in parallel
+  - parallel:
+      on_failure: wait_all
+      stages:
+        - name: blog-post
+          type: pge
+          task: "Write the launch blog post."
+          inputs:
+            - "{artifact_dir}/positioning.md"
+          planner:
+            agent: marketer
+            operation: content
+          generator:
+            agent: copywriter
+          evaluator:
+            agent: reviewer
+          contract:
+            deliverable: "{artifact_dir}/blog-post.md"
+            guidance: "Must align with positioning. Engaging, clear, technically accurate."
+            max_iterations: 3
 
-  # Stage 5: Simple agent dispatch for release notes
-  - name: release-notes
-    type: agent
-    task: "Write release notes based on the positioning and launch plan."
-    agent: copywriter
-    inputs:
-      - "{artifact_dir}/positioning.md"
-    output: "{artifact_dir}/release-notes.md"
+        - name: release-notes
+          type: agent
+          task: "Write release notes based on the positioning and launch plan."
+          agent: copywriter
+          inputs:
+            - "{artifact_dir}/positioning.md"
+          output: "{artifact_dir}/release-notes.md"
 ```
 
 ## Complete Example: Variable Usage
@@ -386,6 +429,10 @@ The schema enforces:
 - `max_iterations` between 1 and 10
 - `on_fail` must be one of `stop`, `human_gate`, `skip`
 - `on_reject` must be one of `stop`, `retry`
+- Parallel groups must contain at least 2 stages
+- No `human_gate` or `pipeline` stages inside parallel groups
+- Unique stage names across the entire pipeline (including inside groups)
+- No conflicting output paths within a parallel group
 
 ## Related Documentation
 

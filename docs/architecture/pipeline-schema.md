@@ -17,8 +17,16 @@ const PipelineSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
   variables: z.record(z.string()).optional(),
-  stages: z.array(StageSchema).min(1),
+  stages: z.array(StageEntrySchema).min(1),
 });
+```
+
+### StageEntrySchema (union)
+
+Each entry in `stages` is either a regular stage or a parallel group:
+
+```typescript
+const StageEntrySchema = z.union([StageSchema, ParallelGroupSchema]);
 ```
 
 ### StageSchema (discriminated union)
@@ -34,6 +42,23 @@ const StageSchema = z.discriminatedUnion("type", [
 ```
 
 The `type` field is the discriminator. Valid values: `"agent"`, `"pge"`, `"human_gate"`, `"autoresearch"`, `"pipeline"`.
+
+### ParallelGroupSchema
+
+```typescript
+const ParallelGroupSchema = z.object({
+  parallel: z.object({
+    on_failure: z.enum(["fail_fast", "wait_all"]).optional(),
+    stages: z.array(StageSchema).min(2),
+  }),
+});
+```
+
+Validation rules (via `superRefine` on `PipelineSchema`):
+- No `human_gate` stages inside parallel groups (gates block execution)
+- No `pipeline` stages inside parallel groups (complex state interactions)
+- Unique stage names across the entire pipeline (including inside groups)
+- No conflicting `output` or `contract.deliverable` paths within a group
 
 ### AgentStageSchema
 
@@ -137,8 +162,23 @@ export interface Pipeline {
   description?: string;
   /** Default variables available to all stages. */
   variables?: Record<string, string>;
-  stages: Stage[];
+  stages: StageEntry[];
 }
+```
+
+### StageEntry and ParallelGroup
+
+```typescript
+export type StageEntry = Stage | ParallelGroup;
+
+export interface ParallelGroup {
+  parallel: {
+    on_failure?: "fail_fast" | "wait_all";
+    stages: Stage[];
+  };
+}
+
+export function isParallelGroup(entry: StageEntry): entry is ParallelGroup;
 ```
 
 ### Stage (discriminated union)
@@ -408,6 +448,7 @@ export interface StageState {
   children?: PipelineState;
   durationMs?: number;
   error?: string;
+  groupId?: string;          // Parallel group ID (e.g. "parallel-0")
 }
 ```
 

@@ -13,6 +13,7 @@ import { interpolate, resolveTaskBody, loadAgentMarkdown, buildTaskContext, writ
 import { updatePipelineStatus, notifyPipelineComplete } from "./tui/cmux.js";
 import {
   createState,
+  flattenStageEntries,
   loadState,
   saveState,
   saveStateWithEvent,
@@ -29,12 +30,14 @@ import type {
   RunContext,
   StageResult,
   StageStatus,
+  StageEntry,
   PipelineResult,
   Stage,
   Pipeline,
   PipelineState,
   GateInfo,
 } from "./types.js";
+import { isParallelGroup } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -461,9 +464,10 @@ async function runPipelineStage(
       return { stageName: stage.name, status: "passed", durationMs: 0 };
     }
 
-    logger.log(`  sub-pipeline: ${childPipeline.name} (${childPipeline.stages.length} stages)`);
-    for (const s of childPipeline.stages) {
-      logger.log(`    - ${s.name} (${s.type})`);
+    const flatStages = flattenStageEntries(childPipeline.stages);
+    logger.log(`  sub-pipeline: ${childPipeline.name} (${flatStages.length} stages)`);
+    for (const s of flatStages) {
+      logger.log(`    - ${s.name} (${s.type})${s.groupId ? ` [${s.groupId}]` : ""}`);
     }
 
     return { stageName: stage.name, status: "passed", durationMs: 0 };
@@ -592,6 +596,40 @@ async function runStage(
 }
 
 // ---------------------------------------------------------------------------
+// Execution plan — normalizes StageEntry[] into sequential/parallel steps
+// ---------------------------------------------------------------------------
+
+interface ExecutionStep {
+  kind: "sequential" | "parallel";
+  stages: Stage[];
+  onFailure?: "fail_fast" | "wait_all";
+}
+
+function buildExecutionPlan(entries: StageEntry[]): ExecutionStep[] {
+  const plan: ExecutionStep[] = [];
+  for (const entry of entries) {
+    if (isParallelGroup(entry)) {
+      plan.push({
+        kind: "parallel",
+        stages: entry.parallel.stages,
+        onFailure: entry.parallel.on_failure ?? "fail_fast",
+      });
+    } else {
+      plan.push({
+        kind: "sequential",
+        stages: [entry],
+      });
+    }
+  }
+  return plan;
+}
+
+/** Compute the total number of stages across all execution steps. */
+function countTotalStages(plan: ExecutionStep[]): number {
+  return plan.reduce((sum, step) => sum + step.stages.length, 0);
+}
+
+// ---------------------------------------------------------------------------
 // Core stage execution loop (shared by runPipeline and runPipelineStage)
 // ---------------------------------------------------------------------------
 
@@ -601,10 +639,161 @@ interface StagesResult {
 }
 
 /**
+ * Run a single stage with full lifecycle: mark in_progress, dispatch, persist
+ * result, and log. Extracted from the main loop so it can be reused in both
+ * sequential and parallel execution paths.
+ */
+async function runStageWithLifecycle(
+  stage: Stage,
+  ctx: RunContext,
+  state: PipelineState,
+  stageIndex: number,
+  totalStages: number,
+): Promise<StageResult> {
+  const stageStart = Date.now();
+
+  getLogger(ctx).log(`▸ Stage: ${stage.name} (${stage.type})`);
+
+  if (!ctx.dryRun) {
+    updateStageStatus(state, stage.name, "in_progress");
+    await saveStateWithEvent(state, "stage_start", stage.name);
+    await updatePipelineStatus(stage.name, stageIndex, totalStages);
+  }
+
+  try {
+    const result = await runStage(stage, ctx, state);
+
+    if (!ctx.dryRun) {
+      updateStageStatus(state, stage.name, result.status as StageStatus, {
+        durationMs: result.durationMs,
+        error: result.error,
+      });
+      await saveStateWithEvent(state, "stage_complete", stage.name, {
+        status: result.status,
+        durationMs: result.durationMs,
+      });
+    }
+
+    if (result.status === "failed" || result.status === "error") {
+      getLogger(ctx).log(`  ✗ ${stage.name}: ${result.status}${result.error ? ` — ${result.error}` : ""}`);
+    } else {
+      const duration = result.durationMs > 0
+        ? ` (${(result.durationMs / 1000).toFixed(1)}s)`
+        : "";
+      getLogger(ctx).log(`  ✓ ${stage.name}: ${result.status}${duration}`);
+    }
+
+    return result;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const result: StageResult = {
+      stageName: stage.name,
+      status: "error",
+      error: message,
+      durationMs: Date.now() - stageStart,
+    };
+
+    if (!ctx.dryRun) {
+      updateStageStatus(state, stage.name, "error", { error: message });
+      await saveState(state);
+    }
+
+    getLogger(ctx).error(`  ✗ ${stage.name}: error — ${message}`);
+    return result;
+  }
+}
+
+/**
+ * Run a group of stages in parallel. Returns all results once the group
+ * completes (or a failure triggers early exit in fail_fast mode).
+ */
+async function runParallelGroup(
+  step: ExecutionStep,
+  ctx: RunContext,
+  state: PipelineState,
+  completedNames: Set<string>,
+  stageIndexOffset: number,
+  totalStages: number,
+): Promise<StageResult[]> {
+  // Filter to only stages that need running (not already completed on resume).
+  const toRun = step.stages.filter(s => !completedNames.has(s.name));
+  // Collect results for already-completed stages in this group.
+  const skippedResults: StageResult[] = step.stages
+    .filter(s => completedNames.has(s.name))
+    .map(s => {
+      const stageState = state.stages[s.name];
+      getLogger(ctx).log(`  ⏭ ${s.name}: already ${stageState?.status ?? "passed"}`);
+      return {
+        stageName: s.name,
+        status: (stageState?.status as "passed" | "skipped") ?? "passed",
+        durationMs: stageState?.durationMs ?? 0,
+      };
+    });
+
+  if (toRun.length === 0) return skippedResults;
+
+  const stageNames = toRun.map(s => s.name).join(", ");
+  getLogger(ctx).log(`▸ Parallel group: [${stageNames}]`);
+
+  if (step.onFailure === "wait_all") {
+    // Wait for all stages regardless of individual failures.
+    const settled = await Promise.allSettled(
+      toRun.map((stage, i) =>
+        runStageWithLifecycle(stage, ctx, state, stageIndexOffset + i, totalStages),
+      ),
+    );
+    const results = settled.map((r, i) =>
+      r.status === "fulfilled"
+        ? r.value
+        : {
+            stageName: toRun[i].name,
+            status: "error" as const,
+            error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+            durationMs: 0,
+          },
+    );
+    return [...skippedResults, ...results];
+  }
+
+  // fail_fast: use a shared flag so that stages that haven't started their
+  // dispatch yet can bail out early. Already-running subprocesses finish
+  // naturally (we can't safely kill them mid-file-write).
+  let failed = false;
+  const promises = toRun.map(async (stage, i) => {
+    // Yield to let other stages start concurrently, then check flag.
+    await Promise.resolve();
+    if (failed) {
+      const result: StageResult = {
+        stageName: stage.name,
+        status: "skipped",
+        error: "Sibling stage failed (fail_fast)",
+        durationMs: 0,
+      };
+      if (!ctx.dryRun) {
+        updateStageStatus(state, stage.name, "skipped", { error: result.error });
+        await saveState(state);
+      }
+      getLogger(ctx).log(`  ⏭ ${stage.name}: skipped (sibling failed)`);
+      return result;
+    }
+
+    const result = await runStageWithLifecycle(stage, ctx, state, stageIndexOffset + i, totalStages);
+    if (result.status === "failed" || result.status === "error") {
+      failed = true;
+    }
+    return result;
+  });
+
+  return [...skippedResults, ...await Promise.all(promises)];
+}
+
+/**
  * Execute the stage loop for a pipeline. Used by both top-level `runPipeline()`
  * and nested `runPipelineStage()`. Handles resume, state persistence, and
  * stage routing — but not lifecycle concerns (DB row creation, notifications,
  * gate strategy setup, temp file cleanup).
+ *
+ * Supports both sequential stages and parallel groups via ExecutionStep plan.
  */
 async function runStages(
   ctx: RunContext,
@@ -616,14 +805,17 @@ async function runStages(
 
   // --- State initialization ---
   let state: PipelineState;
-  let skipUntilIndex = -1;
+  const completedNames = new Set<string>();
 
   if (existingState) {
     state = existingState;
     state.status = "running";
     const resume = findResumePoint(state);
     if (resume) {
-      skipUntilIndex = resume.stageIndex;
+      // Collect names of already-completed stages for skip logic.
+      for (let i = 0; i < resume.stageIndex; i++) {
+        completedNames.add(state.stageOrder[i]);
+      }
       getLogger(ctx).log(`  resuming "${ctx.pipeline.name}" from stage "${resume.stageName}"`);
     } else {
       return {
@@ -642,7 +834,7 @@ async function runStages(
       ctx.pipeline.name,
       ctx.project,
       ctx.pipelineFile,
-      ctx.pipeline.stages.map((s) => ({ name: s.name, type: s.type })),
+      flattenStageEntries(ctx.pipeline.stages),
       ctx.artifactDir,
       ctx.projectDir,
     );
@@ -652,76 +844,53 @@ async function runStages(
     await saveState(state);
   }
 
-  for (let i = 0; i < ctx.pipeline.stages.length; i++) {
-    const stage = ctx.pipeline.stages[i];
+  // Build execution plan from pipeline entries.
+  const plan = buildExecutionPlan(ctx.pipeline.stages);
+  const totalStages = countTotalStages(plan);
+  let stageIndexOffset = 0;
 
-    // Skip completed stages on resume.
-    if (existingState && i < skipUntilIndex) {
-      const stageState = state.stages[stage.name];
-      if (stageState?.status === "passed" || stageState?.status === "skipped") {
-        getLogger(ctx).log(`  ⏭ ${stage.name}: already ${stageState.status}`);
-        results.push({
-          stageName: stage.name,
-          status: stageState.status as "passed" | "skipped",
-          durationMs: stageState.durationMs ?? 0,
-        });
-        continue;
+  for (const step of plan) {
+    if (step.kind === "sequential") {
+      const stage = step.stages[0];
+
+      // Skip completed stages on resume.
+      if (completedNames.has(stage.name)) {
+        const stageState = state.stages[stage.name];
+        if (stageState?.status === "passed" || stageState?.status === "skipped") {
+          getLogger(ctx).log(`  ⏭ ${stage.name}: already ${stageState.status}`);
+          results.push({
+            stageName: stage.name,
+            status: stageState.status as "passed" | "skipped",
+            durationMs: stageState.durationMs ?? 0,
+          });
+          stageIndexOffset += 1;
+          continue;
+        }
       }
-    }
 
-    getLogger(ctx).log(`▸ Stage: ${stage.name} (${stage.type})`);
-
-    // Mark in_progress in state + update cmux.
-    if (!ctx.dryRun) {
-      updateStageStatus(state, stage.name, "in_progress");
-      await saveStateWithEvent(state, "stage_start", stage.name);
-      await updatePipelineStatus(stage.name, i, ctx.pipeline.stages.length);
-    }
-
-    try {
-      const result = await runStage(stage, ctx, state);
+      const result = await runStageWithLifecycle(stage, ctx, state, stageIndexOffset, totalStages);
       results.push(result);
 
-      // Persist stage result to state.
-      if (!ctx.dryRun) {
-        updateStageStatus(state, stage.name, result.status as StageStatus, {
-          durationMs: result.durationMs,
-          error: result.error,
-        });
-        await saveStateWithEvent(state, "stage_complete", stage.name, {
-          status: result.status,
-          durationMs: result.durationMs,
-        });
-      }
-
       if (result.status === "failed" || result.status === "error") {
-        pipelineStatus = "failed";
-        getLogger(ctx).log(`  ✗ ${stage.name}: ${result.status}${result.error ? ` — ${result.error}` : ""}`);
+        pipelineStatus = result.status === "error" ? "error" : "failed";
         break;
       }
+    } else {
+      // Parallel group
+      const groupResults = await runParallelGroup(
+        step, ctx, state, completedNames, stageIndexOffset, totalStages,
+      );
+      results.push(...groupResults);
 
-      const duration = result.durationMs > 0
-        ? ` (${(result.durationMs / 1000).toFixed(1)}s)`
-        : "";
-      getLogger(ctx).log(`  ✓ ${stage.name}: ${result.status}${duration}`);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      results.push({
-        stageName: stage.name,
-        status: "error",
-        error: message,
-        durationMs: Date.now() - start,
-      });
-      pipelineStatus = "error";
-
-      if (!ctx.dryRun) {
-        updateStageStatus(state, stage.name, "error", { error: message });
-        await saveState(state);
+      const anyFailed = groupResults.some(r => r.status === "failed" || r.status === "error");
+      if (anyFailed) {
+        const hasError = groupResults.some(r => r.status === "error");
+        pipelineStatus = hasError ? "error" : "failed";
+        break;
       }
-
-      getLogger(ctx).error(`  ✗ ${stage.name}: error — ${message}`);
-      break;
     }
+
+    stageIndexOffset += step.stages.length;
   }
 
   // Finalize state.
@@ -766,7 +935,7 @@ export async function runPipeline(
     // Need a runId — use existing state or generate one via createState.
     const tempState = opts?.existingState ?? createState(
       ctx.pipeline.name, ctx.project, ctx.pipelineFile,
-      ctx.pipeline.stages.map((s) => ({ name: s.name, type: s.type })),
+      flattenStageEntries(ctx.pipeline.stages),
       ctx.artifactDir, ctx.projectDir,
     );
     ctx.gateStrategy = new FilesystemGateStrategy(tempState.runId, ctx.projectDir, ctx.quiet);

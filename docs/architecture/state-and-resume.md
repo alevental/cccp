@@ -27,13 +27,14 @@ interface PipelineState {
 
 interface StageState {
   name: string;
-  type: string;            // "agent" | "pge" | "human_gate"
+  type: string;            // "agent" | "pge" | "human_gate" | "autoresearch" | "pipeline"
   status: StageStatus;     // pending | in_progress | passed | failed | skipped | error
   iteration?: number;      // PGE: current iteration (1-based)
   pgeStep?: PgeStep;       // PGE: last completed sub-step within iteration
   artifacts?: Record<string, string>;  // key → absolute path
   durationMs?: number;
   error?: string;
+  groupId?: string;        // parallel group ID (e.g. "parallel-0"), set for stages in parallel blocks
 }
 ```
 
@@ -135,8 +136,12 @@ The runner uses this to skip completed stages and restart from the right point. 
 4. **Resumed**: `findResumePoint()` scans for first non-completed stage
 5. **Garbage collected**: Never — old runs persist in the database until manually deleted
 
+## Parallel group resume
+
+When resuming a pipeline interrupted during a parallel group, `findResumePoint()` returns the first incomplete stage within the group. The runner identifies the containing parallel group from the pipeline definition and re-executes only the stages that didn't complete — completed stages within the group are skipped. State writes from concurrent stages within a parallel group serialize naturally through the Node.js event loop (all parallel stages run as concurrent Promises in the same process).
+
 ## Known limitations
 
-- **No concurrent-write protection**: Beyond atomic rename, there's no mechanism to prevent two writers from conflicting. In practice, only the runner writes state during execution.
+- **No concurrent-write protection**: Beyond atomic rename, there's no mechanism to prevent two writers from conflicting. In practice, only the runner writes state during execution. Parallel stages within a group serialize writes through the event loop.
 - **PGE sub-step resume is tracked but not used**: `resumeIteration` and `resumeStep` are recorded, but the runner restarts the full PGE cycle from the interrupted stage.
 - **Database singleton**: `openDatabase()` caches by resolved `projectDir`. A second open to the same database returns the same in-memory instance. Cross-process access requires explicit `reload()`.

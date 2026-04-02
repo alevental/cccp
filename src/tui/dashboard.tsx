@@ -26,7 +26,7 @@ interface DashboardProps {
 function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, onComplete }: DashboardProps) {
   const { stdout } = useStdout();
   const [state, setState] = useState<PipelineState>(initialState);
-  const [activity, setActivity] = useState<AgentActivity | null>(null);
+  const [activities, setActivities] = useState<Map<string, AgentActivity>>(new Map());
   const [events, setEvents] = useState<StateEvent[]>([]);
   const [startTime] = useState(Date.now());
   const [elapsed, setElapsed] = useState(0);
@@ -43,9 +43,17 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
 
   const updateActivity = useCallback((a: AgentActivity) => {
     const now = Date.now();
+    const doUpdate = (act: AgentActivity) => {
+      setActivities((prev) => {
+        const next = new Map(prev);
+        next.set(act.agent, act);
+        return next;
+      });
+    };
+
     if (now - lastActivityTime.current >= 100) {
       lastActivityTime.current = now;
-      setActivity(a);
+      doUpdate(a);
     } else {
       pendingActivity.current = a;
       if (!debounceTimer.current) {
@@ -53,7 +61,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
           debounceTimer.current = null;
           if (pendingActivity.current) {
             lastActivityTime.current = Date.now();
-            setActivity(pendingActivity.current);
+            doUpdate(pendingActivity.current);
             pendingActivity.current = null;
           }
         }, 100);
@@ -99,6 +107,23 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
           lastStagesJson.current = stagesJson;
           lastGateStatus.current = updated.gate?.status;
           setState(updated);
+
+          // Clean up activities for stages that are no longer in_progress.
+          setActivities((prev) => {
+            const next = new Map(prev);
+            let changed = false;
+            for (const [agent] of next) {
+              // Find if any in_progress stage matches this agent key.
+              const stillActive = Object.values(updated.stages).some(
+                (s) => s.status === "in_progress",
+              );
+              if (!stillActive) {
+                next.delete(agent);
+                changed = true;
+              }
+            }
+            return changed ? next : prev;
+          });
 
           if (
             updated.status === "passed" ||
@@ -153,7 +178,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
       <Box marginTop={1} flexDirection="row" height={Math.max(state.stageOrder.length + 3, 8)} overflow="hidden">
         <StageList state={state} />
         {!isComplete ? (
-          <AgentActivityPanel activity={activity} />
+          <AgentActivityPanel activities={activities} />
         ) : (
           <Box flexDirection="column" flexGrow={1} marginLeft={1}>
             <Text
@@ -162,11 +187,12 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
             >
               Pipeline {state.status}.
             </Text>
-            {activity && activity.totalCostUsd > 0 && (
-              <Text dimColor>
-                Total cost: ${activity.totalCostUsd.toFixed(4)}
-              </Text>
-            )}
+            {(() => {
+              const totalCost = [...activities.values()].reduce((sum, a) => sum + a.totalCostUsd, 0);
+              return totalCost > 0 ? (
+                <Text dimColor>Total cost: ${totalCost.toFixed(4)}</Text>
+              ) : null;
+            })()}
           </Box>
         )}
       </Box>
