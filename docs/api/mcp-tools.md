@@ -58,7 +58,7 @@ a1b2c3d4-e5f6-7890-abcd-ef1234567890
 cccp run -f pipeline.yaml -p my-project --session-id <session-id>
 ```
 
-When a pipeline is started with `--session-id`, the `GateNotifier` in other MCP sessions will skip its gates (session affinity). Runs without a session ID are notified by all sessions.
+When a pipeline is started with `--session-id`, the `GateNotifier` in other MCP sessions will skip its gates (session affinity). **Always pass `--session-id` when launching pipelines.** Without it, gate notifications broadcast to every connected MCP instance, causing duplicate notifications across sessions.
 
 ---
 
@@ -320,7 +320,7 @@ If both channels and elicitation are unavailable, the user discovers gates via `
 
 ### Session affinity
 
-The MCP server generates a UUID session ID on startup (exposed via `cccp_session_id`). Pipeline runs started with `--session-id` are only notified by the matching MCP session. Runs without a session ID are notified by all sessions. This prevents multiple MCP instances from competing on the same gate.
+The MCP server generates a UUID session ID on startup (exposed via `cccp_session_id`). Pipeline runs started with `--session-id` are only notified by the matching MCP session. **Runs without a session ID are notified by all sessions**, causing duplicate notifications. Always pass `--session-id`.
 
 ### Feedback artifacts
 
@@ -332,7 +332,7 @@ See [Gate System](../architecture/gate-system.md) for the full gate architecture
 
 When the MCP server is registered, the typical flow is:
 
-1. **Get session ID:** `cccp_session_id` -- pass this as `--session-id` when starting pipelines to enable session-affine notifications
+1. **Get session ID:** `cccp_session_id` -- **always** pass this as `--session-id` when starting pipelines to prevent duplicate gate notifications
 2. **Automatic:** The gate notifier detects pending gates and pushes via channel notification (or elicitation form) -- no manual action needed
 3. **Manual fallback:** If automatic notification is unavailable:
    1. **Check status:** `cccp_runs` to see active runs

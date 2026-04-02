@@ -293,10 +293,10 @@ The MCP server generates a UUID session ID on startup (`randomUUID()`). Pipeline
 The notifier filters gates by session affinity:
 
 - If the run has a `sessionId` that does not match the notifier's `sessionId`, the gate is skipped (it belongs to a different MCP session).
-- If the run has no `sessionId` (unaffiliated), the gate is notified by any session.
+- If the run has no `sessionId` (unaffiliated), the gate is notified by **every** connected MCP instance — this causes duplicate notifications (e.g., both a channel push and an elicitation popup in different sessions).
 - The `cccp_session_id` tool exposes the session ID so callers can pass it to `cccp run --session-id`.
 
-This prevents multiple MCP server instances from competing to notify on the same gate.
+**Always pass `--session-id` when launching pipelines** to ensure gate notifications are routed to a single session. The `/cccp-run` skill instructs Claude to call `cccp_session_id` and include `--session-id` by default.
 
 ### Feedback artifact writing
 

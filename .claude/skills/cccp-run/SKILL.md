@@ -27,14 +27,23 @@ npx @alevental/cccp@latest run -f <pipeline.yaml> -p <project> [options]
 | `-v, --var <key=value>` | No | Set pipeline variable (repeatable) |
 | `--session-id <id>` | No | MCP session ID for gate notification routing (see below) |
 
+**IMPORTANT — always use `--session-id`:** Before launching any pipeline (unless the user explicitly says not to), call the `cccp_session_id` MCP tool to get this session's ID, then pass it via `--session-id`. Without it, gate notifications may be sent to every connected Claude Code session instead of just this one.
+
+```bash
+# Step 1: Get session ID (call cccp_session_id MCP tool)
+# Step 2: Launch with session affinity
+npx @alevental/cccp@latest run -f pipeline.yaml -p myproject --session-id <id>
+```
+
 **Recommended workflow:**
-1. Dry-run first: `npx @alevental/cccp@latest run -f pipeline.yaml -p myproject --dry-run`
-2. Full run: `npx @alevental/cccp@latest run -f pipeline.yaml -p myproject`
-3. Headless (CI): `npx @alevental/cccp@latest run -f pipeline.yaml -p myproject --headless`
+1. Get session ID: call `cccp_session_id` MCP tool
+2. Dry-run first: `npx @alevental/cccp@latest run -f pipeline.yaml -p myproject --dry-run`
+3. Full run: `npx @alevental/cccp@latest run -f pipeline.yaml -p myproject --session-id <id>`
+4. Headless (CI): `npx @alevental/cccp@latest run -f pipeline.yaml -p myproject --headless`
 
 **Variables:** Override pipeline defaults from CLI:
 ```bash
-npx @alevental/cccp@latest run -f sprint.yaml -p app -v sprint=3 -v env=staging
+npx @alevental/cccp@latest run -f sprint.yaml -p app -v sprint=3 -v env=staging --session-id <id>
 ```
 
 ### `resume` — Resume an interrupted run
@@ -121,14 +130,7 @@ npx @alevental/cccp@latest examples [-d <dir>] [--agents-only] [--pipelines-only
 
 Human gates pause the pipeline until approved or rejected.
 
-**Session-routed notifications:** To ensure gate notifications arrive in YOUR Claude Code session (not a random one), pass `--session-id` when starting the pipeline. Get the session ID from the `cccp_session_id` MCP tool first:
-
-```bash
-# Get session ID, then pass it to the run command:
-npx @alevental/cccp@latest run -f pipeline.yaml -p myproject --session-id <id>
-```
-
-When launching pipelines from Claude Code, always call `cccp_session_id` first, then include `--session-id` in the command.
+**Session affinity (required by default):** Gate notifications are routed by session ID. Without `--session-id`, notifications broadcast to ALL connected MCP instances — causing duplicate notifications across sessions. Always pass `--session-id` unless the user explicitly wants broadcast behavior.
 
 **Reviewing gates:** Use `cccp_gate_review` for comprehensive context (artifacts, evaluations, contract, pipeline status) before making a decision.
 
