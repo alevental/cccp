@@ -8,7 +8,7 @@ A standalone TypeScript CLI that provides deterministic YAML-based pipeline orch
 
 ```bash
 npm install
-npm test              # vitest — 206 tests, ~5s
+npm test              # vitest — 234 tests, ~5s
 npm run typecheck     # tsc --noEmit
 npx tsx src/cli.ts    # run CLI in dev mode (use instead of `npm run dev`)
 ```
@@ -36,8 +36,8 @@ npx @alevental/cccp examples              # scaffold all agents + example pipeli
 - **Template agents**: 18 agents (7 directory + 11 flat) in `.claude/agents/`, usable both as Claude Code subagents and CCCP pipeline agents. Agent definitions are pure role/identity — pipeline-specific instructions (evaluation format, file I/O) are injected by the runner at dispatch time. Directory agents: `architect`, `product-manager`, `marketer`, `qa-engineer`, `strategist`, `designer`, `customer-success`. Flat agents: `researcher`, `reviewer`, `implementer`, `code-reviewer`, `copywriter`, `analyst`, `exec-reviewer`, `growth-strategist`, `ops-manager`, `devops`, `writer`.
 - **Example pipelines**: 10 pipelines covering engineering (`feature-development`, `sprint-cycle`), product (`product-launch`), marketing (`content-calendar`), growth (`growth-experiment`), strategy (`quarterly-planning`, `business-case`), design (`design-sprint`), customer success (`customer-feedback-loop`), operations (`incident-runbook`).
 - **Agent resolution**: multi-path search — flat files (`researcher.md`) and directory agents with operations (`architect/agent.md` + `architect/task-planning.md`) (`src/agent-resolver.ts`)
-- **MCP config**: named profiles with `extends` inheritance, per-agent `--strict-mcp-config` (`src/mcp/mcp-config.ts`, `src/config.ts`)
-- **Gates**: `FilesystemGateStrategy` polls SQLite; MCP server exposes `cccp_gate_respond` tool; `GateNotifier` proactively elicits approval via MCP elicitation (`src/gate/`, `src/mcp/gate-notifier.ts`)
+- **MCP config**: named profiles with `extends` inheritance, per-agent `--strict-mcp-config` (`src/mcp/mcp-config.ts`, `src/config.ts`). Channel-based gate notifications require `--dangerously-load-development-channels server:cccp` on the Claude Code side.
+- **Gates**: `FilesystemGateStrategy` polls SQLite; MCP server exposes `cccp_gate_respond`, `cccp_gate_review`, and `cccp_session_id` tools; `GateNotifier` uses three-tier notification (channel push, elicitation form, manual tools). Feedback written as numbered artifacts via `writeFeedbackArtifact()` (`src/gate/feedback-artifact.ts`). `human_review: true` on agent/PGE stages fires post-completion gates with feedback retry (max 3). Session affinity via `--session-id` routes notifications to the correct MCP instance (`src/gate/`, `src/mcp/gate-notifier.ts`)
 - **TUI**: Ink/React dashboard watches SQLite + stream logs (`src/tui/`)
 - **Stream parser**: typed discriminated union for claude stream-json events (`src/stream/stream.ts`)
 - **Logging**: injectable `Logger` interface (`src/logger.ts`) — ConsoleLogger, QuietLogger, SilentLogger

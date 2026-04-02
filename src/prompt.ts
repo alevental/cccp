@@ -104,6 +104,8 @@ export interface TaskContext {
   deliverableInfo?: string;
   /** Path to the ground truth file (for autoresearch evaluation). */
   groundTruthPath?: string;
+  /** Path to gate feedback file from a previous human review. */
+  gateFeedback?: string;
   /** When true, appends the evaluator output format (### Overall: PASS/FAIL). */
   evaluatorFormat?: boolean;
   /** Additional key-value context. */
@@ -149,6 +151,15 @@ export function buildTaskContext(ctx: TaskContext): string {
       `## Previous Evaluation\n`,
       `Your previous attempt was evaluated. Read the feedback at: ${ctx.previousEvaluation}`,
       `Address all issues identified in the evaluation before producing your revised output.`,
+      "",
+    );
+  }
+
+  if (ctx.gateFeedback) {
+    lines.push(
+      `## Gate Feedback\n`,
+      `A human reviewer provided feedback on a previous attempt. Read the feedback at: ${ctx.gateFeedback}`,
+      `Address all issues identified in the gate feedback before producing your revised output.`,
       "",
     );
   }

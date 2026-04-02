@@ -337,4 +337,89 @@ describe("GateNotifier", () => {
 
     closeDatabase(projectDir);
   });
+
+  // -------------------------------------------------------------------------
+  // Session affinity
+  // -------------------------------------------------------------------------
+
+  it("skips gates belonging to a different session", async () => {
+    const projectDir = tmpProjectDir();
+    const state = await createRunWithGate(projectDir);
+    // Mark the run as belonging to session-A.
+    state.sessionId = "session-A";
+    await saveState(state);
+
+    const { mock, elicitInput } = createMockServer({
+      action: "accept",
+      content: { decision: "approve" },
+    });
+
+    // Create notifier with session-B — should NOT fire for session-A's gate.
+    notifier = new GateNotifier({
+      server: mock,
+      projectDir,
+      sessionId: "session-B",
+      pollIntervalMs: 50,
+    });
+    notifier.start();
+
+    // Wait for several poll cycles.
+    await new Promise((r) => setTimeout(r, 300));
+
+    // Elicitation should never have been called.
+    expect(elicitInput).not.toHaveBeenCalled();
+
+    closeDatabase(projectDir);
+  });
+
+  it("notifies for gates matching its own session", async () => {
+    const projectDir = tmpProjectDir();
+    const state = await createRunWithGate(projectDir);
+    state.sessionId = "session-X";
+    await saveState(state);
+
+    const { mock, elicitInput } = createMockServer({
+      action: "accept",
+      content: { decision: "approve" },
+    });
+
+    notifier = new GateNotifier({
+      server: mock,
+      projectDir,
+      sessionId: "session-X",
+      pollIntervalMs: 50,
+    });
+    notifier.start();
+
+    await vi.waitFor(() => {
+      expect(elicitInput).toHaveBeenCalledTimes(1);
+    }, { timeout: 2000 });
+
+    closeDatabase(projectDir);
+  });
+
+  it("notifies for gates with no sessionId (backward compat)", async () => {
+    const projectDir = tmpProjectDir();
+    await createRunWithGate(projectDir);
+    // Don't set sessionId on the run — backward compat.
+
+    const { mock, elicitInput } = createMockServer({
+      action: "accept",
+      content: { decision: "approve" },
+    });
+
+    notifier = new GateNotifier({
+      server: mock,
+      projectDir,
+      sessionId: "any-session",
+      pollIntervalMs: 50,
+    });
+    notifier.start();
+
+    await vi.waitFor(() => {
+      expect(elicitInput).toHaveBeenCalledTimes(1);
+    }, { timeout: 2000 });
+
+    closeDatabase(projectDir);
+  });
 });

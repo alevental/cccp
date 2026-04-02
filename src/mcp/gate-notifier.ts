@@ -1,10 +1,16 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { openDatabase } from "../db.js";
-import { discoverRuns, loadState, saveState } from "../state.js";
+import { writeFeedbackArtifact } from "../gate/feedback-artifact.js";
+import { discoverRuns, loadState, saveState, setStageArtifact } from "../state.js";
 import type { DiscoveredRun } from "../types.js";
 
 // ---------------------------------------------------------------------------
-// Gate notifier — polls for pending gates and elicits approval via MCP
+// Gate notifier — polls for pending gates and notifies via MCP
+//
+// Notification tiers (tried in order):
+//   1. Channel notification (push-based, experimental)
+//   2. Elicitation form (interactive, may not be supported)
+//   3. Fallback: user discovers via cccp_status / cccp_gate_respond tools
 // ---------------------------------------------------------------------------
 
 const DEFAULT_POLL_MS = 2000;
@@ -12,20 +18,25 @@ const DEFAULT_POLL_MS = 2000;
 export interface GateNotifierOptions {
   server: McpServer;
   projectDir: string;
+  /** Session ID for this MCP server instance. Used to filter gate notifications. */
+  sessionId?: string;
   pollIntervalMs?: number;
 }
 
 /**
  * Watches for pending human gates across all pipeline runs and sends
- * MCP elicitation requests to the connected Claude Code session.
+ * MCP notifications to the connected Claude Code session.
+ *
+ * Uses channels as primary notification (push), with elicitation as fallback.
  *
  * Lifecycle: call `start()` after the MCP server connects, `stop()` on shutdown.
  */
 export class GateNotifier {
   private seenGates = new Set<string>();
+  private channelSupported: boolean | null = null; // null = not yet tested
   private elicitationSupported = true;
   private intervalId: ReturnType<typeof setInterval> | null = null;
-  private pendingElicitation: Promise<void> | null = null;
+  private pendingNotification: Promise<void> | null = null;
 
   constructor(private opts: GateNotifierOptions) {}
 
@@ -47,8 +58,9 @@ export class GateNotifier {
   // -------------------------------------------------------------------------
 
   private async poll(): Promise<void> {
-    if (!this.elicitationSupported) return;
-    if (this.pendingElicitation) return; // one at a time
+    // If both notification mechanisms are disabled, stop polling.
+    if (this.channelSupported === false && !this.elicitationSupported) return;
+    if (this.pendingNotification) return; // one at a time
 
     try {
       const db = await openDatabase(this.opts.projectDir);
@@ -64,17 +76,26 @@ export class GateNotifier {
         }
       }
 
-      // Find new pending gates.
+      // Find new pending gates (filtered by session affinity).
       for (const run of runs) {
         const gate = run.state.gate;
         if (!gate || gate.status !== "pending") continue;
 
+        // Session affinity: skip gates belonging to other MCP sessions.
+        if (
+          this.opts.sessionId &&
+          run.state.sessionId &&
+          run.state.sessionId !== this.opts.sessionId
+        ) {
+          continue;
+        }
+
         const key = this.gateKey(run.state.runId, gate.stageName);
         if (this.seenGates.has(key)) continue;
 
-        // Mark as seen immediately to avoid duplicate elicitations.
+        // Mark as seen immediately to avoid duplicate notifications.
         this.seenGates.add(key);
-        this.pendingElicitation = this.elicitGateApproval(run);
+        this.pendingNotification = this.notifyGate(run);
         // Only process one gate per poll cycle.
         return;
       }
@@ -84,77 +105,155 @@ export class GateNotifier {
   }
 
   // -------------------------------------------------------------------------
-  // Elicitation
+  // Notification dispatch (channel → elicitation → silent fallback)
+  // -------------------------------------------------------------------------
+
+  private async notifyGate(run: DiscoveredRun): Promise<void> {
+    const gate = run.state.gate!;
+    const gateKey = this.gateKey(run.state.runId, gate.stageName);
+
+    try {
+      // Tier 1: Try channel notification (non-blocking push).
+      if (this.channelSupported !== false) {
+        const sent = await this.sendChannelNotification(run);
+        if (sent) return; // Channel delivered — no need for elicitation.
+      }
+
+      // Tier 2: Fall back to elicitation (blocking form).
+      if (this.elicitationSupported) {
+        await this.elicitGateApproval(run);
+        return;
+      }
+
+      // Tier 3: Both unavailable. User will discover via cccp_status / cccp_gate_respond.
+    } catch {
+      // Transient error — remove from seen so it can retry.
+      this.seenGates.delete(gateKey);
+    } finally {
+      this.pendingNotification = null;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Tier 1: Channel notification
+  // -------------------------------------------------------------------------
+
+  private async sendChannelNotification(run: DiscoveredRun): Promise<boolean> {
+    const gate = run.state.gate!;
+    const runShort = run.state.runId.slice(0, 8);
+
+    try {
+      // Channel notifications use an experimental protocol method.
+      // The SDK types don't include this notification type, so we cast through unknown.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const notificationFn = (this.opts.server.server as any).notification as
+        | ((msg: unknown) => Promise<void>)
+        | undefined;
+
+      if (!notificationFn) {
+        this.channelSupported = false;
+        return false;
+      }
+
+      await notificationFn.call(this.opts.server.server, {
+        method: "notifications/claude/channel",
+        params: {
+          content: [
+            `Pipeline gate "${gate.stageName}" requires your review (run ${runShort}).`,
+            gate.prompt ? `\n${gate.prompt}` : "",
+            `\nUse cccp_gate_review to see full context, discuss with the user, then respond via cccp_gate_respond.`,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+          meta: {
+            severity: "high",
+            type: "gate_pending",
+            run_id: runShort,
+            stage: gate.stageName,
+          },
+        },
+      });
+
+      if (this.channelSupported === null) {
+        this.channelSupported = true;
+      }
+      return true;
+    } catch {
+      // Channel not supported — disable and fall through to elicitation.
+      this.channelSupported = false;
+      return false;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Tier 2: Elicitation form
   // -------------------------------------------------------------------------
 
   private async elicitGateApproval(run: DiscoveredRun): Promise<void> {
     const gate = run.state.gate!;
     const runShort = run.state.runId.slice(0, 8);
 
+    let result;
     try {
-      // Elicit approval from the user — this blocks until they respond.
-      let result;
-      try {
-        result = await this.opts.server.server.elicitInput({
-          message: [
-            `Pipeline gate requires approval (run ${runShort}).`,
-            "",
-            `Stage: ${gate.stageName}`,
-            gate.prompt ? `\n${gate.prompt}` : "",
-          ]
-            .filter(Boolean)
-            .join("\n"),
-          requestedSchema: {
-            type: "object" as const,
-            properties: {
-              decision: {
-                type: "string" as const,
-                title: "Decision",
-                description: "Approve or reject this gate",
-                enum: ["approve", "reject"],
-                default: "approve",
-              },
-              feedback: {
-                type: "string" as const,
-                title: "Feedback",
-                description: "Optional feedback (passed to generator on rejection)",
-              },
+      result = await this.opts.server.server.elicitInput({
+        message: [
+          `Pipeline gate requires approval (run ${runShort}).`,
+          "",
+          `Stage: ${gate.stageName}`,
+          gate.prompt ? `\n${gate.prompt}` : "",
+          "",
+          `Reject with feedback to retry the generation cycle with your guidance.`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        requestedSchema: {
+          type: "object" as const,
+          properties: {
+            decision: {
+              type: "string" as const,
+              title: "Decision",
+              description: "Approve or reject this gate",
+              enum: ["approve", "reject"],
+              default: "approve",
             },
-            required: ["decision"],
+            feedback: {
+              type: "string" as const,
+              title: "Feedback",
+              description: "Optional feedback (on rejection, triggers retry with your feedback)",
+            },
           },
-        });
-      } catch {
-        // Elicitation not supported by this client — disable for the session.
-        this.elicitationSupported = false;
-        return;
-      }
-
-      // Handle the elicitation result.
-      if (result.action === "cancel") {
-        // User dismissed — remove from seen so it can be re-prompted.
-        this.seenGates.delete(this.gateKey(run.state.runId, gate.stageName));
-        return;
-      }
-
-      if (result.action === "decline") {
-        // User explicitly declined — write rejection.
-        await this.writeGateResponse(run, false);
-        return;
-      }
-
-      // action === "accept" — check the form content.
-      const decision = result.content?.decision as string | undefined;
-      const feedback = result.content?.feedback as string | undefined;
-      const approved = decision !== "reject";
-      await this.writeGateResponse(run, approved, feedback);
+          required: ["decision"],
+        },
+      });
     } catch {
-      // DB write error — transient, don't disable elicitation.
-      // Remove from seen so it can be retried on the next poll cycle.
-      this.seenGates.delete(this.gateKey(run.state.runId, gate.stageName));
-    } finally {
-      this.pendingElicitation = null;
+      // Elicitation not supported by this client — disable for the session.
+      this.elicitationSupported = false;
+      return;
     }
+
+    // Handle the elicitation result.
+    if (result.action === "cancel") {
+      // User dismissed — remove from seen so it can be re-prompted.
+      this.seenGates.delete(this.gateKey(run.state.runId, gate.stageName));
+      return;
+    }
+
+    if (result.action === "decline") {
+      // User explicitly declined — write rejection.
+      await this.writeGateResponse(run, false);
+      return;
+    }
+
+    // action === "accept" — check the form content.
+    const decision = result.content?.decision as string | undefined;
+    const feedback = result.content?.feedback as string | undefined;
+    const approved = decision !== "reject";
+    await this.writeGateResponse(run, approved, feedback);
   }
+
+  // -------------------------------------------------------------------------
+  // State writes
+  // -------------------------------------------------------------------------
 
   private async writeGateResponse(
     run: DiscoveredRun,
@@ -170,6 +269,16 @@ export class GateNotifier {
     freshState.gate.status = approved ? "approved" : "rejected";
     freshState.gate.feedback = feedback;
     freshState.gate.respondedAt = new Date().toISOString();
+
+    // Write feedback as a numbered artifact file.
+    if (feedback) {
+      const feedbackPath = await writeFeedbackArtifact(
+        run.artifactDir, freshState.gate.stageName, feedback, approved,
+      );
+      freshState.gate.feedbackPath = feedbackPath;
+      setStageArtifact(freshState, freshState.gate.stageName, "gate-feedback", feedbackPath);
+    }
+
     await saveState(freshState);
   }
 

@@ -434,3 +434,165 @@ describe("PGE iteration logic", () => {
     expect(count).toBe(2); // Planner succeeded, contract dispatch happened but no file
   });
 });
+
+// ---------------------------------------------------------------------------
+// PgeCycleOptions: skip planning and inject gate feedback
+// ---------------------------------------------------------------------------
+
+describe("PGE cycle with PgeCycleOptions", () => {
+  it("skips planner and contract when existingContractPath and existingTaskPlanPath are provided", async () => {
+    const dir = tmpPath();
+    const artifactDir = join(dir, "artifacts");
+    const agentsDir = join(dir, "agents");
+    const stageDir = join(artifactDir, "options-test");
+    await mkdir(agentsDir, { recursive: true });
+    await mkdir(stageDir, { recursive: true });
+    await writeFile(join(agentsDir, "planner.md"), "# Planner", "utf-8");
+    await writeFile(join(agentsDir, "gen.md"), "# Generator", "utf-8");
+    await writeFile(join(agentsDir, "eval.md"), "# Evaluator", "utf-8");
+
+    // Create existing contract and task plan files
+    const existingContractPath = join(stageDir, "contract.md");
+    const existingTaskPlanPath = join(stageDir, "task-plan.md");
+    const gateFeedbackPath = join(dir, "gate-feedback.md");
+    await writeFile(existingContractPath, "## Contract\n\n### Criteria\n\n1. Output exists\n", "utf-8");
+    await writeFile(existingTaskPlanPath, "# Task Plan\n\n1. Do the thing\n", "utf-8");
+    await writeFile(gateFeedbackPath, "# Gate Feedback\n\nFix the introduction section.\n", "utf-8");
+
+    const dispatches: string[] = [];
+    let dispatchIndex = 0;
+
+    const trackingDispatcher: AgentDispatcher = {
+      async dispatch(opts: DispatchOptions): Promise<AgentResult> {
+        dispatchIndex++;
+        dispatches.push(opts.userPrompt);
+
+        if (opts.expectedOutput) {
+          await mkdir(join(opts.expectedOutput, ".."), { recursive: true }).catch(() => {});
+          if (dispatchIndex % 2 === 1) {
+            // Generator
+            await writeFile(opts.expectedOutput, "# Generated Output\n\nRevised content.\n", "utf-8");
+          } else {
+            // Evaluator
+            await writeFile(opts.expectedOutput, "### Overall: PASS\n", "utf-8");
+          }
+        }
+        return { exitCode: 0, outputPath: opts.expectedOutput, outputExists: true, durationMs: 100 };
+      },
+    };
+
+    const { runPgeCycle } = await import("../src/pge.js");
+
+    const stage: PgeStage = {
+      name: "options-test",
+      type: "pge",
+      planner: { agent: "agents/planner.md" },
+      generator: { agent: "agents/gen.md" },
+      evaluator: { agent: "agents/eval.md" },
+      contract: {
+        deliverable: "artifacts/options-test/output.md",
+        max_iterations: 3,
+      },
+    };
+
+    const ctx: RunContext = {
+      project: "test",
+      projectDir: dir,
+      artifactDir: artifactDir,
+      pipelineFile: "test.yaml",
+      pipeline: { name: "test", stages: [stage] },
+      dryRun: false,
+      variables: { project: "test", project_dir: dir, artifact_dir: artifactDir, pipeline_name: "test" },
+      agentSearchPaths: [agentsDir],
+      dispatcher: trackingDispatcher,
+    };
+
+    const state = createState("test", "test", "test.yaml", [stage], artifactDir);
+    const result = await runPgeCycle(stage, ctx, state, undefined, {
+      existingContractPath,
+      existingTaskPlanPath,
+      gateFeedbackPath,
+    });
+
+    expect(result.outcome).toBe("pass");
+    expect(result.iterations).toBe(1);
+    // Only 2 dispatches: generator + evaluator (planner and contract skipped)
+    expect(dispatchIndex).toBe(2);
+    // Generator prompt should contain gate feedback reference
+    expect(dispatches[0]).toContain("Gate Feedback");
+    expect(dispatches[0]).toContain(gateFeedbackPath);
+  });
+
+  it("does not inject gate feedback when gateFeedbackPath is not provided", async () => {
+    const dir = tmpPath();
+    const artifactDir = join(dir, "artifacts");
+    const agentsDir = join(dir, "agents");
+    const stageDir = join(artifactDir, "no-feedback-test");
+    await mkdir(agentsDir, { recursive: true });
+    await mkdir(stageDir, { recursive: true });
+    await writeFile(join(agentsDir, "planner.md"), "# Planner", "utf-8");
+    await writeFile(join(agentsDir, "gen.md"), "# Generator", "utf-8");
+    await writeFile(join(agentsDir, "eval.md"), "# Evaluator", "utf-8");
+
+    const existingContractPath = join(stageDir, "contract.md");
+    const existingTaskPlanPath = join(stageDir, "task-plan.md");
+    await writeFile(existingContractPath, "## Contract\n\n### Criteria\n\n1. OK\n", "utf-8");
+    await writeFile(existingTaskPlanPath, "# Task Plan\n\n1. Step one\n", "utf-8");
+
+    const dispatches: string[] = [];
+    let dispatchIndex = 0;
+
+    const trackingDispatcher: AgentDispatcher = {
+      async dispatch(opts: DispatchOptions): Promise<AgentResult> {
+        dispatchIndex++;
+        dispatches.push(opts.userPrompt);
+
+        if (opts.expectedOutput) {
+          await mkdir(join(opts.expectedOutput, ".."), { recursive: true }).catch(() => {});
+          if (dispatchIndex % 2 === 1) {
+            await writeFile(opts.expectedOutput, "# Output\n", "utf-8");
+          } else {
+            await writeFile(opts.expectedOutput, "### Overall: PASS\n", "utf-8");
+          }
+        }
+        return { exitCode: 0, outputPath: opts.expectedOutput, outputExists: true, durationMs: 100 };
+      },
+    };
+
+    const { runPgeCycle } = await import("../src/pge.js");
+
+    const stage: PgeStage = {
+      name: "no-feedback-test",
+      type: "pge",
+      planner: { agent: "agents/planner.md" },
+      generator: { agent: "agents/gen.md" },
+      evaluator: { agent: "agents/eval.md" },
+      contract: {
+        deliverable: "artifacts/no-feedback-test/output.md",
+        max_iterations: 2,
+      },
+    };
+
+    const ctx: RunContext = {
+      project: "test",
+      projectDir: dir,
+      artifactDir: artifactDir,
+      pipelineFile: "test.yaml",
+      pipeline: { name: "test", stages: [stage] },
+      dryRun: false,
+      variables: { project: "test", project_dir: dir, artifact_dir: artifactDir, pipeline_name: "test" },
+      agentSearchPaths: [agentsDir],
+      dispatcher: trackingDispatcher,
+    };
+
+    const state = createState("test", "test", "test.yaml", [stage], artifactDir);
+    const result = await runPgeCycle(stage, ctx, state, undefined, {
+      existingContractPath,
+      existingTaskPlanPath,
+    });
+
+    expect(result.outcome).toBe("pass");
+    // Generator prompt should NOT contain gate feedback
+    expect(dispatches[0]).not.toContain("Gate Feedback");
+  });
+});

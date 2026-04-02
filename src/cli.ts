@@ -45,6 +45,10 @@ program
     "-v, --var <key=value...>",
     "Set pipeline variables (repeatable)",
   )
+  .option(
+    "--session-id <id>",
+    "MCP session ID for gate notification routing",
+  )
   .action(async (opts) => {
     const pipelineFile = resolve(opts.file);
     const projectDir = resolve(opts.projectDir ?? process.cwd());
@@ -80,6 +84,7 @@ program
       headless: opts.headless,
       showTui,
       cliVars,
+      sessionId: opts.sessionId,
     });
 
     if (showTui) {
@@ -94,6 +99,7 @@ program
         flattenStageEntries(pipeline.stages),
         artifactDir,
         projectDir,
+        opts.sessionId,
       );
       await saveState(initialState);
 

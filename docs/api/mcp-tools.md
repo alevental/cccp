@@ -1,10 +1,11 @@
 # MCP Tools
 
-The CCCP MCP server exposes five tools for interacting with pipeline runs from Claude Code. The server runs on stdio and is started via `cccp mcp-server`. It also includes a background gate notifier that proactively elicits approval from the user when a human gate becomes pending.
+The CCCP MCP server exposes seven tools for interacting with pipeline runs from Claude Code. The server runs on stdio and is started via `cccp mcp-server`. It also includes a background gate notifier that proactively pushes gate notifications via channels (preferred) or elicitation forms (fallback).
 
 **Source files:**
 - [`src/mcp/mcp-server.ts`](../../src/mcp/mcp-server.ts) -- MCP server and tool definitions
-- [`src/mcp/gate-notifier.ts`](../../src/mcp/gate-notifier.ts) -- proactive gate elicitation
+- [`src/mcp/gate-notifier.ts`](../../src/mcp/gate-notifier.ts) -- three-tier gate notification (channel, elicitation, manual)
+- [`src/gate/feedback-artifact.ts`](../../src/gate/feedback-artifact.ts) -- numbered feedback markdown writer
 
 ## Server Registration
 
@@ -33,6 +34,31 @@ All tools that accept a `run_id` parameter use prefix matching with the followin
 - Ambiguous prefixes return an error with guidance
 
 The MCP server calls `db.reload()` before resolving runs to pick up writes from the runner process.
+
+---
+
+## `cccp_session_id`
+
+Get this MCP server instance's session ID. The server generates a UUID on startup. Pass this value as `--session-id` when running pipelines so gate notifications route only to this session.
+
+### Parameters
+
+None.
+
+### Response
+
+```
+a1b2c3d4-e5f6-7890-abcd-ef1234567890
+```
+
+### Usage
+
+```bash
+# Get the session ID, then start a pipeline affiliated with this session
+cccp run -f pipeline.yaml -p my-project --session-id <session-id>
+```
+
+When a pipeline is started with `--session-id`, the `GateNotifier` in other MCP sessions will skip its gates (session affinity). Runs without a session ID are notified by all sessions.
 
 ---
 
@@ -100,7 +126,7 @@ Stage status icons:
 
 ## `cccp_gate_respond`
 
-Approve or reject a pending human gate.
+Approve or reject a pending human gate. On rejection with feedback, the feedback is written as a numbered markdown artifact and passed to the generator/agent for retry.
 
 ### Parameters
 
@@ -108,15 +134,17 @@ Approve or reject a pending human gate.
 |-----------|------|----------|-------------|
 | `run_id` | `string` | No | Run ID prefix (8+ chars). Omit if only one run exists. |
 | `approved` | `boolean` | **Yes** | Whether to approve (`true`) or reject (`false`) the gate. |
-| `feedback` | `string` | No | Optional feedback. On rejection, passed to the generator for retry. |
+| `feedback` | `string` | No | Optional inline feedback (markdown). Written as an artifact and passed to the generator on retry. |
+| `feedback_file` | `string` | No | Path to a markdown file with detailed feedback. Takes precedence over inline `feedback`. |
 
 ### Behavior
 
 1. Resolves the run
 2. Checks that a gate exists with `status === "pending"`
-3. Updates `state.gate.status` to `"approved"` or `"rejected"`
-4. Sets `state.gate.feedback` and `state.gate.respondedAt`
-5. Saves state to the database (the runner's `FilesystemGateStrategy` will pick it up on its next poll)
+3. Resolves feedback content: reads `feedback_file` if provided (takes precedence), otherwise uses inline `feedback`
+4. Updates `state.gate.status` to `"approved"` or `"rejected"`
+5. If feedback is present, calls `writeFeedbackArtifact()` to write `{stageName}-gate-feedback-{N}.md` into `.cccp/`, sets `state.gate.feedbackPath`, and records it as a stage artifact under key `gate-feedback`
+6. Saves state to the database (the runner's `FilesystemGateStrategy` will pick it up on its next poll)
 
 ### Response
 
@@ -124,10 +152,71 @@ Approve or reject a pending human gate.
 Gate "approval" approved.
 ```
 
-Or with feedback:
+With feedback artifact:
 
 ```
-Gate "approval" rejected. Feedback: The introduction section needs more detail.
+Gate "approval" rejected. Feedback artifact: /path/to/.cccp/approval-gate-feedback-1.md
+```
+
+### Error cases
+
+```
+No pending gate on this run.
+```
+
+```
+Could not read feedback file: ENOENT: no such file or directory
+```
+
+---
+
+## `cccp_gate_review`
+
+Get comprehensive gate review context before responding to a gate. Returns the pending gate info, stage artifacts, key artifact contents (contract, deliverable, task-plan), latest evaluation, iteration history, and overall pipeline status.
+
+### Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `run_id` | `string` | No | Run ID prefix (8+ chars). Omit if only one run exists. |
+
+### Behavior
+
+1. Resolves the run
+2. Checks that a gate exists with `status === "pending"`
+3. Assembles a markdown report with:
+   - Gate metadata (run, stage, prompt)
+   - Stage artifact listing
+   - Inline content for key artifacts (`contract`, `deliverable`, `task-plan`) -- truncated to 2000 chars with a note to use `cccp_artifacts` for full content
+   - Latest evaluation content (the most recent `evaluation-*` artifact)
+   - Iteration history (current iteration, last PGE step)
+   - Pipeline-wide stage status overview
+
+### Response
+
+```
+# Gate Review: review
+
+**Run**: a1b2c3d4 (build-docs)
+**Stage**: review (type: pge)
+**Prompt**: PGE stage "review" passed evaluation. Review the deliverable.
+
+## Artifacts
+
+- **contract**: /path/to/review/contract.md
+- **deliverable**: /path/to/document.md
+- **evaluation-1**: /path/to/review/evaluation-1.md
+
+## contract
+...
+
+## Latest Evaluation (evaluation-1)
+...
+
+## Pipeline Status
+  ✓ research: passed
+  ⚙ review: in_progress
+  ○ approval: pending
 ```
 
 ### Error cases
@@ -211,27 +300,31 @@ docs/projects/my-project/build-docs/document.md
 ...
 ```
 
-## Gate Elicitation (Automatic)
+## Gate Notification (Automatic)
 
-In addition to the manual `cccp_gate_respond` tool, the MCP server includes a `GateNotifier` that automatically detects pending gates and prompts the user for approval via MCP elicitation.
+In addition to the manual `cccp_gate_respond` and `cccp_gate_review` tools, the MCP server includes a `GateNotifier` that automatically detects pending gates and notifies the user. It uses a three-tier strategy:
 
-### How it works
+### Tier 1: Channel notification (push)
 
-After the MCP server connects, a background polling loop scans the SQLite database every 2 seconds for pending gates. When a new gate is found, the server calls `elicitInput()` to present a structured approval form to the user. The form includes:
+The MCP server declares `experimental: { "claude/channel": {} }` in its capabilities. When a gate is detected, the notifier sends a `notifications/claude/channel` message with severity `high`. This is a non-blocking push that surfaces in the Claude Code conversation without requiring a form interaction.
 
-- **Decision**: `approve` or `reject` (required)
-- **Feedback**: optional free-text feedback
+**Requirement:** Claude Code must be launched with `--dangerously-load-development-channels server:cccp` for channel notifications to work.
 
-The user's response is written directly to the database, and the pipeline runner picks it up on its next poll cycle.
+### Tier 2: Elicitation form (interactive)
 
-### Requirements
+If channels are unsupported, the notifier falls back to `elicitInput()` with a structured approve/reject form. Feedback provided on rejection is written as a numbered artifact.
 
-- Claude Code v2.1.76+ (elicitation support)
-- The CCCP MCP server must be registered in `.mcp.json`
+### Tier 3: Manual tools
 
-### Fallback
+If both channels and elicitation are unavailable, the user discovers gates via `cccp_status`, reviews via `cccp_gate_review`, and responds via `cccp_gate_respond`.
 
-If the connected client does not support elicitation, the notifier disables itself after the first failed attempt. The `cccp_gate_respond` tool remains available as a manual fallback.
+### Session affinity
+
+The MCP server generates a UUID session ID on startup (exposed via `cccp_session_id`). Pipeline runs started with `--session-id` are only notified by the matching MCP session. Runs without a session ID are notified by all sessions. This prevents multiple MCP instances from competing on the same gate.
+
+### Feedback artifacts
+
+Both the elicitation and channel response paths write feedback as numbered markdown artifacts via `writeFeedbackArtifact()` and record them as stage artifacts. The feedback path is what enables the runner to retry with structured feedback.
 
 See [Gate System](../architecture/gate-system.md) for the full gate architecture.
 
@@ -239,12 +332,14 @@ See [Gate System](../architecture/gate-system.md) for the full gate architecture
 
 When the MCP server is registered, the typical flow is:
 
-1. **Automatic:** The gate notifier detects pending gates and prompts the user via elicitation -- no manual action needed
-2. **Manual fallback:** If elicitation is unavailable:
+1. **Get session ID:** `cccp_session_id` -- pass this as `--session-id` when starting pipelines to enable session-affine notifications
+2. **Automatic:** The gate notifier detects pending gates and pushes via channel notification (or elicitation form) -- no manual action needed
+3. **Manual fallback:** If automatic notification is unavailable:
    1. **Check status:** `cccp_runs` to see active runs
    2. **Get details:** `cccp_status` with the run ID to see stage progress and pending gates
-   3. **Review artifacts:** `cccp_artifacts` to read the deliverable being reviewed
-   4. **Respond to gate:** `cccp_gate_respond` with approval/rejection and feedback
+   3. **Review gate context:** `cccp_gate_review` to see artifacts, evaluations, contract, and pipeline status
+   4. **Read specific artifacts:** `cccp_artifacts` to read full content of any artifact
+   5. **Respond to gate:** `cccp_gate_respond` with approval/rejection, inline feedback or `feedback_file`
 
 ## Related Documentation
 

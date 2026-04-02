@@ -38,6 +38,8 @@ export interface AgentStage extends StageBase {
   inputs?: string[];
   output?: string;
   allowed_tools?: string[];
+  /** Fire a human review gate after successful completion. */
+  human_review?: boolean;
 }
 
 /** Shared agent config for planner, generator, and evaluator in PGE stages. */
@@ -73,6 +75,8 @@ export interface PgeStage extends StageBase {
   };
   /** What to do when max iterations reached with FAIL. */
   on_fail?: EscalationStrategy;
+  /** Fire a human review gate after successful completion. */
+  human_review?: boolean;
 }
 
 /** A single success criterion in a PGE contract. @deprecated Used by contract.ts only. */
@@ -199,6 +203,8 @@ export interface GateInfo {
   status: "pending" | "approved" | "rejected";
   prompt?: string;
   feedback?: string;
+  /** Path to structured feedback markdown artifact. */
+  feedbackPath?: string;
   respondedAt?: string;
 }
 
@@ -227,6 +233,8 @@ export interface PipelineState {
   artifactDir: string;
   /** Project root directory. Used to locate the database. */
   projectDir?: string;
+  /** MCP session that was active when this run started. Used for gate notification routing. */
+  sessionId?: string;
 }
 
 export interface ResumePoint {
@@ -294,6 +302,8 @@ export interface RunContext {
   tempTracker?: import("./temp-tracker.js").TempFileTracker;
   /** Pipeline file paths visited in the current execution chain (cycle detection). */
   visitedPipelines?: Set<string>;
+  /** MCP session ID for gate notification routing. Passed via --session-id on cccp run. */
+  sessionId?: string;
 }
 
 /** Result of dispatching a single agent. */

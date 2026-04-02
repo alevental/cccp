@@ -489,4 +489,69 @@ stages:
 
     await expect(loadPipeline(file)).rejects.toThrow(/Pipeline validation failed/);
   });
+
+  it("accepts human_review on agent stages", async () => {
+    const file = await writeTmpYaml(`
+name: human-review-agent
+stages:
+  - name: write-draft
+    type: agent
+    agent: agents/writer.md
+    output: draft.md
+    human_review: true
+`);
+
+    const pipeline = await loadPipeline(file);
+    expect(pipeline.stages).toHaveLength(1);
+    const stage = pipeline.stages[0];
+    expect(stage.type).toBe("agent");
+    if (stage.type === "agent") {
+      expect(stage.human_review).toBe(true);
+    }
+  });
+
+  it("accepts human_review on pge stages", async () => {
+    const file = await writeTmpYaml(`
+name: human-review-pge
+stages:
+  - name: build-feature
+    type: pge
+    human_review: true
+    planner:
+      agent: agents/planner.md
+    generator:
+      agent: agents/writer.md
+    evaluator:
+      agent: agents/reviewer.md
+    contract:
+      deliverable: feature.md
+      max_iterations: 3
+`);
+
+    const pipeline = await loadPipeline(file);
+    expect(pipeline.stages).toHaveLength(1);
+    const stage = pipeline.stages[0];
+    expect(stage.type).toBe("pge");
+    if (stage.type === "pge") {
+      expect(stage.human_review).toBe(true);
+    }
+  });
+
+  it("defaults human_review to undefined when not specified", async () => {
+    const file = await writeTmpYaml(`
+name: no-review
+stages:
+  - name: quick-task
+    type: agent
+    agent: agents/writer.md
+    output: out.md
+`);
+
+    const pipeline = await loadPipeline(file);
+    const stage = pipeline.stages[0];
+    expect(stage.type).toBe("agent");
+    if (stage.type === "agent") {
+      expect(stage.human_review).toBeUndefined();
+    }
+  });
 });

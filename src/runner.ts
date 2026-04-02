@@ -6,9 +6,9 @@ import { AgentCrashError, MissingOutputError } from "./errors.js";
 import { FilesystemGateStrategy } from "./gate/gate-watcher.js";
 import { ConsoleLogger, type Logger } from "./logger.js";
 import { writeMcpConfigFile } from "./mcp/mcp-config.js";
-import { runAutoresearchCycle } from "./autoresearch.js";
+import { runAutoresearchCycle, type AutoresearchCycleOptions } from "./autoresearch.js";
 import { loadPipeline } from "./pipeline.js";
-import { runPgeCycle } from "./pge.js";
+import { runPgeCycle, dispatchEvaluatorWithFeedback, type PgeCycleOptions } from "./pge.js";
 import { interpolate, resolveTaskBody, loadAgentMarkdown, buildTaskContext, writeSystemPromptFile } from "./prompt.js";
 import { updatePipelineStatus, notifyPipelineComplete } from "./tui/cmux.js";
 import {
@@ -58,6 +58,7 @@ function getDispatcher(ctx: RunContext): AgentDispatcher {
 async function runAgentStage(
   stage: AgentStage,
   ctx: RunContext,
+  state: PipelineState,
 ): Promise<StageResult> {
   const start = Date.now();
   const vars = { ...ctx.variables, ...(stage.variables ?? {}) };
@@ -66,14 +67,9 @@ async function runAgentStage(
   const output = stage.output ? interpolate(stage.output, vars) : undefined;
   const inputs = stage.inputs?.map((i) => interpolate(i, vars));
 
-  const userPrompt = buildTaskContext({
-    task: taskDescription,
-    inputs,
-    output,
-  });
-
   // In dry-run mode, try to resolve but don't fail if files are missing.
   if (ctx.dryRun) {
+    const userPrompt = buildTaskContext({ task: taskDescription, inputs, output });
     let resolvedPath = stage.agent;
     try {
       const resolved = await resolveAgent(stage.agent, ctx.agentSearchPaths, stage.operation, ctx.projectDir);
@@ -114,39 +110,89 @@ async function runAgentStage(
     ? await writeMcpConfigFile(stage.mcp_profile, ctx.projectConfig, ctx.tempTracker)
     : undefined;
 
-  const result = await getDispatcher(ctx).dispatch({
-    userPrompt,
-    systemPromptFile,
-    mcpConfigFile,
-    expectedOutput: output ? resolve(ctx.projectDir, output) : undefined,
-    cwd: ctx.projectDir,
-    allowedTools: stage.allowed_tools,
-    agentName: stage.agent.replace(/[/\\]/g, "-").replace(/\.md$/, ""),
-    streamLogDir: resolve(ctx.artifactDir, ".cccp"),
-    claudeConfigDir: ctx.projectConfig?.claude_config_dir,
-    permissionMode: ctx.projectConfig?.permission_mode,
-    onActivity: (activity) => activityBus.emit("activity", activity),
-    quiet: ctx.quiet,
-  });
+  let gateFeedbackPath: string | undefined;
+  let gateRetries = 0;
 
-  if (result.exitCode !== 0) {
-    throw new AgentCrashError(stage.agent, result.exitCode);
-  }
-  if (output && !result.outputExists) {
-    throw new MissingOutputError(stage.agent, output);
-  }
+  // Retry loop for human_review feedback.
+  while (true) {
+    const userPrompt = buildTaskContext({
+      task: taskDescription,
+      inputs,
+      output,
+      gateFeedback: gateFeedbackPath,
+    });
 
-  return {
-    stageName: stage.name,
-    status: "passed",
-    result,
-    durationMs: Date.now() - start,
-  };
+    const result = await getDispatcher(ctx).dispatch({
+      userPrompt,
+      systemPromptFile,
+      mcpConfigFile,
+      expectedOutput: output ? resolve(ctx.projectDir, output) : undefined,
+      cwd: ctx.projectDir,
+      allowedTools: stage.allowed_tools,
+      agentName: stage.agent.replace(/[/\\]/g, "-").replace(/\.md$/, ""),
+      streamLogDir: resolve(ctx.artifactDir, ".cccp"),
+      claudeConfigDir: ctx.projectConfig?.claude_config_dir,
+      permissionMode: ctx.projectConfig?.permission_mode,
+      onActivity: (activity) => activityBus.emit("activity", activity),
+      quiet: ctx.quiet,
+    });
+
+    if (result.exitCode !== 0) {
+      throw new AgentCrashError(stage.agent, result.exitCode);
+    }
+    if (output && !result.outputExists) {
+      throw new MissingOutputError(stage.agent, output);
+    }
+
+    // Check human_review gate.
+    if (stage.human_review && ctx.gateStrategy) {
+      const reviewGate: GateInfo = {
+        stageName: stage.name,
+        status: "pending",
+        prompt: `Agent stage "${stage.name}" completed. Review the output and approve or reject with feedback.`,
+      };
+      state.gate = reviewGate;
+      await saveState(state);
+      const reviewResponse = await ctx.gateStrategy.waitForGate(reviewGate);
+      state.gate = undefined;
+      await saveState(state);
+
+      if (!reviewResponse.approved && reviewResponse.feedbackPath && gateRetries < MAX_GATE_RETRIES) {
+        gateRetries++;
+        getLogger(ctx).log(`    human review rejected with feedback — retrying agent (retry ${gateRetries}/${MAX_GATE_RETRIES})`);
+        gateFeedbackPath = reviewResponse.feedbackPath;
+        continue;
+      }
+
+      if (!reviewResponse.approved) {
+        return {
+          stageName: stage.name,
+          status: "failed",
+          result,
+          error: gateRetries >= MAX_GATE_RETRIES
+            ? `Failed and max gate retries (${MAX_GATE_RETRIES}) reached`
+            : `Human review rejected${reviewResponse.feedback ? `: ${reviewResponse.feedback}` : ""}`,
+          durationMs: Date.now() - start,
+        };
+      }
+
+      getLogger(ctx).log(`    human review approved`);
+    }
+
+    return {
+      stageName: stage.name,
+      status: "passed",
+      result,
+      durationMs: Date.now() - start,
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Stage dispatch — type: pge
 // ---------------------------------------------------------------------------
+
+const MAX_GATE_RETRIES = 3;
 
 async function runPgeStage(
   stage: PgeStage,
@@ -154,37 +200,94 @@ async function runPgeStage(
   state: PipelineState,
 ): Promise<StageResult> {
   const start = Date.now();
-  const pgeResult = await runPgeCycle(stage, ctx, state, async (eventType, eventData) => {
+  let pgeOptions: PgeCycleOptions | undefined;
+  let gateRetries = 0;
+
+  const onProgress = async (eventType?: string, eventData?: Record<string, unknown>) => {
     if (eventType) {
       await saveStateWithEvent(state, eventType, stage.name, eventData);
     } else {
       await saveState(state);
     }
-  });
+  };
 
-  if (pgeResult.outcome === "pass") {
-    return {
-      stageName: stage.name,
-      status: "passed",
-      result: pgeResult,
-      durationMs: Date.now() - start,
-    };
-  }
+  // Retry loop: runs the PGE cycle, handles escalation, and retries with feedback.
+  while (true) {
+    const pgeResult = await runPgeCycle(stage, ctx, state, onProgress, pgeOptions);
 
-  if (pgeResult.outcome === "error") {
-    return {
-      stageName: stage.name,
-      status: "error",
-      result: pgeResult,
-      error: "Evaluation parse error",
-      durationMs: Date.now() - start,
-    };
-  }
+    if (pgeResult.outcome === "pass") {
+      // Check human_review gate — fire a gate after PGE passes for human quality review.
+      if (stage.human_review && ctx.gateStrategy && !ctx.dryRun) {
+        const reviewGate: GateInfo = {
+          stageName: stage.name,
+          status: "pending",
+          prompt: `PGE stage "${stage.name}" passed evaluation. Review the deliverable and approve or reject with feedback.`,
+        };
+        state.gate = reviewGate;
+        await saveState(state);
+        const reviewResponse = await ctx.gateStrategy.waitForGate(reviewGate);
+        state.gate = undefined;
+        await saveState(state);
 
-  // outcome === "fail" — apply escalation strategy
-  const strategy = stage.on_fail ?? "stop";
-  switch (strategy) {
-    case "stop":
+        if (!reviewResponse.approved && reviewResponse.feedbackPath && gateRetries < MAX_GATE_RETRIES) {
+          gateRetries++;
+          getLogger(ctx).log(`    human review rejected with feedback — dispatching evaluator with feedback (retry ${gateRetries}/${MAX_GATE_RETRIES})`);
+
+          // Route feedback through the evaluator to produce a structured FAIL evaluation.
+          const humanEvalPath = await dispatchEvaluatorWithFeedback(
+            stage, ctx, state, pgeResult, reviewResponse.feedbackPath, onProgress,
+          );
+
+          // Re-enter GE loop with the human-mediated evaluation.
+          pgeOptions = {
+            existingContractPath: pgeResult.contractPath,
+            existingTaskPlanPath: pgeResult.taskPlanPath,
+          };
+          // Inject the human evaluation as the "last eval" by setting it as gate feedback
+          // so the generator sees it alongside any previous evaluations.
+          // Actually, we need the generator to see this as previousEvaluation, not gateFeedback.
+          // The cleanest way: pass it as gateFeedbackPath (the generator will read both).
+          pgeOptions.gateFeedbackPath = humanEvalPath;
+          continue;
+        }
+
+        if (!reviewResponse.approved) {
+          return {
+            stageName: stage.name,
+            status: "failed",
+            result: pgeResult,
+            error: gateRetries >= MAX_GATE_RETRIES
+              ? `Failed and max gate retries (${MAX_GATE_RETRIES}) reached`
+              : `Human review rejected${reviewResponse.feedback ? `: ${reviewResponse.feedback}` : ""}`,
+            durationMs: Date.now() - start,
+          };
+        }
+
+        getLogger(ctx).log(`    human review approved`);
+      }
+
+      return {
+        stageName: stage.name,
+        status: "passed",
+        result: pgeResult,
+        durationMs: Date.now() - start,
+      };
+    }
+
+    if (pgeResult.outcome === "error") {
+      return {
+        stageName: stage.name,
+        status: "error",
+        result: pgeResult,
+        error: "Evaluation parse error",
+        durationMs: Date.now() - start,
+      };
+    }
+
+    // outcome === "fail" — apply escalation strategy
+    const strategy = stage.on_fail ?? "stop";
+
+    if (strategy === "stop") {
       return {
         stageName: stage.name,
         status: "failed",
@@ -192,8 +295,9 @@ async function runPgeStage(
         error: `Failed after ${pgeResult.iterations}/${pgeResult.maxIterations} iterations`,
         durationMs: Date.now() - start,
       };
+    }
 
-    case "skip":
+    if (strategy === "skip") {
       getLogger(ctx).log(`    escalation: skip — continuing pipeline`);
       return {
         stageName: stage.name,
@@ -201,45 +305,64 @@ async function runPgeStage(
         result: pgeResult,
         durationMs: Date.now() - start,
       };
+    }
 
-    case "human_gate":
-      if (!ctx.gateStrategy) {
-        getLogger(ctx).log(`    escalation: human_gate — no gate strategy, stopping`);
-        return {
-          stageName: stage.name,
-          status: "failed",
-          result: pgeResult,
-          error: `Failed after ${pgeResult.iterations} iterations (no gate strategy configured)`,
-          durationMs: Date.now() - start,
-        };
-      }
-      getLogger(ctx).log(`    escalation: human_gate — awaiting approval`);
-      const gateInfo: GateInfo = {
-        stageName: stage.name,
-        status: "pending",
-        prompt: `PGE stage "${stage.name}" failed after ${pgeResult.iterations} iterations. Approve to continue or reject to stop.`,
-      };
-      state.gate = gateInfo;
-      await saveState(state);
-      const gateResponse = await ctx.gateStrategy.waitForGate(gateInfo);
-      state.gate = undefined;
-      await saveState(state);
-      if (gateResponse.approved) {
-        getLogger(ctx).log(`    gate approved — continuing pipeline`);
-        return {
-          stageName: stage.name,
-          status: "skipped",
-          result: pgeResult,
-          durationMs: Date.now() - start,
-        };
-      }
+    // strategy === "human_gate"
+    if (!ctx.gateStrategy) {
+      getLogger(ctx).log(`    escalation: human_gate — no gate strategy, stopping`);
       return {
         stageName: stage.name,
         status: "failed",
         result: pgeResult,
-        error: `Failed and gate rejected${gateResponse.feedback ? `: ${gateResponse.feedback}` : ""}`,
+        error: `Failed after ${pgeResult.iterations} iterations (no gate strategy configured)`,
         durationMs: Date.now() - start,
       };
+    }
+
+    getLogger(ctx).log(`    escalation: human_gate — awaiting approval`);
+    const gateInfo: GateInfo = {
+      stageName: stage.name,
+      status: "pending",
+      prompt: `PGE stage "${stage.name}" failed after ${pgeResult.iterations} iterations. Approve to skip and continue, reject to stop, or reject with feedback to retry the generation cycle.`,
+    };
+    state.gate = gateInfo;
+    await saveState(state);
+    const gateResponse = await ctx.gateStrategy.waitForGate(gateInfo);
+    state.gate = undefined;
+    await saveState(state);
+
+    if (gateResponse.approved) {
+      getLogger(ctx).log(`    gate approved — continuing pipeline`);
+      return {
+        stageName: stage.name,
+        status: "skipped",
+        result: pgeResult,
+        durationMs: Date.now() - start,
+      };
+    }
+
+    // Rejected — check for feedback retry
+    if (gateResponse.feedbackPath && gateRetries < MAX_GATE_RETRIES) {
+      gateRetries++;
+      getLogger(ctx).log(`    gate rejected with feedback — retrying PGE cycle (retry ${gateRetries}/${MAX_GATE_RETRIES})`);
+      pgeOptions = {
+        gateFeedbackPath: gateResponse.feedbackPath,
+        existingContractPath: pgeResult.contractPath,
+        existingTaskPlanPath: pgeResult.taskPlanPath,
+      };
+      continue; // Re-enter the PGE cycle with feedback
+    }
+
+    // Rejected without feedback, or max retries reached
+    return {
+      stageName: stage.name,
+      status: "failed",
+      result: pgeResult,
+      error: gateRetries >= MAX_GATE_RETRIES
+        ? `Failed and max gate retries (${MAX_GATE_RETRIES}) reached`
+        : `Failed and gate rejected${gateResponse.feedback ? `: ${gateResponse.feedback}` : ""}`,
+      durationMs: Date.now() - start,
+    };
   }
 }
 
@@ -253,40 +376,47 @@ async function runAutoresearchStage(
   state: PipelineState,
 ): Promise<StageResult> {
   const start = Date.now();
-  const result = await runAutoresearchCycle(stage, ctx, state, async (eventType, eventData) => {
+  let arOptions: AutoresearchCycleOptions | undefined;
+  let gateRetries = 0;
+
+  const onProgress = async (eventType?: string, eventData?: Record<string, unknown>) => {
     if (eventType) {
       await saveStateWithEvent(state, eventType, stage.name, eventData);
     } else {
       await saveState(state);
     }
-  });
+  };
 
-  if (result.outcome === "pass") {
-    return {
-      stageName: stage.name,
-      status: "passed",
-      result,
-      durationMs: Date.now() - start,
-    };
-  }
+  // Retry loop: runs autoresearch cycle, handles escalation, retries with feedback.
+  while (true) {
+    const result = await runAutoresearchCycle(stage, ctx, state, onProgress, arOptions);
 
-  if (result.outcome === "error") {
-    return {
-      stageName: stage.name,
-      status: "error",
-      result,
-      error: "Evaluation parse error",
-      durationMs: Date.now() - start,
-    };
-  }
+    if (result.outcome === "pass") {
+      return {
+        stageName: stage.name,
+        status: "passed",
+        result,
+        durationMs: Date.now() - start,
+      };
+    }
 
-  // outcome === "fail" — apply escalation strategy
-  const strategy = stage.on_fail ?? "stop";
-  const iterLabel = result.maxIterations
-    ? `${result.iterations}/${result.maxIterations}`
-    : `${result.iterations}`;
-  switch (strategy) {
-    case "stop":
+    if (result.outcome === "error") {
+      return {
+        stageName: stage.name,
+        status: "error",
+        result,
+        error: "Evaluation parse error",
+        durationMs: Date.now() - start,
+      };
+    }
+
+    // outcome === "fail" — apply escalation strategy
+    const strategy = stage.on_fail ?? "stop";
+    const iterLabel = result.maxIterations
+      ? `${result.iterations}/${result.maxIterations}`
+      : `${result.iterations}`;
+
+    if (strategy === "stop") {
       return {
         stageName: stage.name,
         status: "failed",
@@ -294,8 +424,9 @@ async function runAutoresearchStage(
         error: `Failed after ${iterLabel} iterations`,
         durationMs: Date.now() - start,
       };
+    }
 
-    case "skip":
+    if (strategy === "skip") {
       getLogger(ctx).log(`    escalation: skip — continuing pipeline`);
       return {
         stageName: stage.name,
@@ -303,45 +434,60 @@ async function runAutoresearchStage(
         result,
         durationMs: Date.now() - start,
       };
+    }
 
-    case "human_gate":
-      if (!ctx.gateStrategy) {
-        getLogger(ctx).log(`    escalation: human_gate — no gate strategy, stopping`);
-        return {
-          stageName: stage.name,
-          status: "failed",
-          result,
-          error: `Failed after ${iterLabel} iterations (no gate strategy configured)`,
-          durationMs: Date.now() - start,
-        };
-      }
-      getLogger(ctx).log(`    escalation: human_gate — awaiting approval`);
-      const gateInfo: GateInfo = {
-        stageName: stage.name,
-        status: "pending",
-        prompt: `Autoresearch stage "${stage.name}" failed after ${iterLabel} iterations. Approve to continue or reject to stop.`,
-      };
-      state.gate = gateInfo;
-      await saveState(state);
-      const gateResponse = await ctx.gateStrategy.waitForGate(gateInfo);
-      state.gate = undefined;
-      await saveState(state);
-      if (gateResponse.approved) {
-        getLogger(ctx).log(`    gate approved — continuing pipeline`);
-        return {
-          stageName: stage.name,
-          status: "skipped",
-          result,
-          durationMs: Date.now() - start,
-        };
-      }
+    // strategy === "human_gate"
+    if (!ctx.gateStrategy) {
+      getLogger(ctx).log(`    escalation: human_gate — no gate strategy, stopping`);
       return {
         stageName: stage.name,
         status: "failed",
         result,
-        error: `Failed and gate rejected${gateResponse.feedback ? `: ${gateResponse.feedback}` : ""}`,
+        error: `Failed after ${iterLabel} iterations (no gate strategy configured)`,
         durationMs: Date.now() - start,
       };
+    }
+
+    getLogger(ctx).log(`    escalation: human_gate — awaiting approval`);
+    const gateInfo: GateInfo = {
+      stageName: stage.name,
+      status: "pending",
+      prompt: `Autoresearch stage "${stage.name}" failed after ${iterLabel} iterations. Approve to skip and continue, reject to stop, or reject with feedback to retry.`,
+    };
+    state.gate = gateInfo;
+    await saveState(state);
+    const gateResponse = await ctx.gateStrategy.waitForGate(gateInfo);
+    state.gate = undefined;
+    await saveState(state);
+
+    if (gateResponse.approved) {
+      getLogger(ctx).log(`    gate approved — continuing pipeline`);
+      return {
+        stageName: stage.name,
+        status: "skipped",
+        result,
+        durationMs: Date.now() - start,
+      };
+    }
+
+    // Rejected — check for feedback retry
+    if (gateResponse.feedbackPath && gateRetries < MAX_GATE_RETRIES) {
+      gateRetries++;
+      getLogger(ctx).log(`    gate rejected with feedback — retrying autoresearch cycle (retry ${gateRetries}/${MAX_GATE_RETRIES})`);
+      arOptions = { gateFeedbackPath: gateResponse.feedbackPath };
+      continue;
+    }
+
+    // Rejected without feedback, or max retries reached
+    return {
+      stageName: stage.name,
+      status: "failed",
+      result,
+      error: gateRetries >= MAX_GATE_RETRIES
+        ? `Failed and max gate retries (${MAX_GATE_RETRIES}) reached`
+        : `Failed and gate rejected${gateResponse.feedback ? `: ${gateResponse.feedback}` : ""}`,
+      durationMs: Date.now() - start,
+    };
   }
 }
 
@@ -579,7 +725,7 @@ async function runStage(
 ): Promise<StageResult> {
   switch (stage.type) {
     case "agent":
-      return runAgentStage(stage, ctx);
+      return runAgentStage(stage, ctx, state);
 
     case "pge":
       return runPgeStage(stage, ctx, state);
@@ -837,6 +983,7 @@ async function runStages(
       flattenStageEntries(ctx.pipeline.stages),
       ctx.artifactDir,
       ctx.projectDir,
+      ctx.sessionId,
     );
   }
 
@@ -936,7 +1083,7 @@ export async function runPipeline(
     const tempState = opts?.existingState ?? createState(
       ctx.pipeline.name, ctx.project, ctx.pipelineFile,
       flattenStageEntries(ctx.pipeline.stages),
-      ctx.artifactDir, ctx.projectDir,
+      ctx.artifactDir, ctx.projectDir, ctx.sessionId,
     );
     ctx.gateStrategy = new FilesystemGateStrategy(tempState.runId, ctx.projectDir, ctx.quiet);
   }

@@ -3,9 +3,11 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import { openDatabase } from "../db.js";
+import { writeFeedbackArtifact } from "../gate/feedback-artifact.js";
 import { GateNotifier } from "./gate-notifier.js";
-import { loadState, saveState, discoverRuns } from "../state.js";
+import { loadState, saveState, setStageArtifact, discoverRuns } from "../state.js";
 import type { PipelineState, DiscoveredRun } from "../types.js";
 
 // ---------------------------------------------------------------------------
@@ -138,10 +140,29 @@ function textResult(text: string) {
 // ---------------------------------------------------------------------------
 
 export async function startMcpServer(): Promise<void> {
+  // Generate a unique session ID for this MCP server instance.
+  // Used for gate notification routing — only gates from runs started
+  // with this session ID (via --session-id on cccp run) will trigger
+  // notifications in this session.
+  const sessionId = randomUUID();
+  const projectDir = process.cwd();
+
   const server = new McpServer({
     name: "cccp",
     version: "0.1.0",
+  }, {
+    capabilities: {
+      experimental: { "claude/channel": {} },
+    },
   });
+
+  // --- cccp_session_id ---
+  server.tool(
+    "cccp_session_id",
+    "Get this MCP server's session ID. Pass this as --session-id when running pipelines so gate notifications route to this session.",
+    {},
+    async () => textResult(sessionId),
+  );
 
   // --- cccp_runs ---
   server.tool(
@@ -180,7 +201,7 @@ export async function startMcpServer(): Promise<void> {
   // --- cccp_gate_respond ---
   server.tool(
     "cccp_gate_respond",
-    "Approve or reject a pending human gate. Use cccp_runs or cccp_status first to see pending gates.",
+    "Approve or reject a pending human gate. Use cccp_runs or cccp_status first to see pending gates. On rejection with feedback, the feedback is written as a numbered markdown artifact and passed to the generator for retry.",
     {
       run_id: z
         .string()
@@ -192,9 +213,13 @@ export async function startMcpServer(): Promise<void> {
       feedback: z
         .string()
         .optional()
-        .describe("Optional feedback. On rejection, passed to the generator for retry."),
+        .describe("Optional feedback (markdown). Written as an artifact and passed to the generator on retry."),
+      feedback_file: z
+        .string()
+        .optional()
+        .describe("Path to a markdown file with detailed feedback. Takes precedence over inline feedback."),
     },
-    async ({ run_id, approved, feedback }) => {
+    async ({ run_id, approved, feedback, feedback_file }) => {
       const result = await resolveRun(run_id);
       if ("error" in result) return textResult(result.error);
 
@@ -204,14 +229,37 @@ export async function startMcpServer(): Promise<void> {
         return textResult("No pending gate on this run.");
       }
 
+      // Resolve feedback content: feedback_file takes precedence.
+      let feedbackContent = feedback;
+      if (feedback_file) {
+        try {
+          feedbackContent = await readFile(resolve(feedback_file), "utf-8");
+        } catch (err) {
+          return textResult(`Could not read feedback file: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
       state.gate.status = approved ? "approved" : "rejected";
-      state.gate.feedback = feedback;
+      state.gate.feedback = feedbackContent;
       state.gate.respondedAt = new Date().toISOString();
+
+      // Write feedback as a numbered artifact file.
+      if (feedbackContent) {
+        const feedbackPath = await writeFeedbackArtifact(
+          artifactDir, state.gate.stageName, feedbackContent, approved,
+        );
+        state.gate.feedbackPath = feedbackPath;
+        setStageArtifact(state, state.gate.stageName, `gate-feedback`, feedbackPath);
+      }
+
       await saveState(state);
 
       const action = approved ? "approved" : "rejected";
+      const feedbackNote = state.gate.feedbackPath
+        ? ` Feedback artifact: ${state.gate.feedbackPath}`
+        : feedbackContent ? ` Feedback: ${feedbackContent}` : "";
       return textResult(
-        `Gate "${state.gate.stageName}" ${action}.${feedback ? ` Feedback: ${feedback}` : ""}`,
+        `Gate "${state.gate.stageName}" ${action}.${feedbackNote}`,
       );
     },
   );
@@ -328,6 +376,108 @@ export async function startMcpServer(): Promise<void> {
     },
   );
 
+  // --- cccp_gate_review ---
+  server.tool(
+    "cccp_gate_review",
+    "Get comprehensive gate review context: pending gate info, stage artifacts, evaluation history, and contract. Use this before responding to a gate to have an informed discussion with the user.",
+    {
+      run_id: z
+        .string()
+        .optional()
+        .describe("Run ID prefix (8+ chars). Omit if only one run exists."),
+    },
+    async ({ run_id }) => {
+      const result = await resolveRun(run_id);
+      if ("error" in result) return textResult(result.error);
+
+      const { state, artifactDir } = result.run;
+
+      if (!state.gate || state.gate.status !== "pending") {
+        return textResult("No pending gate on this run.");
+      }
+
+      const gate = state.gate;
+      const stageName = gate.stageName;
+      const stageState = state.stages[stageName];
+
+      const lines: string[] = [
+        `# Gate Review: ${stageName}`,
+        "",
+        `**Run**: ${state.runId.slice(0, 8)} (${state.pipeline})`,
+        `**Stage**: ${stageName} (type: ${stageState?.type ?? "unknown"})`,
+        `**Prompt**: ${gate.prompt ?? "(none)"}`,
+        "",
+      ];
+
+      // Stage artifacts
+      if (stageState?.artifacts && Object.keys(stageState.artifacts).length > 0) {
+        lines.push("## Artifacts", "");
+        for (const [key, path] of Object.entries(stageState.artifacts)) {
+          lines.push(`- **${key}**: ${path}`);
+        }
+        lines.push("");
+      }
+
+      // Read key artifacts inline for context
+      const inlineArtifacts = ["contract", "deliverable", "task-plan"];
+      for (const key of inlineArtifacts) {
+        const path = stageState?.artifacts?.[key];
+        if (!path) continue;
+        try {
+          const content = await readFile(path, "utf-8");
+          const truncated = content.length > 2000
+            ? content.slice(0, 2000) + "\n\n... (truncated, use cccp_artifacts to read full content)"
+            : content;
+          lines.push(`## ${key}`, "", "```", truncated, "```", "");
+        } catch {
+          // File may not exist or be unreadable
+        }
+      }
+
+      // Latest evaluation
+      if (stageState?.artifacts) {
+        const evalKeys = Object.keys(stageState.artifacts)
+          .filter((k) => k.startsWith("evaluation-"))
+          .sort();
+        const latestEvalKey = evalKeys[evalKeys.length - 1];
+        if (latestEvalKey) {
+          const evalPath = stageState.artifacts[latestEvalKey];
+          try {
+            const evalContent = await readFile(evalPath, "utf-8");
+            const truncated = evalContent.length > 2000
+              ? evalContent.slice(0, 2000) + "\n\n... (truncated)"
+              : evalContent;
+            lines.push(`## Latest Evaluation (${latestEvalKey})`, "", "```", truncated, "```", "");
+          } catch {
+            // ignore
+          }
+        }
+      }
+
+      // Iteration info
+      if (stageState?.iteration) {
+        lines.push(`## Iteration History`, "");
+        lines.push(`Current iteration: ${stageState.iteration}`);
+        lines.push(`Last step: ${stageState.pgeStep ?? "unknown"}`);
+        lines.push("");
+      }
+
+      // Pipeline stage overview
+      lines.push("## Pipeline Status", "");
+      for (const name of state.stageOrder) {
+        const s = state.stages[name];
+        const icon =
+          s.status === "passed" ? "✓" :
+          s.status === "failed" || s.status === "error" ? "✗" :
+          s.status === "in_progress" ? "⚙" :
+          s.status === "skipped" ? "⏭" : "○";
+        lines.push(`  ${icon} ${name}: ${s.status}`);
+      }
+
+      return textResult(lines.join("\n"));
+    },
+  );
+
   // --- Start server ---
   const transport = new StdioServerTransport();
   await server.connect(transport);
@@ -335,7 +485,8 @@ export async function startMcpServer(): Promise<void> {
   // --- Start gate notifier ---
   const notifier = new GateNotifier({
     server,
-    projectDir: process.cwd(),
+    projectDir,
+    sessionId,
   });
   notifier.start();
 }

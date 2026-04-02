@@ -1,0 +1,24 @@
+name: channel-demo
+description: >
+  Simple pipeline demonstrating channel-based gate notifications
+  and human_review feedback retry.
+  Run with: npx tsx src/cli.ts run -f examples/channel-demo.yaml -p demo --session-id <id>
+
+stages:
+  # Step 1: Generate a short document, then human reviews.
+  # On rejection with feedback, the agent re-runs with your feedback injected.
+  - name: draft
+    type: agent
+    task: "Write a short (3-paragraph) summary of why deterministic pipeline orchestration matters for AI agent workflows. Be opinionated."
+    agent: writer
+    output: "{artifact_dir}/draft.md"
+    human_review: true
+
+  # Step 2: Polish the approved draft.
+  - name: revise
+    type: agent
+    task: "Read the draft and polish it. Fix any grammar issues, tighten the prose, and add a one-line conclusion."
+    agent: writer
+    inputs:
+      - "{artifact_dir}/draft.md"
+    output: "{artifact_dir}/final.md"

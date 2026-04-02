@@ -93,6 +93,7 @@ export function createState(
   stages: Array<{ name: string; type: string; groupId?: string }>,
   artifactDir: string,
   projectDir?: string,
+  sessionId?: string,
 ): PipelineState {
   const stageMap: Record<string, StageState> = {};
   const order: string[] = [];
@@ -119,6 +120,7 @@ export function createState(
     stageOrder: order,
     artifactDir,
     projectDir,
+    sessionId,
   };
 }
 

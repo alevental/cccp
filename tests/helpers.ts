@@ -68,3 +68,11 @@ export class MockGateStrategy implements GateStrategy {
     return this.response;
   }
 }
+
+/**
+ * Create a MockGateStrategy that returns a rejection with feedbackPath.
+ * Convenience wrapper for tests that need a rejected gate with feedback artifact.
+ */
+export function mockRejectedGate(feedback: string, feedbackPath: string): MockGateStrategy {
+  return new MockGateStrategy({ approved: false, feedback, feedbackPath });
+}

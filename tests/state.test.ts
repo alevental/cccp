@@ -58,6 +58,22 @@ describe("createState", () => {
     expect(state2.runId).toBeDefined();
     expect(state1.runId).not.toBe(state2.runId);
   });
+
+  it("stores sessionId when provided", () => {
+    const state = createState("test", "proj", "t.yaml", [
+      { name: "s1", type: "agent" },
+    ], "/tmp/artifacts", "/tmp/project", "test-session-123");
+
+    expect(state.sessionId).toBe("test-session-123");
+  });
+
+  it("sets sessionId to undefined when not provided", () => {
+    const state = createState("test", "proj", "t.yaml", [
+      { name: "s1", type: "agent" },
+    ], "/tmp/artifacts");
+
+    expect(state.sessionId).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -81,6 +97,40 @@ describe("saveState / loadState", () => {
     expect(loaded!.pipeline).toBe("test");
     expect(loaded!.stages.step1.status).toBe("passed");
     expect(loaded!.runId).toBe(state.runId);
+
+    closeDatabase(projectDir);
+  });
+
+  it("persists sessionId through SQLite round-trip", async () => {
+    const projectDir = tmpProjectDir();
+    const artifactDir = join(projectDir, "artifacts");
+
+    const state = createState("test", "proj", "test.yaml", [
+      { name: "s1", type: "agent" },
+    ], artifactDir, projectDir);
+    state.sessionId = "mcp-session-abc-123";
+
+    await saveState(state);
+
+    const loaded = await loadState(state.runId, projectDir);
+    expect(loaded?.sessionId).toBe("mcp-session-abc-123");
+
+    closeDatabase(projectDir);
+  });
+
+  it("returns undefined sessionId when not set", async () => {
+    const projectDir = tmpProjectDir();
+    const artifactDir = join(projectDir, "artifacts");
+
+    const state = createState("test", "proj", "test.yaml", [
+      { name: "s1", type: "agent" },
+    ], artifactDir, projectDir);
+    // Don't set sessionId
+
+    await saveState(state);
+
+    const loaded = await loadState(state.runId, projectDir);
+    expect(loaded?.sessionId).toBeUndefined();
 
     closeDatabase(projectDir);
   });

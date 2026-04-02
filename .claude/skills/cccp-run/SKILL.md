@@ -25,6 +25,7 @@ npx @alevental/cccp@latest run -f <pipeline.yaml> -p <project> [options]
 | `--dry-run` | No | Show prompts without executing agents |
 | `--headless` | No | Auto-approve all gates, disable TUI |
 | `-v, --var <key=value>` | No | Set pipeline variable (repeatable) |
+| `--session-id <id>` | No | MCP session ID for gate notification routing (see below) |
 
 **Recommended workflow:**
 1. Dry-run first: `npx @alevental/cccp@latest run -f pipeline.yaml -p myproject --dry-run`
@@ -65,7 +66,7 @@ Launches a standalone TUI dashboard. Can run in a separate terminal or cmux pane
 npx @alevental/cccp@latest mcp-server
 ```
 
-Exposes five tools over stdio: `cccp_runs`, `cccp_status`, `cccp_gate_respond`, `cccp_logs`, `cccp_artifacts`.
+Exposes tools over stdio: `cccp_session_id`, `cccp_runs`, `cccp_status`, `cccp_gate_respond`, `cccp_gate_review`, `cccp_logs`, `cccp_artifacts`.
 
 Register in `.mcp.json`:
 ```json
@@ -78,6 +79,12 @@ Register in `.mcp.json`:
   }
 }
 ```
+
+**Channel notifications (research preview):** To enable push notifications for pending gates, start Claude Code with the channel flag:
+```bash
+claude --dangerously-load-development-channels server:cccp
+```
+This allows the MCP server to push `<channel>` events directly into your session when a gate becomes pending, instead of relying on elicitation popups. Without this flag, notifications fall back to elicitation → manual tool calls.
 
 ### `init` — Scaffold a new project
 
@@ -103,7 +110,21 @@ npx @alevental/cccp@latest examples [-d <dir>] [--agents-only] [--pipelines-only
 
 Human gates pause the pipeline until approved or rejected.
 
-**Via MCP** (recommended): Use the `cccp_gate_respond` tool with `approved: true/false` and optional `feedback`.
+**Session-routed notifications:** To ensure gate notifications arrive in YOUR Claude Code session (not a random one), pass `--session-id` when starting the pipeline. Get the session ID from the `cccp_session_id` MCP tool first:
+
+```bash
+# Get session ID, then pass it to the run command:
+npx @alevental/cccp@latest run -f pipeline.yaml -p myproject --session-id <id>
+```
+
+When launching pipelines from Claude Code, always call `cccp_session_id` first, then include `--session-id` in the command.
+
+**Reviewing gates:** Use `cccp_gate_review` for comprehensive context (artifacts, evaluations, contract, pipeline status) before making a decision.
+
+**Responding to gates:** Use `cccp_gate_respond` with `approved: true/false` and optional `feedback`. On rejection with feedback:
+- The feedback is written as a numbered markdown artifact
+- For PGE stages with `on_fail: human_gate`: rejection with feedback triggers a retry of the generation cycle
+- For stages with `human_review: true`: rejection with feedback routes through the evaluator and retries
 
 **Via headless mode:** `--headless` auto-approves all gates immediately.
 

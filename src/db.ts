@@ -164,6 +164,11 @@ export class CccpDatabase {
 
       this.db.run(`PRAGMA user_version = 1`);
     }
+
+    if (version < 2) {
+      this.db.run(`ALTER TABLE runs ADD COLUMN session_id TEXT`);
+      this.db.run(`PRAGMA user_version = 2`);
+    }
   }
 
   private pragma(name: string): number {
@@ -180,8 +185,8 @@ export class CccpDatabase {
 
   insertRun(state: PipelineState, artifactDir: string): void {
     this.db.run(
-      `INSERT INTO runs (run_id, pipeline, project, pipeline_file, artifact_dir, project_dir, started_at, completed_at, status, stages_json, stage_order_json, gate_json, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO runs (run_id, pipeline, project, pipeline_file, artifact_dir, project_dir, started_at, completed_at, status, stages_json, stage_order_json, gate_json, session_id, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         state.runId,
         state.pipeline,
@@ -195,6 +200,7 @@ export class CccpDatabase {
         JSON.stringify(state.stages),
         JSON.stringify(state.stageOrder),
         state.gate ? JSON.stringify(state.gate) : null,
+        state.sessionId ?? null,
         new Date().toISOString(),
       ],
     );
@@ -204,7 +210,7 @@ export class CccpDatabase {
     this.db.run(
       `UPDATE runs SET
         status = ?, completed_at = ?, stages_json = ?, stage_order_json = ?,
-        gate_json = ?, updated_at = ?
+        gate_json = ?, session_id = ?, updated_at = ?
        WHERE run_id = ?`,
       [
         state.status,
@@ -212,6 +218,7 @@ export class CccpDatabase {
         JSON.stringify(state.stages),
         JSON.stringify(state.stageOrder),
         state.gate ? JSON.stringify(state.gate) : null,
+        state.sessionId ?? null,
         new Date().toISOString(),
         state.runId,
       ],
@@ -327,6 +334,7 @@ export class CccpDatabase {
         : undefined,
       artifactDir: col("artifact_dir") as string,
       projectDir: (col("project_dir") as string) || undefined,
+      sessionId: (col("session_id") as string) || undefined,
     };
   }
 

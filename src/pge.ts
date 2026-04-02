@@ -27,6 +27,16 @@ function getDispatcher(ctx: RunContext): AgentDispatcher {
 // PGE cycle
 // ---------------------------------------------------------------------------
 
+/** Options for retrying a PGE cycle with existing artifacts and/or gate feedback. */
+export interface PgeCycleOptions {
+  /** Path to gate feedback file from a human reviewer. Injected into generator prompt. */
+  gateFeedbackPath?: string;
+  /** Reuse an existing contract (skip planner + contract writer). */
+  existingContractPath?: string;
+  /** Reuse an existing task plan (skip planner). */
+  existingTaskPlanPath?: string;
+}
+
 /**
  * Execute a full Plan-Generate-Evaluate cycle for a PGE stage.
  *
@@ -36,12 +46,17 @@ function getDispatcher(ctx: RunContext): AgentDispatcher {
  * 3. Dispatch evaluator agent (evaluation mode) → evaluation-N.md
  * 4. Parse evaluation (regex on ### Overall: PASS/FAIL)
  * 5. Route: PASS → done, FAIL + iters left → retry, FAIL + max → escalate
+ *
+ * When `options.existingContractPath` and `options.existingTaskPlanPath` are set,
+ * steps 0 and 1 are skipped (used on gate feedback retry to avoid regenerating
+ * the plan and contract).
  */
 export async function runPgeCycle(
   stage: PgeStage,
   ctx: RunContext,
   state: PipelineState,
   onProgress?: (eventType?: string, eventData?: Record<string, unknown>) => Promise<void>,
+  options?: PgeCycleOptions,
 ): Promise<PgeResult> {
   const start = Date.now();
   const vars = { ...ctx.variables, ...(stage.variables ?? {}) };
@@ -100,107 +115,123 @@ export async function runPgeCycle(
   const taskBody = await resolveTaskBody(stage, vars, `Generate deliverable for: ${stage.name}`);
 
   // --- Resolve all agents via search paths ---
-  const plannerAgent = await resolveAndLoad(stage.planner, ctx, stage.mcp_profile);
   const genAgent = await resolveAndLoad(stage.generator, ctx, stage.mcp_profile);
   const evalAgent = await resolveAndLoad(stage.evaluator, ctx, stage.mcp_profile);
 
-  // --- Step 0: Dispatch planner ---
-  getLogger(ctx).log(`    dispatching planner: ${stage.planner.agent}`);
-  await onProgress?.("pge_planner_start", {
-    agent: stage.planner.agent,
-  });
+  // --- Planning phase: skip when reusing existing plan/contract (gate feedback retry) ---
+  const skipPlanning = options?.existingContractPath && options?.existingTaskPlanPath;
 
-  const plannerInputs = mergeInputs(stage.inputs, stage.planner.inputs, vars);
-  const planFile = stage.plan ? interpolate(stage.plan, vars) : undefined;
-  const plannerPrompt = buildTaskContext({
-    task: taskBody,
-    planFile,
-    inputs: plannerInputs.length > 0 ? plannerInputs : undefined,
-    output: taskPlanPath,
-    guidance: stage.contract.guidance,
-  });
+  let effectiveContractPath = contractPath;
+  let effectiveTaskPlanPath = taskPlanPath;
 
-  const plannerSystemFile = await writeSystemPromptFile(plannerAgent.markdown, ctx.tempTracker);
-  const plannerResult = await getDispatcher(ctx).dispatch({
-    userPrompt: plannerPrompt,
-    systemPromptFile: plannerSystemFile,
-    mcpConfigFile: plannerAgent.mcpFile,
-    expectedOutput: taskPlanPath,
-    cwd: ctx.projectDir,
-    allowedTools: stage.planner.allowed_tools,
-    claudeConfigDir: ctx.projectConfig?.claude_config_dir,
-    permissionMode: ctx.projectConfig?.permission_mode,
-    agentName: `${stage.name}-planner`,
-    streamLogDir: resolve(ctx.artifactDir, ".cccp"),
-    onActivity: (activity) => activityBus.emit("activity", activity),
-    quiet: ctx.quiet,
-  });
+  if (skipPlanning) {
+    effectiveContractPath = options.existingContractPath!;
+    effectiveTaskPlanPath = options.existingTaskPlanPath!;
+    getLogger(ctx).log(`    reusing existing plan and contract (gate feedback retry)`);
+  } else {
+    const plannerAgent = await resolveAndLoad(stage.planner, ctx, stage.mcp_profile);
 
-  if (plannerResult.exitCode !== 0) {
-    throw new AgentCrashError(stage.planner.agent, plannerResult.exitCode);
+    // --- Step 0: Dispatch planner ---
+    getLogger(ctx).log(`    dispatching planner: ${stage.planner.agent}`);
+    await onProgress?.("pge_planner_start", {
+      agent: stage.planner.agent,
+    });
+
+    const plannerInputs = mergeInputs(stage.inputs, stage.planner.inputs, vars);
+    const planFile = stage.plan ? interpolate(stage.plan, vars) : undefined;
+    const plannerPrompt = buildTaskContext({
+      task: taskBody,
+      planFile,
+      inputs: plannerInputs.length > 0 ? plannerInputs : undefined,
+      output: taskPlanPath,
+      guidance: stage.contract.guidance,
+    });
+
+    const plannerSystemFile = await writeSystemPromptFile(plannerAgent.markdown, ctx.tempTracker);
+    const plannerResult = await getDispatcher(ctx).dispatch({
+      userPrompt: plannerPrompt,
+      systemPromptFile: plannerSystemFile,
+      mcpConfigFile: plannerAgent.mcpFile,
+      expectedOutput: taskPlanPath,
+      cwd: ctx.projectDir,
+      allowedTools: stage.planner.allowed_tools,
+      claudeConfigDir: ctx.projectConfig?.claude_config_dir,
+      permissionMode: ctx.projectConfig?.permission_mode,
+      agentName: `${stage.name}-planner`,
+      streamLogDir: resolve(ctx.artifactDir, ".cccp"),
+      onActivity: (activity) => activityBus.emit("activity", activity),
+      quiet: ctx.quiet,
+    });
+
+    if (plannerResult.exitCode !== 0) {
+      throw new AgentCrashError(stage.planner.agent, plannerResult.exitCode);
+    }
+    if (!plannerResult.outputExists) {
+      throw new MissingOutputError(stage.planner.agent, taskPlanPath);
+    }
+
+    setStageArtifact(state, stage.name, "task-plan", taskPlanPath);
+    updatePgeProgress(state, stage.name, 0, "planner_dispatched");
+    getLogger(ctx).log(`    task plan written: ${taskPlanPath}`);
+    await onProgress?.("pge_planner_done", {
+      agent: stage.planner.agent, taskPlanPath,
+    });
+
+    // --- Step 1: Dispatch evaluator for contract writing ---
+    getLogger(ctx).log(`    dispatching contract writer: ${stage.evaluator.agent}`);
+    await onProgress?.("pge_contract_start", {
+      agent: stage.evaluator.agent,
+    });
+
+    const contractInputs = mergeInputs(stage.inputs, stage.evaluator.inputs, vars, [taskPlanPath]);
+    const templatePath = stage.contract.template
+      ? resolve(ctx.projectDir, interpolate(stage.contract.template, vars))
+      : undefined;
+    const contractPrompt = buildTaskContext({
+      task: `Write the acceptance criteria contract for: ${stage.name}`,
+      inputs: contractInputs.length > 0 ? contractInputs : undefined,
+      output: contractPath,
+      contractTemplate: templatePath,
+      guidance: stage.contract.guidance,
+      deliverableInfo: `The generator will produce: ${deliverable}\nWrite your contract criteria to verify this deliverable.\nMax iterations: ${maxIter}`,
+    });
+
+    const contractSystemFile = await writeSystemPromptFile(evalAgent.markdown, ctx.tempTracker);
+    const contractResult = await getDispatcher(ctx).dispatch({
+      userPrompt: contractPrompt,
+      systemPromptFile: contractSystemFile,
+      mcpConfigFile: evalAgent.mcpFile,
+      expectedOutput: contractPath,
+      cwd: ctx.projectDir,
+      allowedTools: stage.evaluator.allowed_tools,
+      claudeConfigDir: ctx.projectConfig?.claude_config_dir,
+      permissionMode: ctx.projectConfig?.permission_mode,
+      agentName: `${stage.name}-contract`,
+      streamLogDir: resolve(ctx.artifactDir, ".cccp"),
+      onActivity: (activity) => activityBus.emit("activity", activity),
+      quiet: ctx.quiet,
+    });
+
+    if (contractResult.exitCode !== 0) {
+      throw new AgentCrashError(stage.evaluator.agent, contractResult.exitCode);
+    }
+    if (!contractResult.outputExists) {
+      throw new MissingOutputError(stage.evaluator.agent, contractPath);
+    }
+
+    setStageArtifact(state, stage.name, "contract", contractPath);
+    updatePgeProgress(state, stage.name, 0, "contract_dispatched");
+    getLogger(ctx).log(`    contract written: ${contractPath}`);
   }
-  if (!plannerResult.outputExists) {
-    throw new MissingOutputError(stage.planner.agent, taskPlanPath);
-  }
-
-  setStageArtifact(state, stage.name, "task-plan", taskPlanPath);
-  updatePgeProgress(state, stage.name, 0, "planner_dispatched");
-  getLogger(ctx).log(`    task plan written: ${taskPlanPath}`);
-  await onProgress?.("pge_planner_done", {
-    agent: stage.planner.agent, taskPlanPath,
-  });
-
-  // --- Step 1: Dispatch evaluator for contract writing ---
-  getLogger(ctx).log(`    dispatching contract writer: ${stage.evaluator.agent}`);
-  await onProgress?.("pge_contract_start", {
-    agent: stage.evaluator.agent,
-  });
-
-  const contractInputs = mergeInputs(stage.inputs, stage.evaluator.inputs, vars, [taskPlanPath]);
-  const templatePath = stage.contract.template
-    ? resolve(ctx.projectDir, interpolate(stage.contract.template, vars))
-    : undefined;
-  const contractPrompt = buildTaskContext({
-    task: `Write the acceptance criteria contract for: ${stage.name}`,
-    inputs: contractInputs.length > 0 ? contractInputs : undefined,
-    output: contractPath,
-    contractTemplate: templatePath,
-    guidance: stage.contract.guidance,
-    deliverableInfo: `The generator will produce: ${deliverable}\nWrite your contract criteria to verify this deliverable.\nMax iterations: ${maxIter}`,
-  });
-
-  const contractSystemFile = await writeSystemPromptFile(evalAgent.markdown, ctx.tempTracker);
-  const contractResult = await getDispatcher(ctx).dispatch({
-    userPrompt: contractPrompt,
-    systemPromptFile: contractSystemFile,
-    mcpConfigFile: evalAgent.mcpFile,
-    expectedOutput: contractPath,
-    cwd: ctx.projectDir,
-    allowedTools: stage.evaluator.allowed_tools,
-    claudeConfigDir: ctx.projectConfig?.claude_config_dir,
-    permissionMode: ctx.projectConfig?.permission_mode,
-    agentName: `${stage.name}-contract`,
-    streamLogDir: resolve(ctx.artifactDir, ".cccp"),
-    onActivity: (activity) => activityBus.emit("activity", activity),
-    quiet: ctx.quiet,
-  });
-
-  if (contractResult.exitCode !== 0) {
-    throw new AgentCrashError(stage.evaluator.agent, contractResult.exitCode);
-  }
-  if (!contractResult.outputExists) {
-    throw new MissingOutputError(stage.evaluator.agent, contractPath);
-  }
-
-  setStageArtifact(state, stage.name, "contract", contractPath);
-  updatePgeProgress(state, stage.name, 0, "contract_dispatched");
-  getLogger(ctx).log(`    contract written: ${contractPath}`);
 
   let contractContent = "";
-  try { contractContent = await readFile(contractPath, "utf-8"); } catch { /* ignore */ }
-  await onProgress?.("pge_contract_done", {
-    agent: stage.evaluator.agent, contractPath, contractContent,
-  });
+  try { contractContent = await readFile(effectiveContractPath, "utf-8"); } catch { /* ignore */ }
+
+  if (!skipPlanning) {
+    await onProgress?.("pge_contract_done", {
+      agent: stage.evaluator.agent, contractPath: effectiveContractPath, contractContent,
+    });
+  }
 
   // Emit pge_start to signal the GE loop is beginning.
   await onProgress?.("pge_start", {
@@ -209,8 +240,8 @@ export async function runPgeCycle(
     evaluator: stage.evaluator.agent,
     deliverable,
     maxIterations: maxIter,
-    contractPath,
-    taskPlanPath,
+    contractPath: effectiveContractPath,
+    taskPlanPath: effectiveTaskPlanPath,
     contractContent,
   });
 
@@ -223,13 +254,14 @@ export async function runPgeCycle(
 
     // --- Step 2: Dispatch generator ---
     const genSystemFile = await writeSystemPromptFile(genAgent.markdown, ctx.tempTracker);
-    const genInputs = mergeInputs(stage.inputs, stage.generator.inputs, vars, [taskPlanPath]);
+    const genInputs = mergeInputs(stage.inputs, stage.generator.inputs, vars, [effectiveTaskPlanPath]);
     const genPrompt = buildTaskContext({
       task: taskBody,
-      contractPath,
+      contractPath: effectiveContractPath,
       inputs: genInputs.length > 0 ? genInputs : undefined,
       output: deliverable,
       previousEvaluation: lastEvalPath,
+      gateFeedback: options?.gateFeedbackPath,
       iteration: iter,
       maxIterations: maxIter,
     });
@@ -273,7 +305,7 @@ export async function runPgeCycle(
     const evalInputs = mergeInputs(stage.inputs, stage.evaluator.inputs, vars, [deliverable]);
     const evalPrompt = buildTaskContext({
       task: `Evaluate the deliverable against the contract for: ${stage.name}`,
-      contractPath,
+      contractPath: effectiveContractPath,
       inputs: evalInputs.length > 0 ? evalInputs : undefined,
       output: evalPath,
       iteration: iter,
@@ -329,8 +361,8 @@ export async function runPgeCycle(
         iterations: iter,
         maxIterations: maxIter,
         evaluationPath: evalPath,
-        contractPath,
-        taskPlanPath,
+        contractPath: effectiveContractPath,
+        taskPlanPath: effectiveTaskPlanPath,
         durationMs: Date.now() - start,
       };
     }
@@ -352,8 +384,8 @@ export async function runPgeCycle(
         iterations: iter,
         maxIterations: maxIter,
         evaluationPath: evalPath,
-        contractPath,
-        taskPlanPath,
+        contractPath: effectiveContractPath,
+        taskPlanPath: effectiveTaskPlanPath,
         durationMs: Date.now() - start,
       };
     }
@@ -378,8 +410,8 @@ export async function runPgeCycle(
         iterations: iter,
         maxIterations: maxIter,
         evaluationPath: evalPath,
-        contractPath,
-        taskPlanPath,
+        contractPath: effectiveContractPath,
+        taskPlanPath: effectiveTaskPlanPath,
         durationMs: Date.now() - start,
       };
     }
@@ -400,8 +432,83 @@ export async function runPgeCycle(
     outcome: "error",
     iterations: maxIter,
     maxIterations: maxIter,
-    contractPath,
-    taskPlanPath,
+    contractPath: effectiveContractPath,
+    taskPlanPath: effectiveTaskPlanPath,
     durationMs: Date.now() - start,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch evaluator with human gate feedback (for human_review retry)
+// ---------------------------------------------------------------------------
+
+/**
+ * Dispatch the evaluator agent with a human reviewer's feedback file.
+ * The evaluator incorporates the feedback into a structured FAIL evaluation
+ * that the generator can consume on retry via `previousEvaluation`.
+ *
+ * Returns the path to the evaluation file.
+ */
+export async function dispatchEvaluatorWithFeedback(
+  stage: PgeStage,
+  ctx: RunContext,
+  state: PipelineState,
+  pgeResult: PgeResult,
+  feedbackPath: string,
+  onProgress?: (eventType?: string, eventData?: Record<string, unknown>) => Promise<void>,
+): Promise<string> {
+  const vars = { ...ctx.variables, ...(stage.variables ?? {}) };
+  const deliverable = interpolate(stage.contract.deliverable, vars);
+  const stageDir = resolve(ctx.artifactDir, stage.name);
+  const evalAgent = await resolveAndLoad(stage.evaluator, ctx, stage.mcp_profile);
+
+  // Use a dedicated evaluation filename to avoid colliding with normal evaluations.
+  const evalPath = resolve(stageDir, `evaluation-human-review-${Date.now()}.md`);
+
+  const evalSystemFile = await writeSystemPromptFile(evalAgent.markdown, ctx.tempTracker);
+  const evalInputs = mergeInputs(stage.inputs, stage.evaluator.inputs, vars, [deliverable, feedbackPath]);
+  const evalPrompt = buildTaskContext({
+    task: `A human reviewer has rejected the deliverable for: ${stage.name}. Read their feedback and incorporate their concerns into your evaluation. Your evaluation MUST result in FAIL with specific criteria addressing the reviewer's feedback.`,
+    contractPath: pgeResult.contractPath,
+    inputs: evalInputs.length > 0 ? evalInputs : undefined,
+    output: evalPath,
+    gateFeedback: feedbackPath,
+    evaluatorFormat: true,
+  });
+
+  getLogger(ctx).log(`    dispatching evaluator with human feedback`);
+  await onProgress?.("pge_evaluator_start", {
+    iteration: 0, maxIterations: stage.contract.max_iterations,
+    agent: stage.evaluator.agent, humanReview: true,
+  });
+
+  const evalResult = await getDispatcher(ctx).dispatch({
+    userPrompt: evalPrompt,
+    systemPromptFile: evalSystemFile,
+    mcpConfigFile: evalAgent.mcpFile,
+    expectedOutput: evalPath,
+    cwd: ctx.projectDir,
+    allowedTools: stage.evaluator.allowed_tools,
+    claudeConfigDir: ctx.projectConfig?.claude_config_dir,
+    permissionMode: ctx.projectConfig?.permission_mode,
+    agentName: `${stage.name}-evaluator-review`,
+    streamLogDir: resolve(ctx.artifactDir, ".cccp"),
+    onActivity: (activity) => activityBus.emit("activity", activity),
+    quiet: ctx.quiet,
+  });
+
+  if (evalResult.exitCode !== 0) {
+    throw new AgentCrashError(stage.evaluator.agent, evalResult.exitCode);
+  }
+  if (!evalResult.outputExists) {
+    throw new MissingOutputError(stage.evaluator.agent, evalPath);
+  }
+
+  setStageArtifact(state, stage.name, "evaluation-human-review", evalPath);
+  await onProgress?.("pge_evaluator_done", {
+    iteration: 0, maxIterations: stage.contract.max_iterations,
+    agent: stage.evaluator.agent, evaluationPath: evalPath, humanReview: true,
+  });
+
+  return evalPath;
 }

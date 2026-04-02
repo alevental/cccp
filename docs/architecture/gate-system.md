@@ -6,9 +6,10 @@ The gate system provides human-in-the-loop approval checkpoints within a pipelin
 - [`src/gate/gate-strategy.ts`](../../src/gate/gate-strategy.ts) -- strategy interface
 - [`src/gate/gate-watcher.ts`](../../src/gate/gate-watcher.ts) -- filesystem polling strategy
 - [`src/gate/auto-approve.ts`](../../src/gate/auto-approve.ts) -- headless auto-approve strategy
-- [`src/mcp/mcp-server.ts`](../../src/mcp/mcp-server.ts) -- MCP tool for gate responses
-- [`src/mcp/gate-notifier.ts`](../../src/mcp/gate-notifier.ts) -- proactive gate elicitation via MCP
-- [`src/runner.ts`](../../src/runner.ts) -- gate orchestration in the pipeline runner
+- [`src/gate/feedback-artifact.ts`](../../src/gate/feedback-artifact.ts) -- numbered feedback markdown writer
+- [`src/mcp/mcp-server.ts`](../../src/mcp/mcp-server.ts) -- MCP tools for gate responses and review
+- [`src/mcp/gate-notifier.ts`](../../src/mcp/gate-notifier.ts) -- three-tier gate notification (channel, elicitation, manual)
+- [`src/runner.ts`](../../src/runner.ts) -- gate orchestration, human_review, and feedback retry
 
 ## GateStrategy Interface
 
@@ -18,6 +19,8 @@ All gate implementations conform to a single interface defined in `src/gate/gate
 export interface GateResponse {
   approved: boolean;
   feedback?: string;
+  /** Path to structured feedback markdown artifact. */
+  feedbackPath?: string;
 }
 
 export interface GateStrategy {
@@ -25,7 +28,7 @@ export interface GateStrategy {
 }
 ```
 
-The `GateInfo` type (from `src/state.ts`) represents the pending gate:
+The `GateInfo` type (from `src/types.ts`) represents the pending gate:
 
 ```typescript
 export interface GateInfo {
@@ -33,9 +36,13 @@ export interface GateInfo {
   status: "pending" | "approved" | "rejected";
   prompt?: string;
   feedback?: string;
+  /** Path to structured feedback markdown artifact. */
+  feedbackPath?: string;
   respondedAt?: string;
 }
 ```
+
+`feedbackPath` is set when feedback is written as a numbered artifact via `writeFeedbackArtifact()`. The `FilesystemGateStrategy` passes it through from `state.gate.feedbackPath` when returning the `GateResponse`.
 
 A strategy is responsible for three things:
 
@@ -186,6 +193,20 @@ await saveState(ctx.artifactDir, state);
   - `"stop"` (default): Stage fails, pipeline stops.
   - `"retry"`: Reserved for future implementation; currently treated as `stop`.
 
+## Feedback Artifacts
+
+**File:** `src/gate/feedback-artifact.ts`
+
+When a gate response includes feedback (inline or via `feedback_file`), the feedback is persisted as a numbered markdown file in the run's `.cccp/` directory:
+
+```
+{artifactDir}/.cccp/{stageName}-gate-feedback-{N}.md
+```
+
+Sequence number `N` increments based on existing feedback files for the stage. The file contains a header with decision, timestamp, and the feedback body. Both `cccp_gate_respond` and `GateNotifier.writeGateResponse()` call `writeFeedbackArtifact()` and store the resulting path on `state.gate.feedbackPath`. The path is also recorded as a stage artifact under the key `gate-feedback`.
+
+The feedback artifact path is the mechanism by which the runner decides whether to retry: the runner checks `gateResponse.feedbackPath` (not just `gateResponse.feedback`) to determine if structured feedback was provided. This distinction matters because the feedback path is passed into agent prompts as a file reference.
+
 ## PGE Escalation Gates
 
 Gates can also be triggered as an escalation strategy for PGE stages. When a PGE stage exhausts its `max_iterations` with a FAIL result and `on_fail: human_gate` is set, the runner creates a gate with a descriptive prompt:
@@ -194,31 +215,67 @@ Gates can also be triggered as an escalation strategy for PGE stages. When a PGE
 const gateInfo: GateInfo = {
   stageName: stage.name,
   status: "pending",
-  prompt: `PGE stage "${stage.name}" failed after ${pgeResult.iterations} iterations. Approve to continue or reject to stop.`,
+  prompt: `PGE stage "${stage.name}" failed after ${pgeResult.iterations} iterations. Approve to skip and continue, reject to stop, or reject with feedback to retry the generation cycle.`,
 };
 ```
 
-If approved, the pipeline continues (stage is marked `skipped`). If rejected, the stage is marked `failed`.
+Three outcomes are possible:
 
-## MCP Gate Elicitation
+- **Approved:** Pipeline continues (stage marked `skipped`).
+- **Rejected with feedback artifact:** The PGE cycle retries using `PgeCycleOptions`. The planner and contract writer are skipped (reuse `existingContractPath` and `existingTaskPlanPath`), and `gateFeedbackPath` injects the feedback into the generator prompt. Max 3 gate retries (`MAX_GATE_RETRIES`).
+- **Rejected without feedback (or max retries reached):** Stage marked `failed`, pipeline stops.
+
+### Autoresearch escalation retry
+
+The same pattern applies to autoresearch stages with `on_fail: human_gate`. On rejection with feedback, the cycle retries with `AutoresearchCycleOptions.gateFeedbackPath` injecting the feedback into the adjuster prompt. Max 3 gate retries.
+
+## Human Review Gates
+
+The `human_review: true` flag on `agent` and `pge` stages fires a gate after successful completion, giving a human reviewer a chance to inspect and reject output before the pipeline continues.
+
+### PGE stages with `human_review: true`
+
+After the PGE cycle passes evaluation, the runner creates a review gate. On rejection with feedback:
+
+1. The runner calls `dispatchEvaluatorWithFeedback()` -- dispatches the evaluator agent with the human feedback file to produce a structured FAIL evaluation incorporating the reviewer's concerns.
+2. The PGE cycle re-enters the GE loop with `PgeCycleOptions` (skipping planner/contract, using the human-mediated evaluation as `gateFeedbackPath`).
+3. Max 3 gate retries.
+
+On approval, the stage passes normally.
+
+### Agent stages with `human_review: true`
+
+After the agent completes, the runner creates a review gate. On rejection with feedback:
+
+1. The agent is re-run with `gateFeedback` injected into the prompt (pointing to the feedback artifact path).
+2. Max 3 gate retries.
+
+On approval, the stage passes normally. On rejection without feedback or after max retries, the stage fails.
+
+## MCP Gate Notification
 
 **File:** `src/mcp/gate-notifier.ts`
 
-The `GateNotifier` class provides proactive gate notifications to connected Claude Code sessions via MCP elicitation. Instead of waiting for the user to check `cccp_status`, the MCP server automatically prompts for approval when a gate becomes pending.
+The `GateNotifier` class provides proactive gate notifications to connected Claude Code sessions. It uses a three-tier notification strategy, tried in order:
 
-### How it works
+1. **Channel notification** (push-based, experimental) -- non-blocking push via `notifications/claude/channel`
+2. **Elicitation form** (interactive) -- blocking MCP form with approve/reject + feedback fields
+3. **Manual fallback** -- user discovers gates via `cccp_status` / `cccp_gate_respond` / `cccp_gate_review` tools
 
-1. A background polling loop (2-second interval) scans all pipeline runs for pending gates
-2. When a new pending gate is detected, the notifier calls `server.elicitInput()` with a structured form
-3. Claude Code displays the form to the user with an approve/reject decision and optional feedback field
-4. The user's response is written directly to the SQLite database
-5. The runner's `FilesystemGateStrategy` picks up the response on its next poll cycle
+### Channel notifications (Tier 1)
 
-### Elicitation form
+The MCP server declares `experimental: { "claude/channel": {} }` in its capabilities. When a pending gate is detected, the notifier sends a `notifications/claude/channel` message with severity `high`, including the gate stage name, prompt, and instructions to use `cccp_gate_review`.
 
-The form presents two fields:
+Launching the MCP server with channel support requires the `--dangerously-load-development-channels server:cccp` flag on the Claude Code side (since channels are experimental).
+
+If the channel notification succeeds, elicitation is skipped. If it fails (client doesn't support channels), the notifier sets `channelSupported = false` and falls through to elicitation.
+
+### Elicitation form (Tier 2)
+
+When channels are unavailable, the notifier calls `server.elicitInput()` with a structured form:
+
 - **Decision** (required): An enum with values `"approve"` or `"reject"`
-- **Feedback** (optional): Free-text feedback passed to the generator on rejection
+- **Feedback** (optional): Free-text feedback (on rejection, triggers retry with feedback)
 
 The elicitation `action` (accept/decline/cancel) is also respected:
 - **accept**: The form's `decision` field determines approval or rejection
@@ -227,29 +284,48 @@ The elicitation `action` (accept/decline/cancel) is also respected:
 
 ### Graceful degradation
 
-If the connected MCP client does not support elicitation (e.g., older Claude Code versions), the first `elicitInput()` call throws an error. The notifier catches this, sets an internal flag, and stops attempting elicitation for the remainder of the session. Gate approval falls back to the existing `cccp_gate_respond` tool.
+Each tier degrades independently. If channels fail on first attempt, `channelSupported` is set to `false`. If elicitation fails on first attempt, `elicitationSupported` is set to `false`. When both are disabled, the poll loop exits early and the user must use MCP tools manually.
+
+### Session affinity
+
+The MCP server generates a UUID session ID on startup (`randomUUID()`). Pipeline runs accept a `--session-id` flag, which is stored on `PipelineState.sessionId`.
+
+The notifier filters gates by session affinity:
+
+- If the run has a `sessionId` that does not match the notifier's `sessionId`, the gate is skipped (it belongs to a different MCP session).
+- If the run has no `sessionId` (unaffiliated), the gate is notified by any session.
+- The `cccp_session_id` tool exposes the session ID so callers can pass it to `cccp run --session-id`.
+
+This prevents multiple MCP server instances from competing to notify on the same gate.
+
+### Feedback artifact writing
+
+Both the elicitation and channel paths call `writeGateResponse()`, which writes feedback as a numbered artifact (via `writeFeedbackArtifact`) and records it as a stage artifact before saving state.
 
 ### Duplicate prevention
 
-The notifier tracks seen gates by `{runId}:{stageName}`. A gate is only elicited once. If the gate is resolved externally (via `cccp_gate_respond` or direct database write) while an elicitation is pending, the notifier detects this by reloading state before writing and discards the stale response.
+The notifier tracks seen gates by `{runId}:{stageName}`. A gate is only notified once. Seen gates are cleaned up when the run no longer has a pending gate. If the gate is resolved externally while a notification is pending, the notifier reloads state before writing and discards the stale response.
 
 ### Startup
 
-The notifier is started automatically by `startMcpServer()` after the MCP server connects to its transport.
+The notifier is started automatically by `startMcpServer()` after the MCP server connects to its transport. It receives the server instance, project directory, and session ID.
 
 ## Interacting with Gates
 
-### Via MCP Elicitation (automatic)
+### Via channel notification or elicitation (automatic)
 
-When the CCCP MCP server is registered with Claude Code, pending gates are automatically detected and presented as elicitation forms. This is the recommended flow -- no manual action is needed to discover pending gates.
+When the CCCP MCP server is registered with Claude Code, pending gates are automatically detected and pushed via channel notification (preferred) or presented as elicitation forms (fallback). This is the recommended flow -- no manual action is needed to discover pending gates. Channel notifications require the `--dangerously-load-development-channels server:cccp` flag.
 
 ### Via MCP Tools (manual)
 
-If elicitation is unavailable or the user prefers explicit control, use the `cccp_gate_respond` tool. See [MCP Tools](../api/mcp-tools.md).
+If automatic notification is unavailable or the user prefers explicit control:
 
 ```
-Use cccp_status to see pending gates, then cccp_gate_respond to approve/reject.
+1. cccp_gate_review — get full context (artifacts, evaluations, contract, pipeline status)
+2. cccp_gate_respond — approve/reject with inline feedback or feedback_file
 ```
+
+See [MCP Tools](../api/mcp-tools.md) for full parameter reference.
 
 ### Via the `cccp dashboard` TUI
 
@@ -265,6 +341,6 @@ Any process that can write to the SQLite database (at `.cccp/cccp.db` in the pro
 
 ## Related Documentation
 
-- [Pipeline Authoring](../guides/pipeline-authoring.md) -- `human_gate` stage type and `on_fail` escalation
-- [MCP Tools](../api/mcp-tools.md) -- `cccp_gate_respond` tool reference
+- [Pipeline Authoring](../guides/pipeline-authoring.md) -- `human_gate` stage type, `on_fail` escalation, `human_review`
+- [MCP Tools](../api/mcp-tools.md) -- `cccp_gate_respond`, `cccp_gate_review`, `cccp_session_id` tool references
 - [TUI Dashboard](tui-dashboard.md) -- gate display in the dashboard

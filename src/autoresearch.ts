@@ -36,11 +36,18 @@ function getDispatcher(ctx: RunContext): AgentDispatcher {
  * 4. Parse evaluation (regex on ### Overall: PASS/FAIL)
  * 5. Route: PASS → done, FAIL + max reached → escalate, FAIL → continue
  */
+/** Options for retrying an autoresearch cycle with gate feedback. */
+export interface AutoresearchCycleOptions {
+  /** Path to gate feedback file from a human reviewer. Injected into adjuster prompt. */
+  gateFeedbackPath?: string;
+}
+
 export async function runAutoresearchCycle(
   stage: AutoresearchStage,
   ctx: RunContext,
   state: PipelineState,
   onProgress?: (eventType?: string, eventData?: Record<string, unknown>) => Promise<void>,
+  options?: AutoresearchCycleOptions,
 ): Promise<AutoresearchResult> {
   const start = Date.now();
   const vars = { ...ctx.variables, ...(stage.variables ?? {}) };
@@ -119,6 +126,7 @@ export async function runAutoresearchCycle(
         inputs: adjInputs.length > 0 ? adjInputs : undefined,
         output: artifactPath,
         previousEvaluation: lastEvalPath,
+        gateFeedback: options?.gateFeedbackPath,
         iteration: iter,
         maxIterations: maxIter,
       });

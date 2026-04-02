@@ -19,6 +19,7 @@ const AgentStageSchema = z.object({
   inputs: z.array(z.string()).optional(),
   output: z.string().optional(),
   allowed_tools: z.array(z.string()).optional(),
+  human_review: z.boolean().optional(),
   variables: z.record(z.string()).optional(),
 });
 
@@ -48,6 +49,7 @@ const PgeStageSchema = z.object({
     max_iterations: z.number().int().min(1).max(10),
   }),
   on_fail: z.enum(["stop", "human_gate", "skip"]).optional(),
+  human_review: z.boolean().optional(),
   variables: z.record(z.string()).optional(),
 });
 

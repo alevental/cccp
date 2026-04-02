@@ -268,6 +268,38 @@ describe("buildTaskContext", () => {
     expect(result).not.toContain("Evaluation Format");
     expect(result).not.toContain("### Overall:");
   });
+
+  it("includes gate feedback section when gateFeedback is set", () => {
+    const result = buildTaskContext({
+      task: "Generate a report",
+      gateFeedback: "/tmp/gate-feedback-1.md",
+    });
+    expect(result).toContain("## Gate Feedback");
+    expect(result).toContain("/tmp/gate-feedback-1.md");
+    expect(result).toContain("Address all issues");
+  });
+
+  it("omits gate feedback section when gateFeedback is not set", () => {
+    const result = buildTaskContext({
+      task: "Generate a report",
+    });
+    expect(result).not.toContain("Gate Feedback");
+  });
+
+  it("includes both gate feedback and previous evaluation when both are set", () => {
+    const result = buildTaskContext({
+      task: "Fix the issues.",
+      previousEvaluation: "evals/attempt-1.md",
+      gateFeedback: "/tmp/gate-feedback-2.md",
+      iteration: 2,
+      maxIterations: 3,
+    });
+    expect(result).toContain("## Previous Evaluation");
+    expect(result).toContain("evals/attempt-1.md");
+    expect(result).toContain("## Gate Feedback");
+    expect(result).toContain("/tmp/gate-feedback-2.md");
+    expect(result).toContain("## Iteration");
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -7,6 +7,8 @@ import type { GateInfo } from "../types.js";
 export interface GateResponse {
   approved: boolean;
   feedback?: string;
+  /** Path to structured feedback markdown artifact. */
+  feedbackPath?: string;
 }
 
 // ---------------------------------------------------------------------------

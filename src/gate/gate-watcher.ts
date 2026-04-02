@@ -44,6 +44,7 @@ export class FilesystemGateStrategy implements GateStrategy {
             resolve({
               approved: true,
               feedback: state.gate.feedback,
+              feedbackPath: state.gate.feedbackPath,
             });
           } else if (state.gate.status === "rejected") {
             clearInterval(interval);
@@ -53,6 +54,7 @@ export class FilesystemGateStrategy implements GateStrategy {
             resolve({
               approved: false,
               feedback: state.gate.feedback,
+              feedbackPath: state.gate.feedbackPath,
             });
           }
         } catch {

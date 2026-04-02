@@ -84,6 +84,7 @@ export interface BuildRunContextOptions {
   headless?: boolean;
   showTui?: boolean;
   cliVars?: Record<string, string>;
+  sessionId?: string;
 }
 
 export function buildRunContext(opts: BuildRunContextOptions): RunContext {
@@ -124,5 +125,6 @@ export function buildRunContext(opts: BuildRunContextOptions): RunContext {
     quiet: opts.showTui,
     logger: opts.showTui ? new QuietLogger() : new ConsoleLogger(),
     tempTracker: new TempFileTracker(),
+    sessionId: opts.sessionId,
   };
 }
