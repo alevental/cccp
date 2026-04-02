@@ -24,7 +24,7 @@ program
   .description(
     "Claude Code and Cmux Pipeline Reagent — deterministic YAML-based pipeline orchestration",
   )
-  .version("0.5.1");
+  .version("0.5.2");
 
 program
   .command("run")
@@ -131,6 +131,10 @@ program
     "Project directory (defaults to cwd)",
   )
   .option("--headless", "Auto-approve all gates")
+  .option(
+    "--from <stage>",
+    "Clean-reset and resume from this named stage (resets it and all subsequent stages)",
+  )
   .action(async (opts) => {
     const projectDir = resolve(opts.projectDir ?? process.cwd());
     const projectConfig = await loadProjectConfig(projectDir);
@@ -141,6 +145,18 @@ program
     if (!existingState) {
       console.error(`No run matching "${opts.run}". Use \`cccp runs\` to list available runs.`);
       process.exit(1);
+    }
+
+    // --- Clean reset from a named stage ---
+    if (opts.from) {
+      const { resetFromStage } = await import("./state.js");
+      try {
+        const reset = await resetFromStage(existingState, opts.from);
+        console.log(`Reset ${reset.length} stage(s): ${reset.join(", ")}`);
+      } catch (err) {
+        console.error((err as Error).message);
+        process.exit(1);
+      }
     }
 
     console.log(

@@ -138,6 +138,28 @@ The `resume` CLI command launches the inline TUI dashboard (via `startDashboard(
 4. **Resumed**: `findResumePoint()` scans for first non-completed stage
 5. **Garbage collected**: Never — old runs persist in the database until manually deleted
 
+## Clean reset (`--from`)
+
+`resetFromStage(state, fromStageName)` in `src/state.ts`:
+
+When `cccp resume --from <stage>` is used, the named stage and all subsequent stages are wiped clean before the runner starts. This enables a fresh re-run from a specific point.
+
+### What gets reset
+
+| Layer | Cleanup |
+|-------|---------|
+| In-memory stage state | `status → "pending"`, clear `iteration`, `pgeStep`, `artifacts`, `durationMs`, `error` |
+| Pipeline state | `status → "running"`, clear `completedAt`, clear `gate` |
+| SQLite events | `DELETE FROM events WHERE run_id = ? AND stage_name IN (...)` |
+| SQLite checkpoints | `DELETE FROM checkpoints WHERE run_id = ? AND stage_name IN (...)` |
+| Artifact dirs | `rm -rf {artifactDir}/{stageName}/` |
+| Stream logs | Delete `{artifactDir}/.cccp/{stageName}-*.stream.jsonl` |
+| Gate feedback | Delete `{artifactDir}/.cccp/{stageName}-gate-feedback-*.md` |
+
+Deliverable files (which may live outside the stage directory in the project tree) are intentionally not deleted — they may serve as inputs to other stages.
+
+After reset, the standard resume path takes over: `findResumePoint()` sees the target stage as `pending` and the runner starts from there.
+
 ## Parallel group resume
 
 When resuming a pipeline interrupted during a parallel group, `findResumePoint()` returns the first incomplete stage within the group. The runner identifies the containing parallel group from the pipeline definition and re-executes only the stages that didn't complete — completed stages within the group are skipped. State writes from concurrent stages within a parallel group serialize naturally through the Node.js event loop (all parallel stages run as concurrent Promises in the same process).

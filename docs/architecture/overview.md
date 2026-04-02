@@ -43,7 +43,7 @@ The Plan-Generate-Evaluate cycle:
 ### State persistence (`src/state.ts`, `src/db.ts`)
 Pipeline state is persisted to a SQLite database at `{projectDir}/.cccp/cccp.db` via sql.js (WASM). State is updated after every transition: stage start, contract write, generator dispatch, evaluator dispatch, routing decision, stage completion. All types (`PipelineState`, `StageState`, `GateInfo`, etc.) are defined in `src/types.ts`.
 
-Resume finds the first non-completed stage and skips everything before it. PGE stages resume at the correct iteration and sub-step.
+Resume finds the first non-completed stage and skips everything before it. PGE stages resume at the correct iteration and sub-step. `resetFromStage()` enables clean reset from a named stage onward — resets state, deletes events/checkpoints, and removes artifact files from disk. Used by `cccp resume --from <stage>`.
 
 ### MCP config (`src/mcp/mcp-config.ts`, `src/config.ts`)
 Named MCP profiles defined in `cccp.yaml` with `extends` inheritance. Each profile generates a `--mcp-config` JSON file with only the servers that agent needs.

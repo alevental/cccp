@@ -427,6 +427,28 @@ export class CccpDatabase {
   }
 
   // -------------------------------------------------------------------------
+  // Cleanup — delete events/checkpoints for specific stages
+  // -------------------------------------------------------------------------
+
+  deleteEventsForStages(runId: string, stageNames: string[]): void {
+    if (stageNames.length === 0) return;
+    const placeholders = stageNames.map(() => "?").join(", ");
+    this.db.run(
+      `DELETE FROM events WHERE run_id = ? AND stage_name IN (${placeholders})`,
+      [runId, ...stageNames],
+    );
+  }
+
+  deleteCheckpointsForStages(runId: string, stageNames: string[]): void {
+    if (stageNames.length === 0) return;
+    const placeholders = stageNames.map(() => "?").join(", ");
+    this.db.run(
+      `DELETE FROM checkpoints WHERE run_id = ? AND stage_name IN (${placeholders})`,
+      [runId, ...stageNames],
+    );
+  }
+
+  // -------------------------------------------------------------------------
   // Persistence — flush to disk
   // -------------------------------------------------------------------------
 

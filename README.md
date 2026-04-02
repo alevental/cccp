@@ -250,8 +250,9 @@ npx @alevental/cccp run -f <pipeline.yaml> -p <project> [options]
   -a, --artifact-dir     Override artifact output directory
   -v, --var key=value    Set pipeline variables (repeatable)
 
-npx @alevental/cccp resume -p <project> -r <run-id-prefix> [--headless]
-  Resume an interrupted pipeline from the last incomplete stage
+npx @alevental/cccp resume -p <project> -r <run-id-prefix> [options]
+  --headless             Auto-approve all human gates
+  --from <stage>         Clean-reset and resume from a named stage
 
 npx @alevental/cccp dashboard -r <run-id-prefix>
   Launch the TUI dashboard to monitor a running pipeline
@@ -292,10 +293,14 @@ Then from Claude Code: call `cccp_status` to see what's pending, `cccp_gate_resp
 Pipeline state is persisted to a SQLite database at `{projectDir}/.cccp/cccp.db` after every transition (stage start, planner dispatch, contract dispatch, generator dispatch, evaluator dispatch, routing decision). If a run is interrupted:
 
 ```bash
+# Resume from the last incomplete stage
 npx @alevental/cccp resume -p my-project -r <run-id-prefix>
+
+# Clean-reset and resume from a specific stage
+npx @alevental/cccp resume -p my-project -r <run-id-prefix> --from review
 ```
 
-Completed stages are skipped. PGE stages resume at the correct iteration and sub-step.
+Without `--from`, completed stages are skipped and execution continues from the first incomplete stage. With `--from`, the named stage and all subsequent stages are wiped clean (state, artifacts, logs) and re-run from scratch.
 
 ## cmux integration
 

@@ -49,8 +49,19 @@ npx @alevental/cccp@latest resume -p <project> -r <run-id-prefix> [options]
 | `-r, --run <id-prefix>` | Yes | Run ID or prefix (8+ characters) |
 | `-d, --project-dir <path>` | No | Project directory (default: cwd) |
 | `--headless` | No | Auto-approve all gates |
+| `--from <stage>` | No | Clean-reset and resume from this named stage |
 
-Skips completed stages and resumes from the first incomplete stage. For PGE stages, resumes at the correct iteration and sub-step.
+Without `--from`: skips completed stages and resumes from the first incomplete stage. For PGE stages, resumes at the correct iteration and sub-step.
+
+With `--from <stage>`: resets the named stage and all subsequent stages to a clean state before resuming. Cleans up stage state (status, iteration, artifacts), SQLite events/checkpoints, artifact directories, stream logs, and gate feedback files. Stages before `--from` are left untouched.
+
+```bash
+# Resume from where it stopped
+npx @alevental/cccp@latest resume -p myproject -r a1b2c3d4
+
+# Clean-reset from a specific stage and re-run
+npx @alevental/cccp@latest resume -p myproject -r a1b2c3d4 --from review
+```
 
 ### `dashboard` — Monitor a run
 

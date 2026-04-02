@@ -305,10 +305,20 @@ When the CCCP MCP server is registered, pending gates are automatically detected
 If a pipeline is interrupted (crash, Ctrl-C, network error), resume from the last checkpoint:
 
 ```bash
-npx @alevental/cccp resume -p my-project -a docs/projects/my-project/build-docs
+npx @alevental/cccp resume -p my-project -r <run-id-prefix>
 ```
 
 The runner skips completed stages and resumes from the first incomplete stage. For PGE stages, it resumes at the iteration and sub-step level.
+
+### Clean reset from a specific stage
+
+To re-run part of a pipeline from scratch without re-running earlier stages, use `--from`:
+
+```bash
+npx @alevental/cccp resume -p my-project -r <run-id-prefix> --from review
+```
+
+This resets the named stage and all subsequent stages to a clean state (clears state, artifacts, logs, events), then resumes from that point. Stages before `--from` are left untouched.
 
 ## Project Structure Summary
 

@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { rm, readdir, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { openDatabase, type RunFilter } from "./db.js";
 import type {
@@ -259,6 +260,88 @@ export function findResumePoint(state: PipelineState): ResumePoint | null {
   }
 
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Clean reset — reset a stage and all subsequent stages for fresh re-run
+// ---------------------------------------------------------------------------
+
+/**
+ * Reset a named stage and every stage after it to a clean `pending` state.
+ * Cleans up:
+ *   - In-memory stage state (status, iteration, pgeStep, artifacts, duration, error)
+ *   - Pipeline-level fields (status → running, clear completedAt/gate)
+ *   - SQLite events and checkpoints for the affected stages
+ *   - Artifact directories (`{artifactDir}/{stageName}/`)
+ *   - Stream log files (`{artifactDir}/.cccp/{stageName}-*.stream.jsonl`)
+ *   - Gate feedback files (`{artifactDir}/.cccp/{stageName}-gate-feedback-*.md`)
+ *
+ * Returns the list of stage names that were reset.
+ */
+export async function resetFromStage(
+  state: PipelineState,
+  fromStageName: string,
+): Promise<string[]> {
+  const idx = state.stageOrder.indexOf(fromStageName);
+  if (idx === -1) {
+    throw new Error(
+      `Stage "${fromStageName}" not found. Available stages: ${state.stageOrder.join(", ")}`,
+    );
+  }
+
+  const stagesToReset = state.stageOrder.slice(idx);
+
+  // --- Reset in-memory stage state ---
+  for (const name of stagesToReset) {
+    const stage = state.stages[name];
+    if (!stage) continue;
+    stage.status = "pending";
+    delete stage.iteration;
+    delete stage.pgeStep;
+    delete stage.artifacts;
+    delete stage.durationMs;
+    delete stage.error;
+  }
+
+  // --- Reset pipeline-level state ---
+  state.status = "running";
+  delete state.completedAt;
+  delete state.gate;
+
+  // --- Clean SQLite records ---
+  const dir = resolveProjectDir(state);
+  const db = await openDatabase(dir);
+  db.deleteEventsForStages(state.runId, stagesToReset);
+  db.deleteCheckpointsForStages(state.runId, stagesToReset);
+  db.upsertRun(state, state.artifactDir);
+  db.flush();
+
+  // --- Clean filesystem ---
+  const artifactDir = state.artifactDir;
+  const cccpDir = resolve(artifactDir, ".cccp");
+
+  for (const name of stagesToReset) {
+    // Remove stage artifact directory.
+    const stageDir = resolve(artifactDir, name);
+    await rm(stageDir, { recursive: true, force: true });
+
+    // Remove stream logs and gate feedback files.
+    try {
+      const files = await readdir(cccpDir);
+      for (const file of files) {
+        if (
+          (file.startsWith(`${name}-`) && file.endsWith(".stream.jsonl")) ||
+          (file.startsWith(`${name}-gate-feedback-`) && file.endsWith(".md"))
+        ) {
+          await unlink(resolve(cccpDir, file));
+        }
+      }
+    } catch {
+      // .cccp dir may not exist yet — that's fine.
+    }
+  }
+
+  return stagesToReset;
 }
 
 // ---------------------------------------------------------------------------

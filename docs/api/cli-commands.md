@@ -111,6 +111,7 @@ npx @alevental/cccp resume -p <name> -r <run-id-prefix> [options]
 |------|-------------|
 | `-d, --project-dir <path>` | Project directory (defaults to `cwd`) |
 | `--headless` | Auto-approve all gates |
+| `--from <stage>` | Clean-reset and resume from this named stage (see below) |
 
 ### Resume behavior
 
@@ -121,6 +122,25 @@ npx @alevental/cccp resume -p <name> -r <run-id-prefix> [options]
 5. Continues from the interrupted stage
 
 For PGE stages, resume includes the iteration number and sub-step, so a crashed generator or evaluator can be retried without restarting the entire PGE cycle.
+
+### Clean reset with `--from`
+
+When `--from <stage>` is specified, the named stage and all subsequent stages are reset to a clean state before resuming. This is useful when you want to re-run part of a pipeline from scratch without re-running earlier stages.
+
+What gets cleaned:
+- **Stage state**: status reset to `pending`, iteration/pgeStep/artifacts/duration/error cleared
+- **Pipeline state**: status set to `running`, `completedAt` and `gate` cleared
+- **SQLite**: events and checkpoints deleted for the reset stages
+- **Artifact directories**: `{artifactDir}/{stageName}/` removed (task plans, contracts, evaluations)
+- **Stream logs**: `{artifactDir}/.cccp/{stageName}-*.stream.jsonl` deleted
+- **Gate feedback**: `{artifactDir}/.cccp/{stageName}-gate-feedback-*.md` deleted
+
+Stages before the `--from` stage are left untouched (still passed/skipped).
+
+```bash
+# Re-run from the "review" stage onward
+npx @alevental/cccp resume -p my-project -r a1b2c3d4 --from review
+```
 
 ### TUI behavior
 
