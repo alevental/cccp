@@ -133,8 +133,11 @@ export async function runPgeCycle(
 
     // --- Step 0: Dispatch planner ---
     getLogger(ctx).log(`    dispatching planner: ${stage.planner.agent}`);
+    const plannerModelEffort = resolveModelEffort(stage.planner, stage, ctx.pipeline, "planner");
     await onProgress?.("pge_planner_start", {
       agent: stage.planner.agent,
+      ...plannerModelEffort,
+      output: taskPlanPath,
     });
 
     const plannerInputs = mergeInputs(stage.inputs, stage.planner.inputs, vars);
@@ -202,8 +205,11 @@ export async function runPgeCycle(
 
     // --- Step 1: Dispatch evaluator for contract writing ---
     getLogger(ctx).log(`    dispatching contract writer: ${stage.evaluator.agent}`);
+    const contractModelEffort = resolveModelEffort(stage.evaluator, stage, ctx.pipeline, "evaluator");
     await onProgress?.("pge_contract_start", {
       agent: stage.evaluator.agent,
+      ...contractModelEffort,
+      output: contractPath,
     });
 
     const contractInputs = mergeInputs(stage.inputs, stage.evaluator.inputs, vars, [taskPlanPath]);
@@ -291,8 +297,11 @@ export async function runPgeCycle(
     });
 
     getLogger(ctx).log(`    dispatching generator: ${stage.generator.agent}`);
+    const genModelEffort = resolveModelEffort(stage.generator, stage, ctx.pipeline, "generator");
     await onProgress?.("pge_generator_start", {
       iteration: iter, maxIterations: maxIter, agent: stage.generator.agent,
+      ...genModelEffort,
+      inputs: genInputs, output: deliverable,
     });
     const genResult = await getDispatcher(ctx).dispatch({
       userPrompt: genPrompt,
@@ -339,8 +348,11 @@ export async function runPgeCycle(
     });
 
     getLogger(ctx).log(`    dispatching evaluator: ${stage.evaluator.agent}`);
+    const evalModelEffort = resolveModelEffort(stage.evaluator, stage, ctx.pipeline, "evaluator");
     await onProgress?.("pge_evaluator_start", {
       iteration: iter, maxIterations: maxIter, agent: stage.evaluator.agent,
+      ...evalModelEffort,
+      inputs: evalInputs, output: evalPath,
     });
     const evalResult = await getDispatcher(ctx).dispatch({
       userPrompt: evalPrompt,
@@ -353,7 +365,7 @@ export async function runPgeCycle(
       permissionMode: ctx.projectConfig?.permission_mode,
       agentName: `${stage.name}-evaluator`,
       streamLogDir: resolve(ctx.artifactDir, ".cccp"),
-      ...resolveModelEffort(stage.evaluator, stage, ctx.pipeline, "evaluator"),
+      ...evalModelEffort,
       onActivity: (activity) => activityBus.emit("activity", activity),
       quiet: ctx.quiet,
     });

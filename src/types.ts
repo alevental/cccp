@@ -344,6 +344,8 @@ export interface RunContext {
   visitedPipelines?: Set<string>;
   /** MCP session ID for gate notification routing. Passed via --session-id on cccp run. */
   sessionId?: string;
+  /** Callback to bubble child stage events to a parent pipeline's event stream. */
+  parentOnProgress?: (eventType: string, stageName: string, eventData?: Record<string, unknown>) => Promise<void>;
 }
 
 /** Result of dispatching a single agent. */

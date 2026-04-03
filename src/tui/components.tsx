@@ -72,9 +72,14 @@ function StageRow({ name, stage }: { name: string; stage: StageState }) {
   );
 }
 
+type StageRow_t =
+  | { kind: "stage"; name: string; childLevel?: number }
+  | { kind: "group-start" }
+  | { kind: "group-end" };
+
 export function StageList({ state }: StageListProps) {
   // Group consecutive stages by groupId for visual bracketing.
-  const rows: Array<{ kind: "stage"; name: string } | { kind: "group-start" } | { kind: "group-end" }> = [];
+  const rows: StageRow_t[] = [];
   let currentGroupId: string | undefined;
 
   for (const name of state.stageOrder) {
@@ -82,17 +87,22 @@ export function StageList({ state }: StageListProps) {
     const groupId = stage.groupId;
 
     if (groupId && groupId !== currentGroupId) {
-      // Entering a new parallel group
       if (currentGroupId) rows.push({ kind: "group-end" });
       rows.push({ kind: "group-start" });
       currentGroupId = groupId;
     } else if (!groupId && currentGroupId) {
-      // Leaving a parallel group
       rows.push({ kind: "group-end" });
       currentGroupId = undefined;
     }
 
     rows.push({ kind: "stage", name });
+
+    // Render nested sub-pipeline children inline.
+    if (stage.type === "pipeline" && stage.children) {
+      for (const childName of stage.children.stageOrder) {
+        rows.push({ kind: "stage", name: childName, childLevel: 1 });
+      }
+    }
   }
   if (currentGroupId) rows.push({ kind: "group-end" });
 
@@ -114,6 +124,23 @@ export function StageList({ state }: StageListProps) {
             </Box>
           );
         }
+
+        // Nested sub-pipeline child stage.
+        if (row.childLevel) {
+          // Look up child stage from parent pipeline stages that have children.
+          const childStage = Object.values(state.stages)
+            .filter((s) => s.children)
+            .map((s) => s.children!.stages[row.name])
+            .find(Boolean);
+          if (!childStage) return null;
+          return (
+            <Box key={`child-${row.name}`}>
+              <Text dimColor>{"    \u251C\u2500 "}</Text>
+              <StageRow name={row.name} stage={childStage} />
+            </Box>
+          );
+        }
+
         const stage = state.stages[row.name];
         const indent = stage.groupId ? " \u2551  " : " ";
         return (
@@ -138,24 +165,37 @@ export function StageList({ state }: StageListProps) {
 // Agent activity panel (right pane)
 // ---------------------------------------------------------------------------
 
-interface AgentActivityPanelProps {
-  activities: Map<string, AgentActivity>;
+/** Format a duration in ms as "Xm Ys" or "Xs". */
+function formatElapsed(ms: number): string {
+  const secs = Math.floor(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  return `${mins}m ${secs % 60}s`;
 }
 
-function SingleAgentDetail({ activity }: { activity: AgentActivity }) {
-  const recentTools = activity.toolHistory?.slice(-8) ?? [];
+/** Format token count compactly: 1234 → "1.2k", 500 → "500". */
+function fmtTok(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+interface AgentActivityPanelProps {
+  activities: Map<string, AgentActivity>;
+  stages: Record<string, StageState>;
+  dispatchStartTimes: Map<string, number>;
+  now: number;
+}
+
+function AgentDetailColumn({ activity, elapsed }: { activity: AgentActivity; elapsed: string }) {
+  const recentTools = activity.toolHistory?.slice(-5) ?? [];
 
   return (
-    <Box flexDirection="column">
-      {/* Agent name + model */}
-      <Box>
-        <Text bold>[{activity.agent}]</Text>
-        {activity.model && (
-          <Text dimColor> {activity.model}</Text>
-        )}
-      </Box>
+    <Box flexDirection="column" flexGrow={1}>
+      <Text bold>[{activity.agent}]</Text>
+      <Text dimColor>
+        {activity.model ? ` ${activity.model}` : ""}
+        {" \u00B7 "}{elapsed}
+      </Text>
 
-      {/* Tool history */}
       {recentTools.length > 0 && (
         <Box flexDirection="column">
           {recentTools.map((t, i) => (
@@ -164,7 +204,7 @@ function SingleAgentDetail({ activity }: { activity: AgentActivity }) {
                 {"  "}{t.status === "active" ? "\u25B6" : "\u2713"}{" "}
                 {t.name}
                 {t.summary ? (
-                  <Text dimColor> {t.summary.length > 50 ? t.summary.slice(0, 47) + "..." : t.summary}</Text>
+                  <Text dimColor> {t.summary.length > 40 ? t.summary.slice(0, 37) + "..." : t.summary}</Text>
                 ) : null}
               </Text>
             </Box>
@@ -172,50 +212,39 @@ function SingleAgentDetail({ activity }: { activity: AgentActivity }) {
         </Box>
       )}
 
-      {/* Thinking preview */}
-      {activity.lastThinking && (
-        <Text dimColor italic>
-          {"  \u{1F4AD} "}
-          {activity.lastThinking.slice(0, 80)}
-          {activity.lastThinking.length > 80 ? "..." : ""}
-        </Text>
-      )}
-
-      {/* Sub-agent activity */}
-      {activity.lastText && activity.lastText.startsWith("[sub-agent]") && (
-        <Text color="magenta">{"  "}{activity.lastText}</Text>
-      )}
-
-      {/* Stats */}
-      <Box marginTop={1}>
-        <Text dimColor>
-          {"  "}Tokens: {activity.inputTokens.toLocaleString()} in /{" "}
-          {activity.outputTokens.toLocaleString()} out
-          {" | "}Tools: {activity.toolCallCount}
-          {activity.totalCostUsd > 0 && ` | $${activity.totalCostUsd.toFixed(4)}`}
-        </Text>
-      </Box>
-    </Box>
-  );
-}
-
-function CompactAgentRow({ activity }: { activity: AgentActivity }) {
-  const activeTool = activity.toolHistory?.filter(t => t.status === "active").at(-1);
-  return (
-    <Box>
-      <Text bold>[{activity.agent}]</Text>
-      {activeTool && <Text color="cyan"> {"\u25B6"} {activeTool.name}</Text>}
       <Text dimColor>
-        {" "}({activity.inputTokens.toLocaleString()}/{activity.outputTokens.toLocaleString()} tok)
+        {"  "}{fmtTok(activity.inputTokens)}/{fmtTok(activity.outputTokens)} tok
+        {activity.totalCostUsd > 0 && ` \u00B7 $${activity.totalCostUsd.toFixed(2)}`}
       </Text>
     </Box>
   );
 }
 
-export function AgentActivityPanel({ activities }: AgentActivityPanelProps) {
-  const entries = [...activities.values()];
+function CompactAgentRow({ activity, elapsed }: { activity: AgentActivity; elapsed: string }) {
+  const activeTool = activity.toolHistory?.filter(t => t.status === "active").at(-1);
+  return (
+    <Box>
+      <Text bold>[{activity.agent}]</Text>
+      <Text dimColor> {activity.model ?? ""} \u00B7 {elapsed}</Text>
+      {activeTool && <Text color="cyan">  {"\u25B6"} {activeTool.name}</Text>}
+      <Text dimColor>
+        {"  "}{fmtTok(activity.inputTokens)}/{fmtTok(activity.outputTokens)} tok
+        {activity.totalCostUsd > 0 && ` \u00B7 $${activity.totalCostUsd.toFixed(2)}`}
+      </Text>
+    </Box>
+  );
+}
 
-  if (entries.length === 0) {
+export function AgentActivityPanel({ activities, stages, dispatchStartTimes, now }: AgentActivityPanelProps) {
+  // Filter to only agents with a corresponding in_progress stage.
+  const activeEntries = [...activities.entries()].filter(([agentKey]) => {
+    // Agent keys are like "stage-name-generator" — match if any in_progress stage name is a prefix.
+    return Object.values(stages).some(
+      (s) => s.status === "in_progress" && agentKey.startsWith(s.name),
+    );
+  });
+
+  if (activeEntries.length === 0) {
     return (
       <Box flexDirection="column" flexGrow={1} marginLeft={1}>
         <Text bold underline>Agent Activity</Text>
@@ -224,23 +253,38 @@ export function AgentActivityPanel({ activities }: AgentActivityPanelProps) {
     );
   }
 
-  // Single agent: show full detail view (backwards-compatible).
-  if (entries.length === 1) {
+  const count = activeEntries.length;
+
+  // 1-3 agents: horizontal columns
+  if (count <= 3) {
     return (
       <Box flexDirection="column" flexGrow={1} marginLeft={1}>
-        <Text bold underline>Agent Activity</Text>
-        <SingleAgentDetail activity={entries[0]} />
+        <Text bold underline>Agent Activity ({count} active)</Text>
+        <Box flexDirection="row">
+          {activeEntries.map(([key, activity], i) => {
+            const startMs = dispatchStartTimes.get(key) ?? now;
+            const elapsed = formatElapsed(now - startMs);
+            return (
+              <React.Fragment key={key}>
+                {i > 0 && <Text dimColor> {"\u2502"} </Text>}
+                <AgentDetailColumn activity={activity} elapsed={elapsed} />
+              </React.Fragment>
+            );
+          })}
+        </Box>
       </Box>
     );
   }
 
-  // Multiple agents: compact stacked view.
+  // 4+ agents: compact stacked rows
   return (
     <Box flexDirection="column" flexGrow={1} marginLeft={1}>
-      <Text bold underline>Agent Activity ({entries.length} agents)</Text>
-      {entries.map((a) => (
-        <CompactAgentRow key={a.agent} activity={a} />
-      ))}
+      <Text bold underline>Agent Activity ({count} active)</Text>
+      {activeEntries.map(([key, activity]) => {
+        const startMs = dispatchStartTimes.get(key) ?? now;
+        const elapsed = formatElapsed(now - startMs);
+        return <CompactAgentRow key={key} activity={activity} elapsed={elapsed} />;
+      })}
     </Box>
   );
 }

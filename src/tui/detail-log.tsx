@@ -1,10 +1,10 @@
-import React from "react";
-import { Box, Text, useStdout } from "ink";
+import React, { useState, useMemo } from "react";
+import { Box, Text, useStdout, useInput } from "ink";
 
 import type { StateEvent } from "../types.js";
 
 // ---------------------------------------------------------------------------
-// Detail log — replaces EventLog with rich PGE visualization
+// Detail log — scrollable event log with rich PGE visualization
 // ---------------------------------------------------------------------------
 
 interface DetailLogProps {
@@ -18,16 +18,52 @@ export function DetailLog({ events, chromeHeight = 14 }: DetailLogProps) {
   // +2 for the DetailLog title line and its marginTop
   const availableHeight = Math.max(5, (stdout.rows ?? 24) - chromeHeight - 2);
 
-  // Flatten all events into formatted lines, then show the last N.
-  const allLines: React.ReactNode[] = [];
-  for (const event of events) {
-    allLines.push(...formatDetailEvent(event));
-  }
-  const visibleLines = allLines.slice(-availableHeight);
+  // Offset from bottom (0 = auto-scroll to latest).
+  const [scrollOffset, setScrollOffset] = useState(0);
+
+  // Flatten all events into formatted lines.
+  const allLines = useMemo(() => {
+    const lines: React.ReactNode[] = [];
+    for (const event of events) {
+      lines.push(...formatDetailEvent(event));
+    }
+    return lines;
+  }, [events]);
+
+  const totalLines = allLines.length;
+  const maxOffset = Math.max(0, totalLines - availableHeight);
+
+  // Keyboard-driven scroll.
+  useInput((input, key) => {
+    if (key.upArrow) {
+      setScrollOffset(prev => Math.min(maxOffset, prev + 1));
+    } else if (key.downArrow) {
+      setScrollOffset(prev => Math.max(0, prev - 1));
+    } else if (key.pageUp) {
+      setScrollOffset(prev => Math.min(maxOffset, prev + availableHeight));
+    } else if (key.pageDown) {
+      setScrollOffset(prev => Math.max(0, prev - availableHeight));
+    } else if (key.end || (input === "G")) {
+      setScrollOffset(0); // Resume auto-scroll
+    } else if (key.home || (input === "g")) {
+      setScrollOffset(maxOffset); // Jump to top
+    }
+  });
+
+  // Auto-scroll: when new events arrive and user is at bottom, stay at bottom.
+  const clampedOffset = Math.min(scrollOffset, maxOffset);
+  const endIndex = totalLines - clampedOffset;
+  const startIndex = Math.max(0, endIndex - availableHeight);
+  const visibleLines = allLines.slice(startIndex, endIndex);
+  const isScrolled = clampedOffset > 0;
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text bold underline>Detail Log</Text>
+      <Box>
+        <Text bold underline>Detail Log</Text>
+        {isScrolled && <Text dimColor> [scrolled {"\u2014"} press End to resume]</Text>}
+        {totalLines > availableHeight && !isScrolled && <Text dimColor> [{"\u2191\u2193"} scroll]</Text>}
+      </Box>
       {visibleLines.length === 0 && (
         <Text dimColor>  Waiting for events...</Text>
       )}
@@ -47,6 +83,14 @@ const PAD = "          ";
 const BAR = "\u2502";
 
 const MAX_PREVIEW_LINES = 15;
+
+/** Format a compact model · effort badge from event data. */
+function modelBadge(d: Record<string, unknown>): string {
+  const parts: string[] = [];
+  if (d.model) parts.push(String(d.model));
+  if (d.effort) parts.push(String(d.effort));
+  return parts.length > 0 ? ` ${parts.join(" \u00B7 ")}` : "";
+}
 
 /** Render a preview of artifact content under the PGE gutter bar. */
 function artifactPreview(content: string): React.ReactNode[] {
@@ -81,7 +125,7 @@ export function formatDetailEvent(event: StateEvent): React.ReactNode[] {
       const agent = String(d.agent ?? "?");
       return [
         <Text key="ps"><Text dimColor>{time}</Text><Text color="cyan">  {"\u250C\u2500"} PGE: {event.stageName}</Text></Text>,
-        <Text key="ps2"><Text dimColor>{PAD}</Text><Text color="cyan">{BAR}</Text><Text color="yellow">  {"\u25B6"} Planner [{agent}]</Text></Text>,
+        <Text key="ps2"><Text dimColor>{PAD}</Text><Text color="cyan">{BAR}</Text><Text color="yellow">  {"\u25B6"} Planner [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text></Text>,
       ];
     }
 
@@ -93,7 +137,7 @@ export function formatDetailEvent(event: StateEvent): React.ReactNode[] {
     case "pge_contract_start": {
       const agent = String(d.agent ?? "?");
       return [
-        <Text key="cs"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text color="yellow">  {"\u25B6"} Contract [{agent}]</Text></Text>,
+        <Text key="cs"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text color="yellow">  {"\u25B6"} Contract [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text></Text>,
       ];
     }
 
@@ -122,7 +166,7 @@ export function formatDetailEvent(event: StateEvent): React.ReactNode[] {
       const iter = String(d.iteration ?? "?");
       const maxI = String(d.maxIterations ?? "?");
       return [
-        <Text key="gs"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text color="yellow">  {"\u25B6"} Generator [{agent}] iter {iter}/{maxI}</Text></Text>,
+        <Text key="gs"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text color="yellow">  {"\u25B6"} Generator [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text><Text color="yellow"> iter {iter}/{maxI}</Text></Text>,
       ];
     }
 
@@ -136,7 +180,7 @@ export function formatDetailEvent(event: StateEvent): React.ReactNode[] {
       const iter = String(d.iteration ?? "?");
       const maxI = String(d.maxIterations ?? "?");
       return [
-        <Text key="es"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text color="yellow">  {"\u25B6"} Evaluator [{agent}] iter {iter}/{maxI}</Text></Text>,
+        <Text key="es"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text color="yellow">  {"\u25B6"} Evaluator [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text><Text color="yellow"> iter {iter}/{maxI}</Text></Text>,
       ];
     }
 
@@ -184,10 +228,34 @@ export function formatDetailEvent(event: StateEvent): React.ReactNode[] {
 
     // --- Non-PGE events (compact single line) ---
 
-    case "stage_start":
-      return [
-        <Text key="ss"><Text dimColor>{time}</Text><Text color="yellow">  {"\u25B6"} Started: {event.stageName}</Text></Text>,
+    case "stage_start": {
+      const stageType = d.type as string | undefined;
+      const agent = d.agent as string | undefined;
+      const lines: React.ReactNode[] = [
+        <Text key="ss"><Text dimColor>{time}</Text><Text color="yellow">  {"\u25B6"} Started: {event.stageName}</Text>{stageType ? <Text dimColor> ({stageType})</Text> : null}</Text>,
       ];
+      if (agent) {
+        const model = d.model ?? d.pipelineModel;
+        const effort = d.effort ?? d.pipelineEffort;
+        const badge = modelBadge({ model, effort });
+        lines.push(
+          <Text key="ss-meta"><Text dimColor>{PAD}  agent: {agent}{badge}</Text></Text>,
+        );
+      }
+      const inputs = d.inputs as string[] | undefined;
+      const output = d.output as string | undefined;
+      if (inputs?.length) {
+        lines.push(
+          <Text key="ss-in"><Text dimColor>{PAD}  inputs: {inputs.join(", ")}</Text></Text>,
+        );
+      }
+      if (output) {
+        lines.push(
+          <Text key="ss-out"><Text dimColor>{PAD}  output: {output}</Text></Text>,
+        );
+      }
+      return lines;
+    }
 
     case "stage_complete": {
       const status = d.status as string ?? "?";
@@ -196,6 +264,30 @@ export function formatDetailEvent(event: StateEvent): React.ReactNode[] {
       const color = status === "passed" ? "green" : "red";
       return [
         <Text key="sc"><Text dimColor>{time}</Text><Text color={color}>  {status === "passed" ? "\u2713" : "\u2717"} Completed: {event.stageName} {status}{dur}</Text></Text>,
+      ];
+    }
+
+    // --- Sub-pipeline child events ---
+
+    case "child_stage_start": {
+      const childStage = String(d.childStage ?? "?");
+      const childPipeline = d.childPipeline as string | undefined;
+      const childType = d.type as string | undefined;
+      const badge = modelBadge(d);
+      return [
+        <Text key="css"><Text dimColor>{time}</Text><Text color="yellow">  {"\u21B3"} {childPipeline ? `[${childPipeline}] ` : ""}{childStage}: started</Text>{childType ? <Text dimColor> ({childType})</Text> : null}<Text dimColor>{badge}</Text></Text>,
+      ];
+    }
+
+    case "child_stage_complete": {
+      const childStage = String(d.childStage ?? "?");
+      const childPipeline = d.childPipeline as string | undefined;
+      const status = d.status as string ?? "?";
+      const ms = d.durationMs as number | undefined;
+      const dur = ms != null ? ` (${(ms / 1000).toFixed(1)}s)` : "";
+      const color = status === "passed" ? "green" : "red";
+      return [
+        <Text key="csc"><Text dimColor>{time}</Text><Text color={color}>  {"\u21B3"} {childPipeline ? `[${childPipeline}] ` : ""}{childStage}: {status}{dur}</Text></Text>,
       ];
     }
 

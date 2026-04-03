@@ -32,6 +32,8 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
   const [events, setEvents] = useState<StateEvent[]>([]);
   const [startTime] = useState(startTimeProp ?? Date.now());
   const [elapsed, setElapsed] = useState(0);
+  const [now, setNow] = useState(Date.now());
+  const [dispatchStartTimes, setDispatchStartTimes] = useState<Map<string, number>>(new Map());
   const lastEventId = useRef(0);
   // Track last-seen state for change detection without stale closure issues.
   const lastStagesJson = useRef<string>(JSON.stringify(initialState.stages));
@@ -44,11 +46,18 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const updateActivity = useCallback((a: AgentActivity) => {
-    const now = Date.now();
+    const ts = Date.now();
     const doUpdate = (act: AgentActivity) => {
       setActivities((prev) => {
         const next = new Map(prev);
         next.set(act.agent, act);
+        return next;
+      });
+      // Track when we first see an agent key (dispatch start time).
+      setDispatchStartTimes((prev) => {
+        if (prev.has(act.agent)) return prev;
+        const next = new Map(prev);
+        next.set(act.agent, Date.now());
         return next;
       });
     };
@@ -95,8 +104,10 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
   // Unified poll: state, events, and elapsed timer in a single interval.
   useEffect(() => {
     const interval = setInterval(async () => {
-      // Tick elapsed timer.
-      setElapsed(Date.now() - startTime);
+      // Tick elapsed timer and current time (for agent elapsed).
+      const currentTime = Date.now();
+      setElapsed(currentTime - startTime);
+      setNow(currentTime);
 
       try {
         const updated = await loadState(runId, projectDir);
@@ -113,17 +124,31 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
           lastGateStatus.current = updated.gate?.status;
           setState(updated);
 
-          // Clean up activities for stages that are no longer in_progress.
+          // Clean up activities and dispatch times for agents whose stage is no longer in_progress.
           setActivities((prev) => {
             const next = new Map(prev);
             let changed = false;
-            for (const [agent] of next) {
-              // Find if any in_progress stage matches this agent key.
+            for (const [agentKey] of next) {
+              // Agent keys are like "stage-name-generator" — match to in_progress stages by prefix.
               const stillActive = Object.values(updated.stages).some(
-                (s) => s.status === "in_progress",
+                (s) => s.status === "in_progress" && agentKey.startsWith(s.name),
               );
               if (!stillActive) {
-                next.delete(agent);
+                next.delete(agentKey);
+                changed = true;
+              }
+            }
+            return changed ? next : prev;
+          });
+          setDispatchStartTimes((prev) => {
+            const next = new Map(prev);
+            let changed = false;
+            for (const key of next.keys()) {
+              const stillActive = Object.values(updated.stages).some(
+                (s) => s.status === "in_progress" && key.startsWith(s.name),
+              );
+              if (!stillActive) {
+                next.delete(key);
                 changed = true;
               }
             }
@@ -144,7 +169,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
         const newEvents = db.getEvents(updated.runId, lastEventId.current);
         if (newEvents.length > 0) {
           lastEventId.current = newEvents[newEvents.length - 1].id;
-          setEvents((prev) => [...prev, ...newEvents].slice(-200));
+          setEvents((prev) => [...prev, ...newEvents].slice(-500));
         }
       } catch {
         // Ignore — DB may be mid-write.
@@ -175,7 +200,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
       <Box marginTop={1} flexDirection="row" height={Math.max(state.stageOrder.length + 3, 8)} overflow="hidden">
         <StageList state={state} />
         {!isComplete ? (
-          <AgentActivityPanel activities={activities} />
+          <AgentActivityPanel activities={activities} stages={state.stages} dispatchStartTimes={dispatchStartTimes} now={now} />
         ) : (
           <Box flexDirection="column" flexGrow={1} marginLeft={1}>
             <Text

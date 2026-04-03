@@ -114,8 +114,10 @@ export async function runAutoresearchCycle(
     // --- Step 1: Dispatch adjuster (skip on iteration 1) ---
     if (iter > 1) {
       getLogger(ctx).log(`    dispatching adjuster: ${stage.adjuster.agent}`);
+      const adjModelEffort = resolveModelEffort(stage.adjuster, stage, ctx.pipeline, "adjuster");
       await onProgress?.("autoresearch_adjuster_start", {
         iteration: iter, maxIterations: maxIter ?? null, agent: stage.adjuster.agent,
+        ...adjModelEffort, output: artifactPath,
       });
 
       const adjSystemFile = await writeSystemPromptFile(adjAgent.markdown, ctx.tempTracker);
@@ -168,8 +170,10 @@ export async function runAutoresearchCycle(
 
     // --- Step 2: Dispatch executor ---
     getLogger(ctx).log(`    dispatching executor: ${stage.executor.agent}`);
+    const execModelEffort = resolveModelEffort(stage.executor, stage, ctx.pipeline, "executor");
     await onProgress?.("autoresearch_executor_start", {
       iteration: iter, maxIterations: maxIter ?? null, agent: stage.executor.agent,
+      ...execModelEffort, output: interpolate(stage.output, vars),
     });
 
     const execSystemFile = await writeSystemPromptFile(execAgent.markdown, ctx.tempTracker);
@@ -214,8 +218,10 @@ export async function runAutoresearchCycle(
 
     // --- Step 3: Dispatch evaluator ---
     getLogger(ctx).log(`    dispatching evaluator: ${stage.evaluator.agent}`);
+    const arEvalModelEffort = resolveModelEffort(stage.evaluator, stage, ctx.pipeline, "evaluator");
     await onProgress?.("autoresearch_evaluator_start", {
       iteration: iter, maxIterations: maxIter ?? null, agent: stage.evaluator.agent,
+      ...arEvalModelEffort, output: evalPath,
     });
 
     const evalSystemFile = await writeSystemPromptFile(evalAgent.markdown, ctx.tempTracker);

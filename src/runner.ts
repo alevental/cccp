@@ -666,6 +666,14 @@ async function runPipelineStage(
       resolve(dirname(filePath), "agents"),
       ...ctx.agentSearchPaths,
     ],
+    // Bubble child stage events to the parent's event stream.
+    parentOnProgress: async (eventType, childStageName, eventData) => {
+      await saveStateWithEvent(state, `child_${eventType}`, stage.name, {
+        childStage: childStageName,
+        childPipeline: childPipeline.name,
+        ...eventData,
+      });
+    },
   };
 
   // --- Execute child stages ---
@@ -802,24 +810,42 @@ async function runStageWithLifecycle(
 
   getLogger(ctx).log(`▸ Stage: ${stage.name} (${stage.type})`);
 
+  const stageEventData = {
+    type: stage.type,
+    ...("agent" in stage ? { agent: (stage as { agent: string }).agent } : {}),
+    ...("model" in stage ? { model: (stage as { model?: string }).model } : {}),
+    ...("effort" in stage ? { effort: (stage as { effort?: string }).effort } : {}),
+    ...("inputs" in stage ? { inputs: (stage as { inputs?: string[] }).inputs } : {}),
+    ...("output" in stage ? { output: (stage as { output?: string }).output } : {}),
+    ...("operation" in stage ? { operation: (stage as { operation?: string }).operation } : {}),
+    pipelineModel: ctx.pipeline.model,
+    pipelineEffort: ctx.pipeline.effort,
+  };
+
   if (!ctx.dryRun) {
     updateStageStatus(state, stage.name, "in_progress");
-    await saveStateWithEvent(state, "stage_start", stage.name);
+    await saveStateWithEvent(state, "stage_start", stage.name, stageEventData);
+    // Bubble to parent pipeline if this is a sub-pipeline stage.
+    ctx.parentOnProgress?.("stage_start", stage.name, stageEventData);
     await updatePipelineStatus(stage.name, stageIndex, totalStages);
   }
 
   try {
     const result = await runStage(stage, ctx, state);
 
+    const completeData = {
+      status: result.status,
+      durationMs: result.durationMs,
+    };
+
     if (!ctx.dryRun) {
       updateStageStatus(state, stage.name, result.status as StageStatus, {
         durationMs: result.durationMs,
         error: result.error,
       });
-      await saveStateWithEvent(state, "stage_complete", stage.name, {
-        status: result.status,
-        durationMs: result.durationMs,
-      });
+      await saveStateWithEvent(state, "stage_complete", stage.name, completeData);
+      // Bubble to parent pipeline.
+      ctx.parentOnProgress?.("stage_complete", stage.name, completeData);
     }
 
     if (result.status === "failed" || result.status === "error") {
