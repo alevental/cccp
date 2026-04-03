@@ -33,6 +33,8 @@ export interface GateNotifierOptions {
  */
 export class GateNotifier {
   private seenGates = new Set<string>();
+  /** Tracks run statuses to detect completion transitions. */
+  private lastRunStatus = new Map<string, string>();
   private channelSupported: boolean | null = null; // null = not yet tested
   private elicitationSupported = true;
   private intervalId: ReturnType<typeof setInterval> | null = null;
@@ -66,6 +68,27 @@ export class GateNotifier {
       const db = await openDatabase(this.opts.projectDir);
       db.reload();
       const runs = await discoverRuns(this.opts.projectDir);
+
+      // Detect pipeline completion transitions and send channel notifications.
+      for (const run of runs) {
+        // Session affinity: skip runs belonging to other MCP sessions.
+        if (
+          this.opts.sessionId &&
+          run.state.sessionId &&
+          run.state.sessionId !== this.opts.sessionId
+        ) {
+          continue;
+        }
+
+        const prevStatus = this.lastRunStatus.get(run.state.runId);
+        this.lastRunStatus.set(run.state.runId, run.state.status);
+
+        const isTerminal = run.state.status === "passed" || run.state.status === "failed" || run.state.status === "error";
+        if (isTerminal && prevStatus && prevStatus !== run.state.status) {
+          // Pipeline just completed — send notification (fire-and-forget).
+          void this.sendPipelineCompleteNotification(run);
+        }
+      }
 
       // Clean up seen gates for runs that no longer have a pending gate.
       for (const key of this.seenGates) {
@@ -186,6 +209,52 @@ export class GateNotifier {
   }
 
   // -------------------------------------------------------------------------
+  // Pipeline completion notification
+  // -------------------------------------------------------------------------
+
+  private async sendPipelineCompleteNotification(run: DiscoveredRun): Promise<void> {
+    if (this.channelSupported === false) return;
+
+    const runShort = run.state.runId.slice(0, 8);
+    const status = run.state.status;
+    const emoji = status === "passed" ? "\u2714" : "\u2717";
+    const duration = run.state.startedAt && run.state.completedAt
+      ? ` in ${formatDurationMs(new Date(run.state.completedAt).getTime() - new Date(run.state.startedAt).getTime())}`
+      : "";
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const notificationFn = (this.opts.server.server as any).notification as
+        | ((msg: unknown) => Promise<void>)
+        | undefined;
+
+      if (!notificationFn) {
+        this.channelSupported = false;
+        return;
+      }
+
+      await notificationFn.call(this.opts.server.server, {
+        method: "notifications/claude/channel",
+        params: {
+          content: `${emoji} Pipeline "${run.state.pipeline}" ${status}${duration} (run ${runShort}).`,
+          meta: {
+            severity: status === "passed" ? "info" : "high",
+            type: "pipeline_complete",
+            run_id: runShort,
+            status,
+          },
+        },
+      });
+
+      if (this.channelSupported === null) {
+        this.channelSupported = true;
+      }
+    } catch {
+      this.channelSupported = false;
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // Tier 2: Elicitation form
   // -------------------------------------------------------------------------
 
@@ -289,4 +358,17 @@ export class GateNotifier {
   private gateKey(runId: string, stageName: string): string {
     return `${runId}:${stageName}`;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function formatDurationMs(ms: number): string {
+  const secs = Math.floor(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ${secs % 60}s`;
+  const hrs = Math.floor(mins / 60);
+  return `${hrs}h ${mins % 60}m`;
 }
