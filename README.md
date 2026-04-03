@@ -259,13 +259,15 @@ CCCP reads only this line. Everything else in the evaluation (criterion tables, 
 ```
 npx @alevental/cccp run -f <pipeline.yaml> -p <project> [options]
   --dry-run              Show what would execute without running agents
-  --headless             Auto-approve all human gates
+  --headless             Auto-approve all human gates, disable TUI
+  --no-tui               Disable the TUI dashboard (keep interactive gates)
   -d, --project-dir      Project directory (default: cwd)
   -a, --artifact-dir     Override artifact output directory
   -v, --var key=value    Set pipeline variables (repeatable)
 
 npx @alevental/cccp resume -p <project> -r <run-id-prefix> [options]
-  --headless             Auto-approve all human gates
+  --headless             Auto-approve all human gates, disable TUI
+  --no-tui               Disable the TUI dashboard (keep interactive gates)
   --from <stage>         Clean-reset and resume from a named stage
 
 npx @alevental/cccp dashboard -r <run-id-prefix>

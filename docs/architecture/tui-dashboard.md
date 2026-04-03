@@ -12,7 +12,7 @@ The CCCP dashboard is an Ink-based (React for the terminal) real-time UI that sh
 
 ### Inline mode (`cccp run` and `cccp resume`)
 
-When running `cccp run` or `cccp resume` without `--headless` (and without `--dry-run` for `run`), the dashboard renders inline. It receives activity updates through the in-process [activity bus](streaming.md#activity-bus):
+When running `cccp run` or `cccp resume` without `--headless` or `--no-tui` (and without `--dry-run` for `run`), the dashboard renders inline. It receives activity updates through the in-process [activity bus](streaming.md#activity-bus):
 
 ```typescript
 const dashboard = startDashboard(runId, projectDir, initialState);
@@ -144,21 +144,22 @@ Each event shows timestamp (HH:MM:SS), formatted type, stage name, and optional 
 
 ## Polling and Update Strategy
 
-### State polling (300ms interval)
+### Unified polling (500ms interval)
 
-The dashboard polls the SQLite database for state changes every 300ms:
+The dashboard uses a single interval for state polling, event fetching, and elapsed timer updates:
 
 ```typescript
 const interval = setInterval(async () => {
+  setElapsed(Date.now() - startTime);
   const updated = await loadState(runId, projectDir);
   // Compare with current state, update if changed
   // Poll events incrementally from DB
-}, 300);
+}, 500);
 ```
 
 State comparison checks `status`, `stages` (JSON stringified), and `gate?.status` to avoid unnecessary re-renders.
 
-Events are polled incrementally using `lastEventId` as a cursor, keeping only the last 50 events in memory.
+Events are polled incrementally using `lastEventId` as a cursor, keeping only the last 200 events in memory.
 
 ### Activity debouncing (100ms)
 
@@ -183,6 +184,33 @@ if (updated.status === "passed" || updated.status === "failed" || updated.status
   setTimeout(() => onComplete?.(), 500);
 }
 ```
+
+## Memory Optimization
+
+yoga-layout 3.x uses WASM, and WASM linear memory is grow-only -- each `Yoga.Node.create()` / `freeRecursive()` cycle fragments the heap, and freed pages are never returned to V8. Over multi-hour runs this can accumulate to gigabytes. Two mitigations:
+
+### Render throttle (10 FPS)
+
+Both `render()` calls pass `{ maxFps: 10 }` (Ink default is 30). This reduces yoga layout calculations by ~3x, proportionally slowing WASM memory growth.
+
+### Periodic remount (15 minutes)
+
+The inline dashboard (`startDashboard`) unmounts and remounts the Ink app every 15 minutes. Unmounting calls `freeRecursive()` on the root yoga tree and releases the entire React fiber tree. On remount:
+
+- **Elapsed timer** is preserved via the `startTime` prop
+- **Stage state** and **event log** repopulate from SQLite on the next poll (~500ms)
+- **Agent activity** repopulates from the activity bus within ~100ms
+
+```typescript
+const RECYCLE_INTERVAL_MS = 15 * 60 * 1000;
+
+const recycleTimer = setInterval(() => {
+  instance.unmount();
+  instance = mount();  // fresh React tree + fresh yoga nodes
+}, RECYCLE_INTERVAL_MS);
+```
+
+This caps memory at whatever accumulates in a 15-minute window (~100-300 MB) regardless of total run duration.
 
 ## cmux Integration
 

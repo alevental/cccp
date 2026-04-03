@@ -27,6 +27,7 @@ npx @alevental/cccp run -f <path> -p <name> [options]
 | `-a, --artifact-dir <path>` | Artifact output directory (overrides `cccp.yaml` and default pattern) |
 | `--dry-run` | Show assembled prompts and commands without executing agents |
 | `--headless` | Auto-approve all gates (no human interaction); disables TUI |
+| `--no-tui` | Disable the TUI dashboard (keep interactive gates) |
 | `-v, --var <key=value>` | Set pipeline variables (repeatable) |
 
 ### Artifact directory resolution
@@ -57,7 +58,7 @@ Variables are merged in this order (later overrides earlier):
 ### TUI behavior
 
 - TUI dashboard is shown by default
-- Disabled when `--headless` or `--dry-run` is set
+- Disabled when `--headless`, `--dry-run`, or `--no-tui` is set
 - When TUI is active, console output from agents is suppressed (`quiet: true`)
 
 ### Examples
@@ -110,7 +111,8 @@ npx @alevental/cccp resume -p <name> -r <run-id-prefix> [options]
 | Flag | Description |
 |------|-------------|
 | `-d, --project-dir <path>` | Project directory (defaults to `cwd`) |
-| `--headless` | Auto-approve all gates |
+| `--headless` | Auto-approve all gates; disables TUI |
+| `--no-tui` | Disable the TUI dashboard (keep interactive gates) |
 | `--session-id <id>` | MCP session ID for gate notification routing (updates the run's session affinity) |
 | `--from <stage>` | Clean-reset and resume from this named stage (see below) |
 
@@ -146,7 +148,7 @@ npx @alevental/cccp resume -p my-project -r a1b2c3d4 --from review
 ### TUI behavior
 
 - TUI dashboard is shown by default (identical to `cccp run`)
-- Disabled when `--headless` is set
+- Disabled when `--headless` or `--no-tui` is set
 - When TUI is active, console output from agents is suppressed (`quiet: true`)
 
 ### Example

@@ -24,6 +24,7 @@ npx @alevental/cccp@latest run -f <pipeline.yaml> -p <project> [options]
 | `-a, --artifact-dir <path>` | No | Override artifact output directory |
 | `--dry-run` | No | Show prompts without executing agents |
 | `--headless` | No | Auto-approve all gates, disable TUI |
+| `--no-tui` | No | Disable the TUI dashboard (keep interactive gates) |
 | `-v, --var <key=value>` | No | Set pipeline variable (repeatable) |
 | `--session-id <id>` | No | MCP session ID for gate notification routing (see below) |
 
@@ -57,7 +58,8 @@ npx @alevental/cccp@latest resume -p <project> -r <run-id-prefix> [options]
 | `-p, --project <name>` | Yes | Project name |
 | `-r, --run <id-prefix>` | Yes | Run ID or prefix (8+ characters) |
 | `-d, --project-dir <path>` | No | Project directory (default: cwd) |
-| `--headless` | No | Auto-approve all gates |
+| `--headless` | No | Auto-approve all gates, disable TUI |
+| `--no-tui` | No | Disable the TUI dashboard (keep interactive gates) |
 | `--session-id <id>` | No | MCP session ID for gate notification routing (updates the run's session affinity) |
 | `--from <stage>` | No | Clean-reset and resume from this named stage |
 
