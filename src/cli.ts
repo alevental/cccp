@@ -31,7 +31,7 @@ program
   )
   .option("--dry-run", "Show assembled prompts without executing agents")
   .option("--headless", "Auto-approve all gates (no human interaction)")
-  .option("--tui", "Show the TUI dashboard (off by default to avoid memory growth on long runs)")
+  .option("--no-tui", "Disable the TUI dashboard")
   .option(
     "-v, --var <key=value...>",
     "Set pipeline variables (repeatable)",
@@ -62,7 +62,7 @@ program
       pipelineName: pipeline.name,
     });
 
-    const showTui = !!opts.tui && !opts.dryRun;
+    const showTui = !opts.headless && opts.tui !== false && !opts.dryRun;
 
     const ctx = buildRunContext({
       project: opts.project,
@@ -122,7 +122,7 @@ program
     "Project directory (defaults to cwd)",
   )
   .option("--headless", "Auto-approve all gates")
-  .option("--tui", "Show the TUI dashboard (off by default to avoid memory growth on long runs)")
+  .option("--no-tui", "Disable the TUI dashboard")
   .option(
     "--session-id <id>",
     "MCP session ID for gate notification routing",
@@ -168,7 +168,7 @@ program
     const pipelineFile = resolve(existingState.pipelineFile);
     const pipeline = await loadPipeline(pipelineFile);
 
-    const showTui = !!opts.tui;
+    const showTui = !opts.headless && opts.tui !== false;
 
     const ctx = buildRunContext({
       project: opts.project,
