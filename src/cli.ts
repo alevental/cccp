@@ -1,21 +1,11 @@
 #!/usr/bin/env node
 
 import { resolve } from "node:path";
-import { getHeapStatistics } from "node:v8";
 import { Command } from "commander";
 import { loadProjectConfig } from "./config.js";
 import { loadPipeline } from "./pipeline.js";
 import { runPipeline } from "./runner.js";
 import { buildRunContext, resolveArtifactDir, parseCLIVars } from "./context.js";
-
-// Warn if heap limit is below 8 GB — long pipelines can exceed the default ~4 GB.
-const heapLimitMb = Math.round(getHeapStatistics().heap_size_limit / 1024 / 1024);
-if (heapLimitMb < 8000) {
-  console.error(
-    `[cccp] heap limit is ${heapLimitMb} MB. For long pipelines, increase with:\n` +
-    `  NODE_OPTIONS="--max-old-space-size=8192" npx @alevental/cccp run ...`,
-  );
-}
 
 const program = new Command();
 
@@ -24,7 +14,7 @@ program
   .description(
     "Claude Code and Cmux Pipeline Reagent — deterministic YAML-based pipeline orchestration",
   )
-  .version("0.5.4");
+  .version("0.6.1");
 
 program
   .command("run")
@@ -41,6 +31,7 @@ program
   )
   .option("--dry-run", "Show assembled prompts without executing agents")
   .option("--headless", "Auto-approve all gates (no human interaction)")
+  .option("--tui", "Show the TUI dashboard (off by default to avoid memory growth on long runs)")
   .option(
     "-v, --var <key=value...>",
     "Set pipeline variables (repeatable)",
@@ -71,7 +62,7 @@ program
       pipelineName: pipeline.name,
     });
 
-    const showTui = !opts.headless && !opts.dryRun;
+    const showTui = !!opts.tui && !opts.dryRun;
 
     const ctx = buildRunContext({
       project: opts.project,
@@ -131,6 +122,7 @@ program
     "Project directory (defaults to cwd)",
   )
   .option("--headless", "Auto-approve all gates")
+  .option("--tui", "Show the TUI dashboard (off by default to avoid memory growth on long runs)")
   .option(
     "--session-id <id>",
     "MCP session ID for gate notification routing",
@@ -176,7 +168,7 @@ program
     const pipelineFile = resolve(existingState.pipelineFile);
     const pipeline = await loadPipeline(pipelineFile);
 
-    const showTui = !opts.headless;
+    const showTui = !!opts.tui;
 
     const ctx = buildRunContext({
       project: opts.project,
