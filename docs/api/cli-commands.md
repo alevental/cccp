@@ -60,6 +60,11 @@ Variables are merged in this order (later overrides earlier):
 - TUI dashboard is shown by default
 - Disabled when `--headless`, `--dry-run`, or `--no-tui` is set
 - When TUI is active, console output from agents is suppressed (`quiet: true`)
+- Detail log is keyboard-scrollable: Up/Down, PageUp/PageDown, Home/End
+- Active agents panel shows only in-progress agents with elapsed timers
+- Sub-pipeline stages are shown inline with `├─` indentation
+- Stage/phase start events include model, effort, inputs, and output metadata
+- Dashboard remounts every 15 minutes and renders at 10 FPS to cap memory
 
 ### Examples
 
@@ -147,9 +152,8 @@ npx @alevental/cccp resume -p my-project -r a1b2c3d4 --from review
 
 ### TUI behavior
 
-- TUI dashboard is shown by default (identical to `cccp run`)
+- TUI dashboard is shown by default (identical to `cccp run` — see TUI behavior above)
 - Disabled when `--headless` or `--no-tui` is set
-- When TUI is active, console output from agents is suppressed (`quiet: true`)
 
 ### Example
 

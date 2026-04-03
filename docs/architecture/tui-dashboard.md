@@ -4,7 +4,8 @@ The CCCP dashboard is an Ink-based (React for the terminal) real-time UI that sh
 
 **Source files:**
 - [`src/tui/dashboard.tsx`](../../src/tui/dashboard.tsx) -- main Dashboard component and launch functions
-- [`src/tui/components.tsx`](../../src/tui/components.tsx) -- Header, StageList, AgentActivityPanel, EventLog
+- [`src/tui/components.tsx`](../../src/tui/components.tsx) -- Header, StageList, AgentActivityPanel
+- [`src/tui/detail-log.tsx`](../../src/tui/detail-log.tsx) -- DetailLog with scrollable event visualization
 - [`src/tui/cmux.ts`](../../src/tui/cmux.ts) -- cmux CLI wrapper for sidebar status and notifications
 - [`src/logger.ts`](../../src/logger.ts) -- Logger interface (ConsoleLogger, QuietLogger, SilentLogger)
 
@@ -38,21 +39,26 @@ In standalone mode, `useEventBus` is not set, so the component creates a `Stream
 The dashboard uses a split-pane layout:
 
 ```
-+--------------------------------------------------+
-| CCCP: pipeline-name (project)   Elapsed: 1m 23s  |  <-- Header
-+--------------------------------------------------+
-| Stages               | Agent Activity             |
-|  ✓ research          | [writer] claude-sonnet-4    |
-|  ▸ review (2)        |   ✓ Read /src/foo.ts        |  <-- Split pane
-|  ○ approval ⚑        |   ▶ Write /out/doc.md       |
-|                       |   Tokens: 5,432 in / 1,234  |
-|  ⏸ Gate: approval    |                             |
-+--------------------------------------------------+
-| Event Log                                         |
-|  14:32:01 ▶ Started research                      |  <-- Bottom pane
-|  14:32:45 ✓ Completed research (passed)           |
-|  14:32:46 ▶ Started review                        |
-+--------------------------------------------------+
++──────────────────────────────────────────────────────────+
+│ CCCP: pipeline-name (project)              Elapsed: 5m 3s│
++──────────────────────────────────────────────────────────+
+│ Stages              │ Agent Activity (2 active)          │
+│  ✓ research  12.3s  │ [design-gen] sonnet · 2m  │ [eval]│
+│  ▸ build-pipeline   │   ▶ Write /out/doc.md     │  ▶ Rea│
+│    ├─ ✓ design      │   ✓ Read /src/foo.ts      │  2,100│
+│    ├─ ▸ implement   │   ✓ Grep "pattern"        │  $0.01│
+│    ├─ ○ review      │   12.4k/3.2k tok · $0.04  │       │
+│  ○ approval ⚑       │                           │       │
++──────────────────────────────────────────────────────────+
+│ Detail Log [↑↓ scroll]                                   │
+│ 14:32:01  ▶ Started: research (agent)                    │
+│              agent: researcher · sonnet · high            │
+│ 14:32:45  ✓ Completed: research passed (45.2s)           │
+│ 14:32:46  ┌─ PGE: implement                              │
+│           │  ▶ Planner [architect] opus · high            │
+│           │  ✓ Task plan → /artifacts/plan.md             │
+│           │  ▶ Generator [impl] sonnet · high iter 1/3   │
++──────────────────────────────────────────────────────────+
 ```
 
 When the pipeline is complete, the right pane shows the final status and total cost instead of agent activity.
@@ -92,55 +98,67 @@ Additional indicators:
 - Human gate stages show a flag: `approval ⚑`
 - Completed stages show duration: `research 12.3s`
 - Pending gates display below the stage list: `⏸ Gate: approval`
+- Sub-pipeline stages show nested children inline with `├─` indent:
+  ```
+  ▸ build-pipeline
+      ├─ ✓ design 12.3s
+      ├─ ▸ implement
+      ├─ ○ review
+  ```
 
 The spinner for in-progress stages uses the `ink-spinner` package with `type="dots"`.
 
 ### AgentActivityPanel (right pane)
 
-Displays real-time information about the currently active agent:
+Shows only agents whose corresponding stage is `in_progress`, with per-agent elapsed timers:
 
 ```typescript
 interface AgentActivityPanelProps {
-  activity: AgentActivity | null;
+  activities: Map<string, AgentActivity>;
+  stages: Record<string, StageState>;
+  dispatchStartTimes: Map<string, number>;
+  now: number;
 }
 ```
 
-Shows:
-1. **Agent name and model:** `[writer] claude-sonnet-4-20250514`
-2. **Tool history** (last 8 entries):
-   - Active tools in cyan with `▶` prefix
-   - Completed tools in gray with `✓` prefix
-   - Tool summaries (file paths, commands) truncated to 50 chars
-3. **Thinking preview** (if available): first 80 chars of the latest thinking block
-4. **Sub-agent activity** (if present): displayed in magenta
-5. **Stats:** `Tokens: 5,432 in / 1,234 out | Tools: 12 | $0.0423`
+Two layout modes:
 
-### EventLog (bottom pane)
+**Horizontal columns (1-3 active agents):** Each agent gets an equal-width column showing:
+1. **Agent name + model + elapsed timer:** `[design-gen] sonnet · 2m 14s`
+2. **Tool history** (last 5 entries): active tools in cyan `▶`, completed in gray `✓`, summaries truncated to 40 chars
+3. **Stats:** `12.4k/3.2k tok · $0.04`
 
-Shows the last 8 events from the SQLite database's `events` table:
+Columns are separated by `│` dividers.
 
-```typescript
-interface EventLogProps {
-  events: StateEvent[];
-}
+**Compact rows (4+ active agents):** Each agent on one line:
+```
+[design-gen] sonnet · high · 2m 14s  ▶ Write  12k/3k tok  $0.04
 ```
 
-Event types and their display:
+Agents are cleaned up per-stage: when a stage leaves `in_progress`, its agent key (matched by prefix) is removed from the activities Map and dispatch start times.
+
+### DetailLog (bottom pane)
+
+Keyboard-scrollable event log showing rich PGE visualization. Uses Up/Down arrows, PageUp/PageDown, Home/End for navigation. Keeps up to 500 events in React state.
+
+When scrolled up, shows `[scrolled — press End to resume]` indicator. When at the bottom with overflow, shows `[↑↓ scroll]` hint.
+
+Stage start events include metadata: agent name, model, effort, inputs, and output. PGE phase starts show model/effort badges: `▶ Generator [architect] sonnet · high iter 1/3`.
+
+Sub-pipeline child events render as `↳ [child-pipeline] stage: started/completed`.
 
 | Event Type | Display | Color |
 |------------|---------|-------|
-| `stage_start` | `▶ Started` | yellow |
-| `stage_complete` | `✓ Completed` | green |
-| `pge_planner_start` | `↻ PGE planner` | default |
-| `pge_planner_done` | `✓ PGE planner done` | default |
-| `pge_contract_start` | `↻ PGE contract` | default |
-| `pge_contract_done` | `✓ PGE contract done` | default |
-| `pge_progress` | `↻ PGE` | default |
-| `gate_pending` | `⏸ Gate pending` | blue |
-| `gate_responded` | `✓ Gate responded` | green |
-| `pipeline_complete` | `✔ Pipeline done` | green |
-
-Each event shows timestamp (HH:MM:SS), formatted type, stage name, and optional data (status, step, iteration).
+| `stage_start` | `▶ Started: name (type)` + metadata lines | yellow |
+| `stage_complete` | `✓ Completed: name status (Xs)` | green/red |
+| `pge_planner_start` | `┌─ PGE: name` + `▶ Planner [agent] model · effort` | cyan/yellow |
+| `pge_generator_start` | `▶ Generator [agent] model · effort iter X/Y` | yellow |
+| `pge_evaluator_start` | `▶ Evaluator [agent] model · effort iter X/Y` | yellow |
+| `pge_evaluation` | `✔ PASS` or `✗ FAIL` with artifact preview | green/red |
+| `child_stage_start` | `↳ [pipeline] stage: started` | yellow |
+| `child_stage_complete` | `↳ [pipeline] stage: status` | green/red |
+| `gate_pending` | `⏸ Gate pending: name` | blue |
+| `pipeline_complete` | `═ Pipeline status` | green/red |
 
 ## Polling and Update Strategy
 
@@ -159,7 +177,7 @@ const interval = setInterval(async () => {
 
 State comparison checks `status`, `stages` (JSON stringified), and `gate?.status` to avoid unnecessary re-renders.
 
-Events are polled incrementally using `lastEventId` as a cursor, keeping only the last 200 events in memory.
+Events are polled incrementally using `lastEventId` as a cursor, keeping only the last 500 events in memory.
 
 ### Activity debouncing (100ms)
 

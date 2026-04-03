@@ -16,8 +16,8 @@ npx tsx src/cli.ts    # run CLI in dev mode (use instead of `npm run dev`)
 ## Key commands
 
 ```bash
-npx @alevental/cccp run -f <pipeline.yaml> -p <project> [--dry-run] [--headless]
-npx @alevental/cccp resume -p <project> -r <run-id-prefix> [--from <stage>]
+npx @alevental/cccp run -f <pipeline.yaml> -p <project> [--dry-run] [--headless] [--no-tui]
+npx @alevental/cccp resume -p <project> -r <run-id-prefix> [--from <stage>] [--no-tui]
 npx @alevental/cccp dashboard -r <run-id-prefix>
 npx @alevental/cccp mcp-server            # MCP server for gate interaction
 npx @alevental/cccp init                  # scaffold minimal project
@@ -38,7 +38,7 @@ npx @alevental/cccp examples              # scaffold all agents + example pipeli
 - **Agent resolution**: multi-path search — flat files (`researcher.md`) and directory agents with operations (`architect/agent.md` + `architect/task-planning.md`) (`src/agent-resolver.ts`)
 - **MCP config**: named profiles with `extends` inheritance, per-agent `--strict-mcp-config` (`src/mcp/mcp-config.ts`, `src/config.ts`). Channel-based gate notifications require `--dangerously-load-development-channels server:cccp` on the Claude Code side.
 - **Gates**: `FilesystemGateStrategy` polls SQLite; MCP server exposes `cccp_gate_respond`, `cccp_gate_review`, and `cccp_session_id` tools; `GateNotifier` uses three-tier notification (channel push, elicitation form, manual tools). Feedback written as numbered artifacts via `writeFeedbackArtifact()` (`src/gate/feedback-artifact.ts`). `human_review: true` on agent/PGE stages fires post-completion gates with feedback retry (max 3). Session affinity via `--session-id` routes notifications to the correct MCP instance (`src/gate/`, `src/mcp/gate-notifier.ts`)
-- **TUI**: Ink/React dashboard watches SQLite + stream logs (`src/tui/`)
+- **TUI**: Ink/React dashboard watches SQLite + stream logs (`src/tui/`). Renders at 10 FPS with 15-minute remount cycle to cap yoga-layout WASM memory. Keyboard-scrollable detail log (↑↓ PgUp/PgDn). Active agents panel shows only in_progress agents with elapsed timers; 1-3 agents use horizontal columns, 4+ use compact rows. Sub-pipeline stages render inline with `├─` indent. Stage/phase start events include model, effort, inputs, and output metadata. Disable with `--no-tui` or `--headless`.
 - **Stream parser**: typed discriminated union for claude stream-json events (`src/stream/stream.ts`)
 - **Logging**: injectable `Logger` interface (`src/logger.ts`) — ConsoleLogger, QuietLogger, SilentLogger
 - **Context**: `buildRunContext()` constructs RunContext from CLI options (`src/context.ts`)
