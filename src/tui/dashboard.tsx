@@ -21,14 +21,16 @@ interface DashboardProps {
   initialState: PipelineState;
   useEventBus?: boolean;
   onComplete?: () => void;
+  /** Pipeline start time (preserved across remounts). */
+  startTime?: number;
 }
 
-function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, onComplete }: DashboardProps) {
+function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, onComplete, startTime: startTimeProp }: DashboardProps) {
   const { stdout } = useStdout();
   const [state, setState] = useState<PipelineState>(initialState);
   const [activities, setActivities] = useState<Map<string, AgentActivity>>(new Map());
   const [events, setEvents] = useState<StateEvent[]>([]);
-  const [startTime] = useState(Date.now());
+  const [startTime] = useState(startTimeProp ?? Date.now());
   const [elapsed, setElapsed] = useState(0);
   const lastEventId = useRef(0);
   // Track last-seen state for change detection without stale closure issues.
@@ -90,9 +92,12 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
     return () => { tailer.stop(); };
   }, [artifactDir, useEventBus, updateActivity]);
 
-  // Poll SQLite for state changes + events.
+  // Unified poll: state, events, and elapsed timer in a single interval.
   useEffect(() => {
     const interval = setInterval(async () => {
+      // Tick elapsed timer.
+      setElapsed(Date.now() - startTime);
+
       try {
         const updated = await loadState(runId, projectDir);
         if (!updated) return;
@@ -144,18 +149,10 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
       } catch {
         // Ignore — DB may be mid-write.
       }
-    }, 300);
+    }, 500);
 
     return () => clearInterval(interval);
-  }, [runId, projectDir, onComplete]);
-
-  // Tick elapsed timer.
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setElapsed(Date.now() - startTime);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [startTime]);
+  }, [runId, projectDir, startTime, onComplete]);
 
   const isComplete =
     state.status === "passed" ||
@@ -224,6 +221,7 @@ export async function launchDashboard(
           resolve();
         }}
       />,
+      { maxFps: 10 },
     );
 
     waitUntilExit().then(() => resolve());
@@ -238,20 +236,48 @@ export interface InlineDashboardHandle {
   unmount: () => void;
 }
 
+/**
+ * Recycle interval: unmount and remount the Ink app to reclaim yoga-layout
+ * WASM memory. WASM linear memory is grow-only, so periodic recycling is
+ * the only way to cap memory usage during multi-hour pipeline runs.
+ */
+const RECYCLE_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+
 export function startDashboard(
   runId: string,
   projectDir: string,
   initialState: PipelineState,
 ): InlineDashboardHandle {
-  const { unmount } = render(
-    <Dashboard
-      runId={runId}
-      artifactDir={initialState.artifactDir}
-      projectDir={projectDir}
-      initialState={initialState}
-      useEventBus={true}
-    />,
-  );
+  const dashboardStartTime = Date.now();
+  let shuttingDown = false;
 
-  return { unmount };
+  function mount() {
+    return render(
+      <Dashboard
+        runId={runId}
+        artifactDir={initialState.artifactDir}
+        projectDir={projectDir}
+        initialState={initialState}
+        useEventBus={true}
+        startTime={dashboardStartTime}
+      />,
+      { maxFps: 10 },
+    );
+  }
+
+  let instance = mount();
+
+  const recycleTimer = setInterval(() => {
+    if (shuttingDown) return;
+    instance.unmount();
+    instance = mount();
+  }, RECYCLE_INTERVAL_MS);
+
+  return {
+    unmount: () => {
+      shuttingDown = true;
+      clearInterval(recycleTimer);
+      instance.unmount();
+    },
+  };
 }
