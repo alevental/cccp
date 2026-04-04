@@ -299,6 +299,7 @@ export async function resetFromStage(
     delete stage.iteration;
     delete stage.pgeStep;
     delete stage.artifacts;
+    delete stage.outputs;
     delete stage.durationMs;
     delete stage.error;
   }

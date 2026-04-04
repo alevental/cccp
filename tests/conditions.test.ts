@@ -630,6 +630,87 @@ stages:
 });
 
 // ---------------------------------------------------------------------------
+// Resume with outputs and conditions
+// ---------------------------------------------------------------------------
+
+describe("Integration: resume with conditions", () => {
+  it("restores outputs and evaluates conditions on resume", async () => {
+    const dir = tmpProjectDir();
+    await writeAgent(dir, "agent.md");
+
+    const pipeline = await writePipeline(dir, `
+name: resume-conditions
+stages:
+  - name: research
+    type: agent
+    agent: agents/agent.md
+    outputs:
+      decision: "proceed or abandon"
+  - name: design
+    type: agent
+    agent: agents/agent.md
+    when: "research.decision == proceed"
+  - name: ship
+    type: agent
+    agent: agents/agent.md
+    when: "research.decision == proceed"
+`);
+
+    // First run: research succeeds with proceed, design crashes (simulated by erroring)
+    let dispatchCount = 0;
+    const firstDispatcher = new ScriptedDispatcher([
+      // research: outputs decision=proceed
+      async () => {
+        const stageDir = join(dir, "artifacts", "research");
+        await mkdir(stageDir, { recursive: true });
+        await writeFile(
+          join(stageDir, ".outputs.json"),
+          JSON.stringify({ decision: "proceed" }),
+          "utf-8",
+        );
+        return { exitCode: 0, outputExists: false, durationMs: 10 };
+      },
+      // design: agent crashes
+      async () => {
+        return { exitCode: 1, outputExists: false, durationMs: 10 };
+      },
+    ]);
+
+    const ctx1 = buildTestContext({ projectDir: dir, pipeline, dispatcher: firstDispatcher });
+    const result1 = await runPipeline(ctx1);
+
+    expect(result1.status).toBe("error");
+    expect(result1.stages[0].status).toBe("passed");
+    expect(result1.stages[1].status).toBe("error");
+
+    // Load state for resume
+    const { loadState } = await import("../src/state.js");
+    const savedState = await loadState(result1.stages[0].stageName, dir, true);
+    // Get the actual state by run
+    const { openDatabase } = await import("../src/db.js");
+    const db = await openDatabase(dir);
+    const runs = db.listRuns();
+    expect(runs.length).toBeGreaterThan(0);
+    const existingState = runs[0].state;
+
+    // Resume: design should re-run (and succeed this time), ship should run
+    const resumeDispatcher = new ScriptedDispatcher([
+      // design: succeeds on retry
+      async () => ({ exitCode: 0, outputExists: false, durationMs: 10 }),
+      // ship: runs because research.decision == proceed (restored from state)
+      async () => ({ exitCode: 0, outputExists: false, durationMs: 10 }),
+    ]);
+
+    const ctx2 = buildTestContext({ projectDir: dir, pipeline, dispatcher: resumeDispatcher });
+    const result2 = await runPipeline(ctx2, { existingState });
+
+    expect(result2.status).toBe("passed");
+    // Both design and ship should have run
+    expect(resumeDispatcher.calls).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Interpolation with dot-notation
 // ---------------------------------------------------------------------------
 
