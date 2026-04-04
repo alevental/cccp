@@ -50,6 +50,8 @@ Variables use `{variable_name}` syntax and are available in string fields like `
 
 Pipeline-level `variables` are merged with built-ins, then CLI `--var` flags override everything. Stage-level `variables` override pipeline-level for that stage only.
 
+Stage outputs (from `outputs:`) are also available as variables using dot-notation: `{stage_name.output_key}`. See [Conditional Execution](#conditional-execution--stage-outputs) below.
+
 ## Stage Types
 
 All stages share these base fields:
@@ -57,11 +59,13 @@ All stages share these base fields:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | `string` | Yes | Unique stage identifier |
-| `task` | `string` | No | Task instruction for the agent |
+| `task` | `string` | No | Task instruction for the agent (supports `{variable}` interpolation) |
 | `task_file` | `string` | No | Path to file containing task (mutually exclusive with `task`) |
 | `type` | `"agent" \| "pge" \| "autoresearch" \| "pipeline" \| "human_gate"` | Yes | Stage discriminator |
 | `mcp_profile` | `string` | No | Named MCP profile from `cccp.yaml` |
 | `variables` | `Record<string, string>` | No | Stage-level variable overrides |
+| `outputs` | `Record<string, string>` | No | Structured outputs the agent should produce (key → description) |
+| `when` | `string \| string[]` | No | Condition(s) for running this stage; skipped if not met |
 
 ---
 
@@ -411,6 +415,120 @@ CCCP ships 10 example pipelines in `examples/` covering 8 functional areas:
 | `customer-feedback-loop.yaml` | Customer Success | Feedback synthesis and backlog prioritization |
 | `incident-runbook.yaml` | Operations | Service assessment, runbook authoring, DevOps review |
 
+## Conditional Execution & Stage Outputs
+
+Stages can produce structured data and downstream stages can conditionally execute based on that data.
+
+### Stage outputs (`outputs:`)
+
+Declare key-value outputs the agent should produce. The runner injects instructions into the agent's prompt telling it to write a `.outputs.json` file with the declared keys:
+
+```yaml
+- name: research
+  type: agent
+  agent: researcher
+  task: "Analyze feasibility of the feature."
+  output: "{artifact_dir}/research.md"
+  outputs:
+    decision: "proceed or abandon"
+    risk_level: "low, medium, or high"
+    summary: "one-paragraph summary of findings"
+```
+
+After the stage passes, the runner reads `{artifactDir}/{stageName}/.outputs.json`, validates all declared keys are present, and stores the values. If the file is missing or incomplete, the stage errors.
+
+Output values become available as variables for downstream stages: `{research.decision}`, `{research.risk_level}`, `{research.summary}`.
+
+### Conditional execution (`when:`)
+
+Skip a stage unless a condition is met:
+
+```yaml
+- name: design
+  type: pge
+  when: "research.decision == proceed"
+  task: "Design the feature. Research says: {research.summary}"
+```
+
+Multiple conditions (AND semantics — all must be true):
+
+```yaml
+- name: high-risk-review
+  type: human_gate
+  when:
+    - "research.decision == proceed"
+    - "research.risk_level == high"
+  prompt: "High-risk feature. Review design."
+```
+
+#### Condition syntax
+
+| Pattern | Meaning |
+|---------|---------|
+| `stage.status == value` | Check stage's final status (passed/failed/skipped/error) |
+| `stage.output_key == value` | Check stage's structured output value |
+| `stage.status != value` | Negated status check |
+| `stage.output_key != value` | Negated output check |
+
+- `status` is reserved — always refers to the stage's execution status, not an output key
+- Spaces required around `==` / `!=`
+- Referenced stages must appear before the current stage (no forward references)
+- Skipped stages produce no outputs — downstream `==` checks fail, `!=` checks pass
+
+#### Cascade skipping
+
+If stage B depends on stage A's outputs and A is skipped, B's condition naturally fails (the output is undefined). No special mechanism needed — skipping cascades through data dependencies.
+
+### Complete example: conditional pipeline
+
+```yaml
+name: conditional-feature-dev
+stages:
+  - name: research
+    type: agent
+    agent: researcher
+    task: "Analyze feasibility of {feature}."
+    output: "{artifact_dir}/research.md"
+    outputs:
+      decision: "proceed or abandon"
+      risk_level: "low, medium, or high"
+
+  - name: design
+    type: pge
+    when: "research.decision == proceed"
+    task: "Design the feature."
+    inputs: ["{artifact_dir}/research.md"]
+    planner: { agent: architect, operation: design }
+    generator: { agent: architect, operation: design }
+    evaluator: { agent: reviewer }
+    contract:
+      deliverable: "{artifact_dir}/design.md"
+      guidance: "Risk level is {research.risk_level}."
+      max_iterations: 3
+
+  - name: high-risk-review
+    type: human_gate
+    when:
+      - "research.decision == proceed"
+      - "research.risk_level == high"
+    prompt: "High-risk feature. Review design before implementation."
+    artifacts: ["{artifact_dir}/design.md"]
+
+  - name: implementation
+    type: pge
+    when: "design.status == passed"
+    task: "Implement the feature."
+    inputs: ["{artifact_dir}/design.md"]
+    planner: { agent: architect, operation: task-planning }
+    generator: { agent: implementer }
+    evaluator: { agent: code-reviewer }
+    contract:
+      deliverable: "{artifact_dir}/implementation-report.md"
+      max_iterations: 5
+```
+
+**Behavior:** If research concludes `abandon`, design/review/implementation all skip. If `proceed` with `medium` risk, design and implementation run but the high-risk review skips. If `proceed` with `high` risk, all stages run.
+
 ## Validation
 
 Pipeline YAML is validated against a Zod schema at load time. Common validation errors:
@@ -433,6 +551,10 @@ The schema enforces:
 - No `human_gate` or `pipeline` stages inside parallel groups
 - Unique stage names across the entire pipeline (including inside groups)
 - No conflicting output paths within a parallel group
+- `when:` conditions must use `stageName.key == value` or `stageName.key != value` syntax
+- `when:` may only reference stages that appear earlier in execution order (no forward references)
+- `when:` may not reference stages in the same parallel group
+- `outputs:` keys must be lowercase identifiers (`a-z`, `0-9`, `_`) and cannot be `status` (reserved)
 
 ## Model and Effort Tuning
 

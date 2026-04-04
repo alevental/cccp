@@ -46,10 +46,12 @@ Every stage type supports these base fields:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | Yes | Unique stage identifier |
-| `task` | string | No | Inline task instructions |
+| `task` | string | No | Inline task instructions (supports `{variable}` interpolation) |
 | `task_file` | string | No | Path to file containing task (mutually exclusive with `task`) |
 | `mcp_profile` | string | No | Named MCP profile from `cccp.yaml` |
 | `variables` | map | No | Stage-level variable overrides |
+| `outputs` | map | No | Structured outputs: keys are variable names, values are descriptions for the agent |
+| `when` | string or list | No | Condition(s) — stage is skipped if any condition is not met |
 
 `task` and `task_file` cannot both be set on the same stage.
 
@@ -473,6 +475,53 @@ mcp_profiles:
         command: npx
         args: [-y, figma-console-mcp]
 ```
+
+## Conditional Execution & Stage Outputs
+
+### `outputs:` — Structured data from stages
+
+Stages can declare structured outputs. The runner tells the agent to write `.outputs.json`:
+
+```yaml
+- name: research
+  type: agent
+  agent: researcher
+  task: "Analyze feasibility."
+  outputs:
+    decision: "proceed or abandon"
+    risk_level: "low, medium, or high"
+```
+
+After the stage passes, the runner reads `{artifactDir}/{stageName}/.outputs.json` and validates all keys. Output values become variables: `{research.decision}`, `{research.risk_level}`.
+
+### `when:` — Conditional stage execution
+
+Skip a stage unless conditions are met:
+
+```yaml
+- name: design
+  type: pge
+  when: "research.decision == proceed"
+```
+
+Multiple conditions (AND — all must be true):
+
+```yaml
+- name: high-risk-review
+  type: human_gate
+  when:
+    - "research.decision == proceed"
+    - "research.risk_level == high"
+```
+
+**Condition syntax:** `stageName.key == value` or `stageName.key != value`. The reserved key `status` refers to the stage's execution status (passed/failed/skipped/error).
+
+**Rules:**
+- Referenced stages must appear earlier in execution order
+- Cannot reference stages in the same parallel group
+- Output keys must be lowercase identifiers, cannot be `status`
+- Skipped stages produce no outputs; downstream `==` checks fail, `!=` checks pass
+- Stage status is set to `skipped` when conditions are not met
 
 ## Complete Examples
 

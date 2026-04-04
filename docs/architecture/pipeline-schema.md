@@ -15,6 +15,8 @@ The pipeline YAML is validated at load time using Zod schemas. Invalid files pro
 ```typescript
 const ModelSchema = z.string().optional();
 const EffortSchema = z.enum(["low", "medium", "high", "max"]).optional();
+const WhenSchema = z.union([z.string(), z.array(z.string())]).optional();
+const OutputsSchema = z.record(z.string()).optional();
 
 const PhaseModelEffortSchema = z.object({
   model: ModelSchema,
@@ -97,6 +99,8 @@ const AgentStageSchema = z.object({
   model: ModelSchema,
   effort: EffortSchema,
   variables: z.record(z.string()).optional(),
+  outputs: OutputsSchema,
+  when: WhenSchema,
 });
 ```
 
@@ -242,6 +246,10 @@ export interface StageBase {
   mcp_profile?: string;
   /** Stage-level variable overrides. */
   variables?: Record<string, string>;
+  /** Declared structured outputs — keys are variable names, values are descriptions for the agent prompt. */
+  outputs?: Record<string, string>;
+  /** Condition(s) for running this stage. If not met, stage is skipped. */
+  when?: string | string[];
 }
 ```
 
@@ -504,6 +512,7 @@ export interface StageState {
   iteration?: number;        // PGE iteration (1-based)
   pgeStep?: PgeStep;         // Sub-step within PGE iteration
   artifacts?: Record<string, string>;
+  outputs?: Record<string, string>;  // Collected structured outputs (key → value)
   children?: PipelineState;
   durationMs?: number;
   error?: string;

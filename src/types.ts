@@ -52,6 +52,10 @@ export interface StageBase {
   mcp_profile?: string;
   /** Stage-level variable overrides. */
   variables?: Record<string, string>;
+  /** Declared structured outputs — keys are variable names, values are descriptions for the agent prompt. */
+  outputs?: Record<string, string>;
+  /** Condition(s) for running this stage. If not met, stage is skipped. */
+  when?: string | string[];
 }
 
 /** Simple stage: dispatch one agent, collect output. */
@@ -232,6 +236,8 @@ export interface StageState {
   durationMs?: number;
   /** Error message if status is error/failed. */
   error?: string;
+  /** Collected structured output values (key → value) from .outputs.json. */
+  outputs?: Record<string, string>;
   /** Nested pipeline state for type: pipeline stages. */
   children?: PipelineState;
   /** Group ID for stages in a parallel group (e.g. "parallel-0"). Informational for TUI display. */

@@ -9,14 +9,14 @@ import type { TempFileTracker } from "./temp-tracker.js";
 // ---------------------------------------------------------------------------
 
 /**
- * Replace `{variable_name}` placeholders in a string with values from the
- * variables map. Unresolved placeholders are left as-is.
+ * Replace `{variable_name}` and `{stage.key}` placeholders in a string with
+ * values from the variables map. Unresolved placeholders are left as-is.
  */
 export function interpolate(
   template: string,
   variables: Record<string, string>,
 ): string {
-  return template.replace(/\{(\w+)\}/g, (match, key: string) => {
+  return template.replace(/\{([\w.]+)\}/g, (match, key: string) => {
     return key in variables ? variables[key] : match;
   });
 }
@@ -45,7 +45,8 @@ export async function resolveTaskBody(
     const resolved = interpolate(stage.task_file, variables);
     return readFile(resolved, "utf-8");
   }
-  return stage.task ?? fallback;
+  const body = stage.task ?? fallback;
+  return interpolate(body, variables);
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +111,10 @@ export interface TaskContext {
   evaluatorFormat?: boolean;
   /** Additional key-value context. */
   extra?: Record<string, string>;
+  /** Path where the agent should write structured outputs JSON. */
+  outputsPath?: string;
+  /** Declared output keys and their descriptions (for prompt injection). */
+  outputKeys?: Record<string, string>;
 }
 
 /**
@@ -201,6 +206,19 @@ export function buildTaskContext(ctx: TaskContext): string {
       `| 1 | [name]    | PASS/FAIL | [specific evidence] |`,
       "",
     );
+  }
+
+  if (ctx.outputsPath && ctx.outputKeys && Object.keys(ctx.outputKeys).length > 0) {
+    lines.push(`## Structured Outputs\n`);
+    lines.push(`After completing your task, write a JSON file to: ${ctx.outputsPath}\n`);
+    lines.push(`The JSON must be a flat object with these keys:\n`);
+    for (const [key, desc] of Object.entries(ctx.outputKeys)) {
+      lines.push(`- **${key}**: ${desc}`);
+    }
+    const example = Object.fromEntries(
+      Object.keys(ctx.outputKeys).map((k) => [k, `<${k}>`]),
+    );
+    lines.push("", "Example:", "```json", JSON.stringify(example, null, 2), "```", "");
   }
 
   if (ctx.extra && Object.keys(ctx.extra).length > 0) {

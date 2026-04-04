@@ -426,6 +426,26 @@ export class CccpDatabase {
     return results[0].values[0][0] as string;
   }
 
+  /**
+   * Get all checkpoints for a stage as a key-value map.
+   * Used to restore stage outputs on resume.
+   */
+  getCheckpointsForStage(
+    runId: string,
+    stageName: string,
+  ): Record<string, string> {
+    const results = this.db.exec(
+      `SELECT key, value FROM checkpoints WHERE run_id = ? AND stage_name = ?`,
+      [runId, stageName],
+    );
+    if (results.length === 0) return {};
+    const out: Record<string, string> = {};
+    for (const row of results[0].values) {
+      out[row[0] as string] = row[1] as string;
+    }
+    return out;
+  }
+
   // -------------------------------------------------------------------------
   // Cleanup — delete events/checkpoints for specific stages
   // -------------------------------------------------------------------------

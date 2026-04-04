@@ -1,4 +1,5 @@
-import { resolve, dirname } from "node:path";
+import { resolve, dirname, join } from "node:path";
+import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import { activityBus } from "./activity-bus.js";
 import { resolveAgent } from "./agent-resolver.js";
 import { DefaultAgentDispatcher, type AgentDispatcher } from "./dispatcher.js";
@@ -7,6 +8,7 @@ import { FilesystemGateStrategy } from "./gate/gate-watcher.js";
 import { ConsoleLogger, type Logger } from "./logger.js";
 import { writeMcpConfigFile } from "./mcp/mcp-config.js";
 import { runAutoresearchCycle, type AutoresearchCycleOptions } from "./autoresearch.js";
+import { openDatabase } from "./db.js";
 import { loadPipeline } from "./pipeline.js";
 import { runPgeCycle, dispatchEvaluatorWithFeedback, type PgeCycleOptions } from "./pge.js";
 import { interpolate, resolveTaskBody, loadAgentMarkdown, buildTaskContext, writeSystemPromptFile } from "./prompt.js";
@@ -49,6 +51,118 @@ function getLogger(ctx: RunContext): Logger {
 
 function getDispatcher(ctx: RunContext): AgentDispatcher {
   return ctx.dispatcher ?? new DefaultAgentDispatcher();
+}
+
+// ---------------------------------------------------------------------------
+// Conditional execution
+// ---------------------------------------------------------------------------
+
+const CONDITION_PATTERN = /^([\w-]+)\.([\w]+)\s+(==|!=)\s+(.+)$/;
+
+/**
+ * Evaluate `when:` conditions against current pipeline state.
+ * Returns whether all conditions are met and a human-readable reason if not.
+ */
+function evaluateConditions(
+  when: string | string[] | undefined,
+  state: PipelineState,
+): { met: boolean; reason?: string } {
+  if (!when) return { met: true };
+  const conditions = Array.isArray(when) ? when : [when];
+
+  for (const cond of conditions) {
+    const match = CONDITION_PATTERN.exec(cond);
+    if (!match) return { met: false, reason: `invalid condition: ${cond}` };
+
+    const [, stageName, key, op, expected] = match;
+    const stageState = state.stages[stageName];
+    if (!stageState) return { met: false, reason: `stage '${stageName}' not found in state` };
+
+    const actual = key === "status"
+      ? stageState.status
+      : stageState.outputs?.[key];
+
+    const isEqual = actual === expected;
+    const conditionMet = op === "==" ? isEqual : !isEqual;
+
+    if (!conditionMet) {
+      return { met: false, reason: `${stageName}.${key} ${op} ${expected} (actual: ${actual ?? "undefined"})` };
+    }
+  }
+
+  return { met: true };
+}
+
+/**
+ * After a stage passes, collect its structured outputs from .outputs.json,
+ * store in checkpoints + state, and inject into variables.
+ */
+async function collectStageOutputs(
+  stage: Stage,
+  ctx: RunContext,
+  state: PipelineState,
+): Promise<void> {
+  if (!stage.outputs || Object.keys(stage.outputs).length === 0) return;
+
+  const stageDir = join(ctx.artifactDir, stage.name);
+  const outputsPath = join(stageDir, ".outputs.json");
+
+  if (!existsSync(outputsPath)) {
+    throw new Error(`Stage '${stage.name}' declares outputs but .outputs.json not found at ${outputsPath}`);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(outputsPath, "utf-8"));
+  } catch {
+    throw new Error(`Stage '${stage.name}': failed to parse .outputs.json at ${outputsPath}`);
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`Stage '${stage.name}': .outputs.json must be a flat object`);
+  }
+
+  const outputs = parsed as Record<string, unknown>;
+  const collected: Record<string, string> = {};
+
+  for (const key of Object.keys(stage.outputs)) {
+    if (!(key in outputs)) {
+      throw new Error(`Stage '${stage.name}': .outputs.json missing declared key '${key}'`);
+    }
+    collected[key] = String(outputs[key]);
+  }
+
+  // Store in checkpoints (persists across resume).
+  const db = await openDatabase(ctx.projectDir);
+  for (const [key, value] of Object.entries(collected)) {
+    db.setCheckpoint(state.runId, stage.name, key, value);
+  }
+
+  // Store in stage state (serialized in stages_json).
+  const stageState = state.stages[stage.name];
+  if (stageState) stageState.outputs = collected;
+
+  // Inject into variables for downstream interpolation.
+  for (const [key, value] of Object.entries(collected)) {
+    ctx.variables[`${stage.name}.${key}`] = value;
+  }
+}
+
+/**
+ * Restore outputs from completed stages into variables (for resume).
+ */
+function restoreOutputVariables(
+  state: PipelineState,
+  ctx: RunContext,
+): void {
+  for (const name of state.stageOrder) {
+    const stageState = state.stages[name];
+    if (stageState?.outputs) {
+      for (const [key, value] of Object.entries(stageState.outputs)) {
+        ctx.variables[`${name}.${key}`] = value;
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +227,14 @@ async function runAgentStage(
   let gateFeedbackPath: string | undefined;
   let gateRetries = 0;
 
+  // Compute outputs path if this stage declares structured outputs.
+  let outputsPath: string | undefined;
+  if (stage.outputs && Object.keys(stage.outputs).length > 0) {
+    const stageDir = join(ctx.artifactDir, stage.name);
+    mkdirSync(stageDir, { recursive: true });
+    outputsPath = join(stageDir, ".outputs.json");
+  }
+
   // Retry loop for human_review feedback.
   while (true) {
     const userPrompt = buildTaskContext({
@@ -120,6 +242,8 @@ async function runAgentStage(
       inputs,
       output,
       gateFeedback: gateFeedbackPath,
+      outputsPath,
+      outputKeys: stage.outputs,
     });
 
     const result = await getDispatcher(ctx).dispatch({
@@ -817,6 +941,18 @@ async function runStageWithLifecycle(
 ): Promise<StageResult> {
   const stageStart = Date.now();
 
+  // Evaluate `when:` conditions before running the stage.
+  if (stage.when && !ctx.dryRun) {
+    const { met, reason } = evaluateConditions(stage.when, state);
+    if (!met) {
+      getLogger(ctx).log(`  ⏭ ${stage.name}: skipped (condition not met: ${reason})`);
+      updateStageStatus(state, stage.name, "skipped");
+      await saveStateWithEvent(state, "stage_skipped", stage.name, { reason });
+      ctx.parentOnProgress?.("stage_skipped", stage.name, { reason });
+      return { stageName: stage.name, status: "skipped", durationMs: 0 };
+    }
+  }
+
   getLogger(ctx).log(`▸ Stage: ${stage.name} (${stage.type})`);
 
   const stageEventData = {
@@ -848,6 +984,11 @@ async function runStageWithLifecycle(
     };
 
     if (!ctx.dryRun) {
+      // Collect structured outputs before finalizing state.
+      if (result.status === "passed") {
+        await collectStageOutputs(stage, ctx, state);
+      }
+
       updateStageStatus(state, stage.name, result.status as StageStatus, {
         durationMs: result.durationMs,
         error: result.error,
@@ -1000,6 +1141,8 @@ async function runStages(
         completedNames.add(state.stageOrder[i]);
       }
       getLogger(ctx).log(`  resuming "${ctx.pipeline.name}" from stage "${resume.stageName}"`);
+      // Restore stage outputs from completed stages into variables.
+      restoreOutputVariables(state, ctx);
     } else {
       return {
         state,

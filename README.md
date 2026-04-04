@@ -142,7 +142,22 @@ stages:
 | `pipeline` | Invoke another pipeline YAML as a sub-pipeline — runs inline, shares the parent run lifecycle |
 | `human_gate` | Block until approved via MCP tool call or state file edit |
 
-Stages can also be wrapped in a `parallel` block to run concurrently. See the [pipeline skill](.claude/skills/cccp-pipeline/SKILL.md) for the full schema.
+Stages can also be wrapped in a `parallel` block to run concurrently. All stages support `outputs:` for structured data and `when:` for conditional execution:
+
+```yaml
+  - name: research
+    type: agent
+    agent: researcher
+    outputs:
+      decision: "proceed or abandon"
+
+  - name: design
+    type: pge
+    when: "research.decision == proceed"       # skip unless research says proceed
+    task: "Design based on: {research.summary}" # output values available as variables
+```
+
+See the [pipeline skill](.claude/skills/cccp-pipeline/SKILL.md) for the full schema.
 
 ### Model and effort
 

@@ -32,6 +32,7 @@ interface StageState {
   iteration?: number;      // PGE: current iteration (1-based)
   pgeStep?: PgeStep;       // PGE: last completed sub-step within iteration
   artifacts?: Record<string, string>;  // key → absolute path
+  outputs?: Record<string, string>;    // collected structured outputs (key → value)
   durationMs?: number;
   error?: string;
   groupId?: string;        // parallel group ID (e.g. "parallel-0"), set for stages in parallel blocks

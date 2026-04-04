@@ -10,6 +10,8 @@ import { isParallelGroup } from "./types.js";
 
 const ModelSchema = z.string().optional();
 const EffortSchema = z.enum(["low", "medium", "high", "max"]).optional();
+const WhenSchema = z.union([z.string(), z.array(z.string())]).optional();
+const OutputsSchema = z.record(z.string()).optional();
 
 const AgentStageSchema = z.object({
   name: z.string(),
@@ -26,6 +28,8 @@ const AgentStageSchema = z.object({
   model: ModelSchema,
   effort: EffortSchema,
   variables: z.record(z.string()).optional(),
+  outputs: OutputsSchema,
+  when: WhenSchema,
 });
 
 const PgeAgentConfigSchema = z.object({
@@ -60,6 +64,8 @@ const PgeStageSchema = z.object({
   on_fail: z.enum(["stop", "human_gate", "skip"]).optional(),
   human_review: z.boolean().optional(),
   variables: z.record(z.string()).optional(),
+  outputs: OutputsSchema,
+  when: WhenSchema,
 });
 
 const AutoresearchStageSchema = z.object({
@@ -80,6 +86,8 @@ const AutoresearchStageSchema = z.object({
   max_iterations: z.number().int().min(1).optional(),
   on_fail: z.enum(["stop", "human_gate", "skip"]).optional(),
   variables: z.record(z.string()).optional(),
+  outputs: OutputsSchema,
+  when: WhenSchema,
 });
 
 const HumanGateStageSchema = z.object({
@@ -92,6 +100,8 @@ const HumanGateStageSchema = z.object({
   prompt: z.string().optional(),
   on_reject: z.enum(["retry", "stop"]).optional(),
   variables: z.record(z.string()).optional(),
+  outputs: OutputsSchema,
+  when: WhenSchema,
 });
 
 const PipelineStageSchema = z.object({
@@ -103,6 +113,8 @@ const PipelineStageSchema = z.object({
   artifact_dir: z.string().optional(),
   on_fail: z.enum(["stop", "human_gate", "skip"]).optional(),
   variables: z.record(z.string()).optional(),
+  outputs: OutputsSchema,
+  when: WhenSchema,
 });
 
 const StageSchema = z.discriminatedUnion("type", [
@@ -190,6 +202,79 @@ const PipelineSchema = z.object({
         issues.push(`Duplicate stage name '${stage.name}'`);
       }
       allNames.add(stage.name);
+    }
+  }
+
+  // Validate `when:` conditions reference stages that exist and appear earlier.
+  // Also validate `outputs:` keys are valid identifiers and not the reserved word "status".
+  const orderedNames: string[] = []; // tracks execution order for forward-reference detection
+  const parallelGroupMembers = new Map<string, Set<string>>(); // stageName → set of group peers
+
+  // Build ordered names list and parallel group membership.
+  for (const entry of pipeline.stages) {
+    if ("parallel" in entry && !("type" in entry)) {
+      const group = entry as z.infer<typeof ParallelGroupSchema>;
+      const groupPeers = new Set(group.parallel.stages.map((s) => s.name));
+      for (const stage of group.parallel.stages) {
+        parallelGroupMembers.set(stage.name, groupPeers);
+        orderedNames.push(stage.name);
+      }
+    } else {
+      const stage = entry as z.infer<typeof StageSchema>;
+      orderedNames.push(stage.name);
+    }
+  }
+
+  // Validate each stage's when and outputs.
+  const conditionPattern = /^([\w-]+)\.([\w]+)\s+(==|!=)\s+(.+)$/;
+
+  function validateStage(stage: z.infer<typeof StageSchema>) {
+    // Validate outputs keys.
+    if (stage.outputs) {
+      for (const key of Object.keys(stage.outputs)) {
+        if (key === "status") {
+          issues.push(`Stage '${stage.name}': outputs key 'status' is reserved`);
+        }
+        if (!/^[a-z][a-z0-9_]*$/.test(key)) {
+          issues.push(`Stage '${stage.name}': outputs key '${key}' must be a lowercase identifier (a-z, 0-9, _)`);
+        }
+      }
+    }
+
+    // Validate when conditions.
+    const conditions = stage.when
+      ? (Array.isArray(stage.when) ? stage.when : [stage.when])
+      : [];
+    const stageIdx = orderedNames.indexOf(stage.name);
+
+    for (const cond of conditions) {
+      const match = conditionPattern.exec(cond);
+      if (!match) {
+        issues.push(`Stage '${stage.name}': invalid when condition '${cond}' — expected 'stageName.key == value' or 'stageName.key != value'`);
+        continue;
+      }
+      const refStage = match[1];
+      if (!allNames.has(refStage)) {
+        issues.push(`Stage '${stage.name}': when references unknown stage '${refStage}'`);
+      } else {
+        const refIdx = orderedNames.indexOf(refStage);
+        if (refIdx >= stageIdx) {
+          issues.push(`Stage '${stage.name}': when references stage '${refStage}' which does not appear before it`);
+        }
+        const peers = parallelGroupMembers.get(stage.name);
+        if (peers?.has(refStage)) {
+          issues.push(`Stage '${stage.name}': when references stage '${refStage}' in the same parallel group`);
+        }
+      }
+    }
+  }
+
+  for (const entry of pipeline.stages) {
+    if ("parallel" in entry && !("type" in entry)) {
+      const group = entry as z.infer<typeof ParallelGroupSchema>;
+      for (const stage of group.parallel.stages) validateStage(stage);
+    } else {
+      validateStage(entry as z.infer<typeof StageSchema>);
     }
   }
 
