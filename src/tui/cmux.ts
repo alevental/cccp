@@ -102,6 +102,26 @@ export async function notifyGateRequired(stageName: string): Promise<void> {
   await notify("Gate Required", `Pipeline waiting for approval: ${stageName}`);
 }
 
+/**
+ * Open a cmux split pane below and launch a scoped dashboard for a sub-pipeline stage.
+ * The pane auto-closes when the dashboard exits (via chained close-surface command).
+ * Returns the surface ref, or empty string if cmux is not available.
+ */
+export async function launchScopedDashboard(
+  runId: string,
+  projectDir: string,
+  scopeStage: string,
+): Promise<string> {
+  if (!isCmuxAvailable()) return "";
+  const surfaceRef = await newSplit("below");
+  if (!surfaceRef) return "";
+  const prefix = runId.slice(0, 12);
+  const cmd = `npx @alevental/cccp dashboard -r "${prefix}" -d "${projectDir}" --scope "${scopeStage}" ; cmux close-surface --surface ${surfaceRef}`;
+  await sendText(surfaceRef, cmd);
+  await sendKey(surfaceRef, "Enter");
+  return surfaceRef;
+}
+
 /** Notify that the pipeline has completed. */
 export async function notifyPipelineComplete(
   pipelineName: string,

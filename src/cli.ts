@@ -209,6 +209,10 @@ program
     "-d, --project-dir <path>",
     "Project directory (defaults to cwd)",
   )
+  .option(
+    "--scope <stage>",
+    "Scope dashboard to a sub-pipeline stage",
+  )
   .action(async (opts) => {
     const dashProjectDir = resolve(opts.projectDir ?? process.cwd());
     const { openDatabase } = await import("./db.js");
@@ -220,8 +224,21 @@ program
       process.exit(1);
     }
 
+    if (opts.scope) {
+      const stageState = existingState.stages[opts.scope];
+      if (!stageState) {
+        console.error(`Stage "${opts.scope}" not found in run. Available: ${existingState.stageOrder.join(", ")}`);
+        process.exit(1);
+      }
+      if (stageState.type !== "pipeline") {
+        console.error(`Stage "${opts.scope}" is type "${stageState.type}", not "pipeline". --scope only works with sub-pipeline stages.`);
+        process.exit(1);
+      }
+    }
+
     const { launchDashboard } = await import("./tui/dashboard.js");
-    await launchDashboard(existingState.runId, dashProjectDir, existingState);
+    // When scoped, pass the parent state — the Dashboard extracts children internally.
+    await launchDashboard(existingState.runId, dashProjectDir, existingState, opts.scope);
   });
 
 program

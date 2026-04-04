@@ -293,6 +293,23 @@ All cmux commands are no-ops when not in a cmux workspace.
 | `updatePipelineStatus(name, index, total)` | Each stage start -- updates status pill and progress bar |
 | `notifyGateRequired(stageName)` | Gate enters pending state |
 | `notifyPipelineComplete(name, status)` | Pipeline finishes |
+| `launchScopedDashboard(runId, projectDir, scopeStage)` | Sub-pipeline stage start (depth-1 only) -- opens a split pane below with a scoped dashboard |
+
+### Sub-pipeline split pane dashboard
+
+When a `type: pipeline` stage starts inside a cmux workspace, the runner automatically opens a split pane below and launches a scoped dashboard (`cccp dashboard --scope <stage>`). This gives the sub-pipeline its own full dashboard experience (stages, agent activity, detail log) instead of just the inline `├─` rendering in the parent.
+
+**How it works:**
+
+1. `launchScopedDashboard()` calls `newSplit("below")` to create a pane, returns `surface:N`
+2. Sends `cccp dashboard -r <prefix> --scope <stage> ; cmux close-surface --surface surface:N` to the pane
+3. The scoped dashboard loads the parent state, extracts `state.stages[scope].children` as the display state
+4. When the sub-pipeline completes, the dashboard exits and the chained `close-surface` auto-closes the pane
+
+**Constraints:**
+- Only depth-1 sub-pipelines get splits (avoids pane explosion on deep nesting)
+- Skipped when `--headless` is set or cmux is not available
+- Fire-and-forget -- failures don't block pipeline execution
 
 ### Error handling
 

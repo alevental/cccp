@@ -10,7 +10,7 @@ import { runAutoresearchCycle, type AutoresearchCycleOptions } from "./autoresea
 import { loadPipeline } from "./pipeline.js";
 import { runPgeCycle, dispatchEvaluatorWithFeedback, type PgeCycleOptions } from "./pge.js";
 import { interpolate, resolveTaskBody, loadAgentMarkdown, buildTaskContext, writeSystemPromptFile } from "./prompt.js";
-import { updatePipelineStatus, notifyPipelineComplete } from "./tui/cmux.js";
+import { updatePipelineStatus, notifyPipelineComplete, launchScopedDashboard, isCmuxAvailable } from "./tui/cmux.js";
 import {
   createState,
   flattenStageEntries,
@@ -675,6 +675,15 @@ async function runPipelineStage(
       });
     },
   };
+
+  // --- Launch scoped dashboard in cmux split (depth-1 only) ---
+  if (
+    !ctx.headless &&
+    isCmuxAvailable() &&
+    visited.size <= 1
+  ) {
+    launchScopedDashboard(state.runId, ctx.projectDir, stage.name).catch(() => {});
+  }
 
   // --- Execute child stages ---
   const stageState = state.stages[stage.name];

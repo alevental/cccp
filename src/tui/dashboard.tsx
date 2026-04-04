@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { render, Box, Text, useStdout } from "ink";
 import { resolve } from "node:path";
 import { loadState } from "../state.js";
-import { openDatabase } from "../db.js";
+import { openDatabase, reclaimWasmMemory } from "../db.js";
 import { activityBus } from "../activity-bus.js";
 import { StreamTailer } from "../stream/stream-tail.js";
 import type { PipelineState, StateEvent } from "../types.js";
@@ -23,9 +23,11 @@ interface DashboardProps {
   onComplete?: () => void;
   /** Pipeline start time (preserved across remounts). */
   startTime?: number;
+  /** Scope display to a sub-pipeline stage's children. */
+  scopeStage?: string;
 }
 
-function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, onComplete, startTime: startTimeProp }: DashboardProps) {
+function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, onComplete, startTime: startTimeProp, scopeStage }: DashboardProps) {
   const { stdout } = useStdout();
   const [state, setState] = useState<PipelineState>(initialState);
   const [activities, setActivities] = useState<Map<string, AgentActivity>>(new Map());
@@ -107,10 +109,19 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
     let timer: ReturnType<typeof setTimeout>;
     let polling = false;
     let cancelled = false;
+    let pollCount = 0;
+    // Standalone dashboards reload from disk and periodically reclaim WASM memory.
+    const isStandalone = !useEventBus;
 
     const poll = async () => {
       if (polling || cancelled) return;
       polling = true;
+      pollCount++;
+
+      // Reclaim sql.js WASM memory every ~15 min to prevent unbounded heap growth.
+      if (isStandalone && pollCount % 1800 === 0) {
+        reclaimWasmMemory();
+      }
 
       // Tick elapsed timer and current time (for agent elapsed).
       const currentTime = Date.now();
@@ -118,64 +129,82 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
       setNow(currentTime);
 
       try {
-        const updated = await loadState(runId, projectDir);
-        if (updated) {
-          const stagesJson = JSON.stringify(updated.stages);
-          if (
-            updated.status !== lastStatus.current ||
-            stagesJson !== lastStagesJson.current ||
-            updated.gate?.status !== lastGateStatus.current
-          ) {
-            lastStatus.current = updated.status;
-            lastStagesJson.current = stagesJson;
-            lastGateStatus.current = updated.gate?.status;
-            setState(updated);
+        const parentState = await loadState(runId, projectDir, isStandalone);
+        if (parentState) {
+          // When scoped, extract the child pipeline state from the parent.
+          const displayState = scopeStage
+            ? parentState.stages[scopeStage]?.children ?? null
+            : parentState;
 
-            // Clean up activities and dispatch times for agents whose stage is no longer in_progress.
-            setActivities((prev) => {
-              const next = new Map(prev);
-              let changed = false;
-              for (const [agentKey] of next) {
-                const stillActive = Object.values(updated.stages).some(
-                  (s) => s.status === "in_progress" && agentKey.startsWith(s.name),
-                );
-                if (!stillActive) {
-                  next.delete(agentKey);
-                  changed = true;
-                }
-              }
-              return changed ? next : prev;
-            });
-            setDispatchStartTimes((prev) => {
-              const next = new Map(prev);
-              let changed = false;
-              for (const key of next.keys()) {
-                const stillActive = Object.values(updated.stages).some(
-                  (s) => s.status === "in_progress" && key.startsWith(s.name),
-                );
-                if (!stillActive) {
-                  next.delete(key);
-                  changed = true;
-                }
-              }
-              return changed ? next : prev;
-            });
-
+          if (displayState) {
+            const stagesJson = JSON.stringify(displayState.stages);
             if (
-              updated.status === "passed" ||
-              updated.status === "failed" ||
-              updated.status === "error"
+              displayState.status !== lastStatus.current ||
+              stagesJson !== lastStagesJson.current ||
+              displayState.gate?.status !== lastGateStatus.current
             ) {
-              setTimeout(() => onComplete?.(), 500);
+              lastStatus.current = displayState.status;
+              lastStagesJson.current = stagesJson;
+              lastGateStatus.current = displayState.gate?.status;
+              setState(displayState);
+
+              // Clean up activities and dispatch times for agents whose stage is no longer in_progress.
+              setActivities((prev) => {
+                const next = new Map(prev);
+                let changed = false;
+                for (const [agentKey] of next) {
+                  const stillActive = Object.values(displayState.stages).some(
+                    (s) => s.status === "in_progress" && agentKey.startsWith(s.name),
+                  );
+                  if (!stillActive) {
+                    next.delete(agentKey);
+                    changed = true;
+                  }
+                }
+                return changed ? next : prev;
+              });
+              setDispatchStartTimes((prev) => {
+                const next = new Map(prev);
+                let changed = false;
+                for (const key of next.keys()) {
+                  const stillActive = Object.values(displayState.stages).some(
+                    (s) => s.status === "in_progress" && key.startsWith(s.name),
+                  );
+                  if (!stillActive) {
+                    next.delete(key);
+                    changed = true;
+                  }
+                }
+                return changed ? next : prev;
+              });
+
+              if (
+                displayState.status === "passed" ||
+                displayState.status === "failed" ||
+                displayState.status === "error"
+              ) {
+                setTimeout(() => onComplete?.(), 500);
+              }
             }
           }
 
-          // Poll events incrementally.
+          // Poll events incrementally. When scoped, filter to child events for this stage.
           const db = await openDatabase(projectDir);
-          const newEvents = db.getEvents(updated.runId, lastEventId.current);
+          const newEvents = db.getEvents(parentState.runId, lastEventId.current);
           if (newEvents.length > 0) {
             lastEventId.current = newEvents[newEvents.length - 1].id;
-            setEvents((prev) => [...prev, ...newEvents].slice(-500));
+            const filtered = scopeStage
+              ? newEvents
+                  .filter((e) => e.stageName === scopeStage && e.eventType.startsWith("child_"))
+                  .map((e) => ({
+                    ...e,
+                    eventType: e.eventType.replace(/^child_/, ""),
+                    stageName: (e.data as Record<string, unknown>)?.childStage as string ?? e.stageName,
+                  }))
+              : newEvents;
+            if (filtered.length > 0) {
+              setEvents((prev) => [...prev, ...filtered].slice(-500));
+            }
           }
         }
       } catch {
@@ -196,7 +225,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [runId, projectDir, startTime, onComplete]);
+  }, [runId, projectDir, startTime, onComplete, useEventBus, scopeStage]);
 
   const isComplete =
     state.status === "passed" ||
@@ -252,6 +281,7 @@ export async function launchDashboard(
   runId: string,
   projectDir: string,
   initialState: PipelineState,
+  scopeStage?: string,
 ): Promise<void> {
   return new Promise<void>((resolve) => {
     const { unmount, waitUntilExit } = render(
@@ -260,6 +290,7 @@ export async function launchDashboard(
         artifactDir={initialState.artifactDir}
         projectDir={projectDir}
         initialState={initialState}
+        scopeStage={scopeStage}
         onComplete={() => {
           unmount();
           resolve();

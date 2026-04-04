@@ -62,7 +62,7 @@ Variables are merged in this order (later overrides earlier):
 - When TUI is active, console output from agents is suppressed (`quiet: true`)
 - Detail log is keyboard-scrollable: Up/Down, PageUp/PageDown, Home/End
 - Active agents panel shows only in-progress agents with elapsed timers
-- Sub-pipeline stages are shown inline with `├─` indentation
+- Sub-pipeline stages are shown inline with `├─` indentation; in cmux, depth-1 sub-pipelines also get their own split-pane dashboard
 - Stage/phase start events include model, effort, inputs, and output metadata
 - Dashboard remounts every 15 minutes and renders at 10 FPS to cap memory
 
@@ -182,20 +182,31 @@ npx @alevental/cccp dashboard -r <run-id-prefix> [options]
 | Flag | Description |
 |------|-------------|
 | `-d, --project-dir <path>` | Project directory (defaults to `cwd`) |
+| `--scope <stage>` | Scope to a sub-pipeline stage's children (stage must be `type: pipeline`) |
 
 ### Behavior
 
 The standalone dashboard:
-- Reads pipeline state from SQLite
+- Reads pipeline state from SQLite (reloads from disk on each poll for cross-process visibility)
 - Tails `.cccp/*.stream.jsonl` files for live agent activity (via `StreamTailer`)
-- Polls the database every 300ms for state changes
+- Polls the database every 500ms for state changes (5s when gate-idle)
 - Exits automatically when the pipeline completes
+- Reclaims sql.js WASM memory every ~15 minutes to prevent unbounded heap growth
 
-### Example
+When `--scope` is used, the dashboard loads the parent run's state but displays only the child pipeline's stages, activity, and events. The `child_*` event prefixes are stripped so the scoped dashboard looks like a standalone pipeline view.
+
+### Automatic cmux integration
+
+When a `type: pipeline` stage starts inside a cmux workspace, the runner automatically opens a split pane below and launches `cccp dashboard --scope <stage>`. The pane auto-closes when the sub-pipeline completes. This only applies to depth-1 sub-pipelines (immediate children of the top-level pipeline) to avoid pane explosion on deep nesting. Skipped when `--headless` is set.
+
+### Examples
 
 ```bash
 # In a separate terminal while a pipeline is running
 npx @alevental/cccp dashboard -r a1b2c3d4
+
+# Monitor only a sub-pipeline stage
+npx @alevental/cccp dashboard -r a1b2c3d4 --scope build-pipeline
 ```
 
 ---
