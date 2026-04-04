@@ -101,9 +101,17 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
     return () => { tailer.stop(); };
   }, [artifactDir, useEventBus, updateActivity]);
 
-  // Unified poll: state, events, and elapsed timer in a single interval.
+  // Unified poll: state, events, and elapsed timer via setTimeout chain.
+  // Adaptive interval: 500ms when active, 5s when idle (gate pending).
   useEffect(() => {
-    const interval = setInterval(async () => {
+    let timer: ReturnType<typeof setTimeout>;
+    let polling = false;
+    let cancelled = false;
+
+    const poll = async () => {
+      if (polling || cancelled) return;
+      polling = true;
+
       // Tick elapsed timer and current time (for agent elapsed).
       const currentTime = Date.now();
       setElapsed(currentTime - startTime);
@@ -111,72 +119,83 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
 
       try {
         const updated = await loadState(runId, projectDir);
-        if (!updated) return;
-
-        const stagesJson = JSON.stringify(updated.stages);
-        if (
-          updated.status !== lastStatus.current ||
-          stagesJson !== lastStagesJson.current ||
-          updated.gate?.status !== lastGateStatus.current
-        ) {
-          lastStatus.current = updated.status;
-          lastStagesJson.current = stagesJson;
-          lastGateStatus.current = updated.gate?.status;
-          setState(updated);
-
-          // Clean up activities and dispatch times for agents whose stage is no longer in_progress.
-          setActivities((prev) => {
-            const next = new Map(prev);
-            let changed = false;
-            for (const [agentKey] of next) {
-              // Agent keys are like "stage-name-generator" — match to in_progress stages by prefix.
-              const stillActive = Object.values(updated.stages).some(
-                (s) => s.status === "in_progress" && agentKey.startsWith(s.name),
-              );
-              if (!stillActive) {
-                next.delete(agentKey);
-                changed = true;
-              }
-            }
-            return changed ? next : prev;
-          });
-          setDispatchStartTimes((prev) => {
-            const next = new Map(prev);
-            let changed = false;
-            for (const key of next.keys()) {
-              const stillActive = Object.values(updated.stages).some(
-                (s) => s.status === "in_progress" && key.startsWith(s.name),
-              );
-              if (!stillActive) {
-                next.delete(key);
-                changed = true;
-              }
-            }
-            return changed ? next : prev;
-          });
-
+        if (updated) {
+          const stagesJson = JSON.stringify(updated.stages);
           if (
-            updated.status === "passed" ||
-            updated.status === "failed" ||
-            updated.status === "error"
+            updated.status !== lastStatus.current ||
+            stagesJson !== lastStagesJson.current ||
+            updated.gate?.status !== lastGateStatus.current
           ) {
-            setTimeout(() => onComplete?.(), 500);
-          }
-        }
+            lastStatus.current = updated.status;
+            lastStagesJson.current = stagesJson;
+            lastGateStatus.current = updated.gate?.status;
+            setState(updated);
 
-        // Poll events incrementally.
-        const db = await openDatabase(projectDir);
-        const newEvents = db.getEvents(updated.runId, lastEventId.current);
-        if (newEvents.length > 0) {
-          lastEventId.current = newEvents[newEvents.length - 1].id;
-          setEvents((prev) => [...prev, ...newEvents].slice(-500));
+            // Clean up activities and dispatch times for agents whose stage is no longer in_progress.
+            setActivities((prev) => {
+              const next = new Map(prev);
+              let changed = false;
+              for (const [agentKey] of next) {
+                const stillActive = Object.values(updated.stages).some(
+                  (s) => s.status === "in_progress" && agentKey.startsWith(s.name),
+                );
+                if (!stillActive) {
+                  next.delete(agentKey);
+                  changed = true;
+                }
+              }
+              return changed ? next : prev;
+            });
+            setDispatchStartTimes((prev) => {
+              const next = new Map(prev);
+              let changed = false;
+              for (const key of next.keys()) {
+                const stillActive = Object.values(updated.stages).some(
+                  (s) => s.status === "in_progress" && key.startsWith(s.name),
+                );
+                if (!stillActive) {
+                  next.delete(key);
+                  changed = true;
+                }
+              }
+              return changed ? next : prev;
+            });
+
+            if (
+              updated.status === "passed" ||
+              updated.status === "failed" ||
+              updated.status === "error"
+            ) {
+              setTimeout(() => onComplete?.(), 500);
+            }
+          }
+
+          // Poll events incrementally.
+          const db = await openDatabase(projectDir);
+          const newEvents = db.getEvents(updated.runId, lastEventId.current);
+          if (newEvents.length > 0) {
+            lastEventId.current = newEvents[newEvents.length - 1].id;
+            setEvents((prev) => [...prev, ...newEvents].slice(-500));
+          }
         }
       } catch {
         // Ignore — DB may be mid-write.
       }
-    }, 500);
 
-    return () => clearInterval(interval);
+      polling = false;
+
+      // Schedule next poll: 5s when gate is pending (idle), 500ms when active.
+      if (!cancelled) {
+        const delay = lastGateStatus.current === "pending" ? 5000 : 500;
+        timer = setTimeout(poll, delay);
+      }
+    };
+
+    timer = setTimeout(poll, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [runId, projectDir, startTime, onComplete]);
 
   const isComplete =

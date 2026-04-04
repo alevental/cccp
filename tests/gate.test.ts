@@ -61,7 +61,7 @@ describe("MockGateStrategy", () => {
 // FilesystemGateStrategy
 // ---------------------------------------------------------------------------
 
-describe("FilesystemGateStrategy", () => {
+describe("FilesystemGateStrategy", { timeout: 10_000 }, () => {
   it("resolves when gate is approved", async () => {
     const projectDir = tmpProjectDir();
     const artifactDir = join(projectDir, "artifacts");

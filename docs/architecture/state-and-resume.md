@@ -82,8 +82,8 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 | `runner.ts` | `loadState` (resume) | `saveState`, `saveStateWithEvent` | Direct DB access via `state.ts` |
 | `pge.ts` | — | Mutates in-memory state via `updatePgeProgress`, `setStageArtifact` | State passed by reference; runner persists via `onProgress` callback |
 | `mcp-server.ts` | `listRuns`, `getRunByArtifactDir` | `saveState` (gate response only) | Direct DB access; calls `reload()` before reads for cross-process sync |
-| `gate-watcher.ts` | `loadState` (polling every 2s) | — | Read-only; passes `reloadFromDisk: true` for cross-process sync |
-| `dashboard.tsx` | `loadState` (polling every 300ms), `getEvents` | — | Read-only; calls `reload()` before reads |
+| `gate-watcher.ts` | `loadState` (polling every 5s) | — | Read-only; passes `reloadFromDisk: true` for cross-process sync. Calls `reclaimWasmMemory()` every ~15 min. |
+| `dashboard.tsx` | `loadState` (adaptive: 500ms active, 5s gate-idle), `getEvents` | — | Read-only; uses setTimeout chain with overlap guard |
 | `cli.ts` | `loadState` (resume, dashboard commands) | `saveState` (initial state for TUI) | Direct DB access |
 
 ## Write points

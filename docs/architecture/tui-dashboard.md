@@ -88,7 +88,7 @@ Shows all stages with status icons, iteration counts (for PGE), and duration:
 | Status | Icon | Color |
 |--------|------|-------|
 | `pending` | `○` | default |
-| `in_progress` | spinner | yellow |
+| `in_progress` | spinner (static `⏸` for gates) | yellow (blue for gates) |
 | `passed` | `✓` | green |
 | `failed` / `error` | `✗` | red |
 | `skipped` | `⏭` | gray |
@@ -106,7 +106,7 @@ Additional indicators:
       ├─ ○ review
   ```
 
-The spinner for in-progress stages uses the `ink-spinner` package with `type="dots"`.
+The spinner for in-progress stages uses the `ink-spinner` package with `type="dots"`. Human gate stages use a static `⏸` icon instead of an animated spinner to avoid continuous re-renders during long gate waits.
 
 ### AgentActivityPanel (right pane)
 
@@ -162,17 +162,24 @@ Sub-pipeline child events render as `↳ [child-pipeline] stage: started/complet
 
 ## Polling and Update Strategy
 
-### Unified polling (500ms interval)
+### Adaptive polling (setTimeout chain)
 
-The dashboard uses a single interval for state polling, event fetching, and elapsed timer updates:
+The dashboard uses a `setTimeout` chain (not `setInterval`) for state polling, event fetching, and elapsed timer updates. The interval adapts based on pipeline state:
+
+- **Active (500ms):** When stages are running and the pipeline is doing work.
+- **Gate idle (5s):** When a gate is pending and nothing is changing. This 10x reduction in poll frequency dramatically reduces memory pressure during long gate waits.
+
+An overlap guard prevents async callbacks from piling up if a poll takes longer than the interval.
 
 ```typescript
-const interval = setInterval(async () => {
-  setElapsed(Date.now() - startTime);
-  const updated = await loadState(runId, projectDir);
-  // Compare with current state, update if changed
-  // Poll events incrementally from DB
-}, 500);
+const poll = async () => {
+  if (polling || cancelled) return;
+  polling = true;
+  // ... state poll, event fetch, elapsed update ...
+  polling = false;
+  const delay = lastGateStatus.current === "pending" ? 5000 : 500;
+  timer = setTimeout(poll, delay);
+};
 ```
 
 State comparison checks `status`, `stages` (JSON stringified), and `gate?.status` to avoid unnecessary re-renders.
@@ -205,18 +212,26 @@ if (updated.status === "passed" || updated.status === "failed" || updated.status
 
 ## Memory Optimization
 
-yoga-layout 3.x uses WASM, and WASM linear memory is grow-only -- each `Yoga.Node.create()` / `freeRecursive()` cycle fragments the heap, and freed pages are never returned to V8. Over multi-hour runs this can accumulate to gigabytes. Two mitigations:
+Two WASM modules contribute to memory growth during long runs: **yoga-layout** (Ink's layout engine) and **sql.js** (SQLite compiled to WASM). Both suffer from the same fundamental constraint: WASM linear memory (`WebAssembly.Memory`) can grow but never shrink. Freed allocations are reusable within the WASM heap, but the backing `ArrayBuffer` pages are never returned to V8. Over multi-hour runs this can accumulate to gigabytes.
 
 ### Render throttle (10 FPS)
 
 Both `render()` calls pass `{ maxFps: 10 }` (Ink default is 30). This reduces yoga layout calculations by ~3x, proportionally slowing WASM memory growth.
 
-### Periodic remount (15 minutes)
+### Static icon for gate stages
+
+Human gate stages render a static `⏸` icon instead of an animated `<Spinner>`. The spinner's internal interval (~80ms) drives continuous Ink re-renders even when nothing is changing, accumulating yoga WASM memory. Eliminating the spinner during gate waits drops renders from ~12.5/sec to near zero (only when state actually changes).
+
+### Adaptive poll interval (gate idle)
+
+During gate waits the dashboard slows its poll interval from 500ms to 5s (see [Polling and Update Strategy](#polling-and-update-strategy)). This reduces DB operations, object allocations, and React re-renders by ~10x during the idle period.
+
+### Periodic remount (15 minutes, yoga)
 
 The inline dashboard (`startDashboard`) unmounts and remounts the Ink app every 15 minutes. Unmounting calls `freeRecursive()` on the root yoga tree and releases the entire React fiber tree. On remount:
 
 - **Elapsed timer** is preserved via the `startTime` prop
-- **Stage state** and **event log** repopulate from SQLite on the next poll (~500ms)
+- **Stage state** and **event log** repopulate from SQLite on the next poll
 - **Agent activity** repopulates from the activity bus within ~100ms
 
 ```typescript
@@ -228,7 +243,20 @@ const recycleTimer = setInterval(() => {
 }, RECYCLE_INTERVAL_MS);
 ```
 
-This caps memory at whatever accumulates in a 15-minute window (~100-300 MB) regardless of total run duration.
+### Periodic WASM reclaim (15 minutes, sql.js)
+
+The gate-watcher's `reload()` cycle creates a new `sql.Database` from disk every 5 seconds. Each allocation grows the sql.js WASM heap. Every ~15 minutes (180 polls), the gate-watcher calls `reclaimWasmMemory()` which closes all cached `CccpDatabase` instances, clears the singleton cache, and sets the sql.js WASM module reference to `null`. This drops all references to the old WASM module so V8 can GC its backing `ArrayBuffer`. The next `openDatabase()` call lazily re-initialises a fresh module with minimal memory.
+
+```typescript
+// db.ts
+export function reclaimWasmMemory(): void {
+  for (const db of instances.values()) db.close();
+  instances.clear();
+  SQL = null;  // next openDatabase() re-initialises
+}
+```
+
+This is safe because JavaScript is single-threaded: between `await` points, code runs atomically, so no other code is using the old DB when it's closed.
 
 ## cmux Integration
 

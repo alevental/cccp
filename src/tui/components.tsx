@@ -59,6 +59,15 @@ function StageRow({ name, stage }: { name: string; stage: StageState }) {
   const gateTag = stage.type === "human_gate" ? " \u2691" : "";
 
   if (stage.status === "in_progress") {
+    // Static icon for human_gate stages — avoids Spinner animation that drives
+    // continuous Ink re-renders and yoga-layout WASM memory growth during long waits.
+    if (stage.type === "human_gate") {
+      return (
+        <Text color="blue">
+          {"\u23F8"} {name}{gateTag}
+        </Text>
+      );
+    }
     return (
       <Text color="yellow">
         <Spinner type="dots" /> {name}{iterInfo}{gateTag}

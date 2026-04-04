@@ -533,3 +533,26 @@ export function closeDatabase(projectDir: string): void {
     instances.delete(key);
   }
 }
+
+/**
+ * Destroy all cached database instances and discard the sql.js WASM module.
+ *
+ * WASM linear memory (WebAssembly.Memory) can grow but never shrink. Over
+ * many `reload()` cycles the WASM heap grows unboundedly even though each
+ * `Database.close()` frees memory *within* the heap. Calling this function
+ * drops all references to the old WASM module so V8 can GC its backing
+ * ArrayBuffer, then the next `openDatabase()` lazily re-initialises a
+ * fresh module with minimal memory.
+ *
+ * Safe to call at any time — the next database operation will transparently
+ * re-initialise. Callers should avoid calling this while another async
+ * database operation is in-flight on the same tick (single-threaded JS
+ * guarantees this naturally between await points).
+ */
+export function reclaimWasmMemory(): void {
+  for (const db of instances.values()) {
+    db.close();
+  }
+  instances.clear();
+  SQL = null;
+}

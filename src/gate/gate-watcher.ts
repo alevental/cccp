@@ -1,4 +1,5 @@
 import { loadState } from "../state.js";
+import { reclaimWasmMemory } from "../db.js";
 import type { GateInfo } from "../types.js";
 import type { GateResponse, GateStrategy } from "./gate-strategy.js";
 import { notifyGateRequired } from "../tui/cmux.js";
@@ -7,7 +8,10 @@ import { notifyGateRequired } from "../tui/cmux.js";
 // Filesystem-polling gate strategy
 // ---------------------------------------------------------------------------
 
-const POLL_INTERVAL_MS = 2000;
+const POLL_INTERVAL_MS = 5000;
+
+/** Reclaim sql.js WASM memory every ~15 minutes (180 polls × 5s). */
+const WASM_RECLAIM_EVERY = 180;
 
 /**
  * Gate strategy that writes `gate_pending` to state.json and polls for
@@ -31,8 +35,17 @@ export class FilesystemGateStrategy implements GateStrategy {
     }
 
     return new Promise<GateResponse>((resolve) => {
+      let pollCount = 0;
       const interval = setInterval(async () => {
         try {
+          // Periodically reclaim sql.js WASM linear memory which can only
+          // grow, never shrink. Dropping the module lets V8 GC the backing
+          // ArrayBuffer; the next loadState() re-initialises transparently.
+          pollCount++;
+          if (pollCount % WASM_RECLAIM_EVERY === 0) {
+            reclaimWasmMemory();
+          }
+
           const state = await loadState(this.runId, this.projectDir, true);
           if (!state?.gate) return;
 
