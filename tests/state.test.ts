@@ -11,6 +11,7 @@ import {
   finishPipeline,
   findResumePoint,
   discoverRuns,
+  resetFromStage,
 } from "../src/state.js";
 import { tmpProjectDir } from "./helpers.js";
 
@@ -345,4 +346,107 @@ describe("discoverRuns", () => {
     closeDatabase(projectDir);
   });
 
+});
+
+// ---------------------------------------------------------------------------
+// resetFromStage with dotted paths
+// ---------------------------------------------------------------------------
+
+describe("resetFromStage", () => {
+  it("resets top-level stages (existing behavior)", async () => {
+    const projectDir = tmpProjectDir();
+    const state = createState("test", "proj", "t.yaml", [
+      { name: "s1", type: "agent" },
+      { name: "s2", type: "agent" },
+      { name: "s3", type: "agent" },
+    ], join(projectDir, "artifacts"), projectDir);
+    state.stages.s1.status = "passed";
+    state.stages.s2.status = "passed";
+    state.stages.s3.status = "passed";
+    state.status = "passed";
+    await saveState(state);
+
+    const reset = await resetFromStage(state, "s2");
+
+    expect(reset).toEqual(["s2", "s3"]);
+    expect(state.stages.s1.status).toBe("passed");
+    expect(state.stages.s2.status).toBe("pending");
+    expect(state.stages.s3.status).toBe("pending");
+    expect(state.status).toBe("running");
+
+    closeDatabase(projectDir);
+  });
+
+  it("resets child stages via dotted path", async () => {
+    const projectDir = tmpProjectDir();
+    const state = createState("parent", "proj", "p.yaml", [
+      { name: "setup", type: "agent" },
+      { name: "sub", type: "pipeline" },
+    ], join(projectDir, "artifacts"), projectDir);
+    state.stages.setup.status = "passed";
+    state.stages.sub.status = "passed";
+    state.stages.sub.children = createState("child", "proj", "child.yaml", [
+      { name: "c1", type: "agent" },
+      { name: "c2", type: "agent" },
+      { name: "c3", type: "agent" },
+    ], join(projectDir, "artifacts", "sub"));
+    state.stages.sub.children.stages.c1.status = "passed";
+    state.stages.sub.children.stages.c2.status = "passed";
+    state.stages.sub.children.stages.c3.status = "passed";
+    state.stages.sub.children.status = "passed";
+    state.status = "passed";
+    await saveState(state);
+
+    const reset = await resetFromStage(state, "sub.c2");
+
+    expect(reset).toEqual(["sub.c2", "sub.c3"]);
+    expect(state.stages.sub.children!.stages.c1.status).toBe("passed");
+    expect(state.stages.sub.children!.stages.c2.status).toBe("pending");
+    expect(state.stages.sub.children!.stages.c3.status).toBe("pending");
+    expect(state.stages.sub.status).toBe("in_progress");
+    expect(state.status).toBe("running");
+    expect(state.stages.sub.children!.status).toBe("running");
+
+    closeDatabase(projectDir);
+  });
+
+  it("throws for non-existent child stage with helpful error", async () => {
+    const projectDir = tmpProjectDir();
+    const state = createState("parent", "proj", "p.yaml", [
+      { name: "sub", type: "pipeline" },
+    ], join(projectDir, "artifacts"), projectDir);
+    state.stages.sub.children = createState("child", "proj", "child.yaml", [
+      { name: "c1", type: "agent" },
+    ], join(projectDir, "artifacts", "sub"));
+    await saveState(state);
+
+    await expect(resetFromStage(state, "sub.nonexistent")).rejects.toThrow("Available stages: c1");
+
+    closeDatabase(projectDir);
+  });
+
+  it("throws for non-pipeline stage in dotted path", async () => {
+    const projectDir = tmpProjectDir();
+    const state = createState("parent", "proj", "p.yaml", [
+      { name: "agent-stage", type: "agent" },
+    ], join(projectDir, "artifacts"), projectDir);
+    state.stages["agent-stage"].status = "passed";
+    await saveState(state);
+
+    await expect(resetFromStage(state, "agent-stage.child")).rejects.toThrow("not \"pipeline\"");
+
+    closeDatabase(projectDir);
+  });
+
+  it("throws when sub-pipeline has not started", async () => {
+    const projectDir = tmpProjectDir();
+    const state = createState("parent", "proj", "p.yaml", [
+      { name: "sub", type: "pipeline" },
+    ], join(projectDir, "artifacts"), projectDir);
+    await saveState(state);
+
+    await expect(resetFromStage(state, "sub.child")).rejects.toThrow("has not started yet");
+
+    closeDatabase(projectDir);
+  });
 });

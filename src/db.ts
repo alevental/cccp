@@ -468,6 +468,26 @@ export class CccpDatabase {
     );
   }
 
+  /**
+   * Delete child events for specific child stages within a parent pipeline stage.
+   * Child events are stored with stage_name = parentStageName and the child stage
+   * name inside data_json.childStage.
+   */
+  deleteChildEventsForStages(
+    runId: string,
+    parentStageName: string,
+    childStageNames: string[],
+  ): void {
+    if (childStageNames.length === 0) return;
+    const placeholders = childStageNames.map(() => "?").join(", ");
+    this.db.run(
+      `DELETE FROM events WHERE run_id = ? AND stage_name = ?
+       AND event_type LIKE 'child_%'
+       AND json_extract(data_json, '$.childStage') IN (${placeholders})`,
+      [runId, parentStageName, ...childStageNames],
+    );
+  }
+
   // -------------------------------------------------------------------------
   // Persistence — flush to disk
   // -------------------------------------------------------------------------

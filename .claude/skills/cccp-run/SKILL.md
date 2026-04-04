@@ -61,11 +61,13 @@ npx @alevental/cccp@latest resume -p <project> -r <run-id-prefix> [options]
 | `--headless` | No | Auto-approve all gates, disable TUI |
 | `--no-tui` | No | Disable the TUI dashboard (keep interactive gates) |
 | `--session-id <id>` | No | MCP session ID for gate notification routing (updates the run's session affinity) |
-| `--from <stage>` | No | Clean-reset and resume from this named stage |
+| `--from <stage>` | No | Clean-reset and resume from this named stage. Supports dotted paths for sub-pipeline stages (e.g., `sprint-0.doc-refresh`) |
 
-Without `--from`: skips completed stages and resumes from the first incomplete stage. For PGE stages, resumes at the correct iteration and sub-step.
+Without `--from`: skips completed stages and resumes from the first incomplete stage. For PGE stages, resumes at the correct iteration and sub-step. Sub-pipelines resume from the correct child stage automatically (child state is persisted in the parent's state throughout execution).
 
-With `--from <stage>`: resets the named stage and all subsequent stages to a clean state before resuming. Cleans up stage state (status, iteration, artifacts), SQLite events/checkpoints, artifact directories, stream logs, and gate feedback files. Stages before `--from` are left untouched.
+With `--from <stage>`: resets the named stage and all subsequent stages to a clean state before resuming. Cleans up stage state (status, iteration, artifacts, outputs), SQLite events/checkpoints, artifact directories, stream logs, and gate feedback files. Stages before `--from` are left untouched.
+
+With `--from <parent.child>`: resets from a specific stage inside a sub-pipeline. Walks the children chain, resets child stages from the target onward, sets ancestor stages to `in_progress` so the runner re-enters them.
 
 ```bash
 # Resume from where it stopped
@@ -73,6 +75,9 @@ npx @alevental/cccp@latest resume -p myproject -r a1b2c3d4
 
 # Clean-reset from a specific stage and re-run
 npx @alevental/cccp@latest resume -p myproject -r a1b2c3d4 --from review
+
+# Reset from a child stage within a sub-pipeline
+npx @alevental/cccp@latest resume -p myproject -r a1b2c3d4 --from sprint-0.doc-refresh
 ```
 
 ### `dashboard` — Monitor a run

@@ -119,7 +119,7 @@ npx @alevental/cccp resume -p <name> -r <run-id-prefix> [options]
 | `--headless` | Auto-approve all gates; disables TUI |
 | `--no-tui` | Disable the TUI dashboard (keep interactive gates) |
 | `--session-id <id>` | MCP session ID for gate notification routing (updates the run's session affinity) |
-| `--from <stage>` | Clean-reset and resume from this named stage (see below) |
+| `--from <stage>` | Clean-reset and resume from this named stage. Supports dotted paths for sub-pipeline stages (e.g., `sprint-0.doc-refresh`) |
 
 ### Resume behavior
 
@@ -135,9 +135,12 @@ For PGE stages, resume includes the iteration number and sub-step, so a crashed 
 
 When `--from <stage>` is specified, the named stage and all subsequent stages are reset to a clean state before resuming. This is useful when you want to re-run part of a pipeline from scratch without re-running earlier stages.
 
+**Dotted paths** target stages inside sub-pipelines: `--from sprint-0.doc-refresh` resets `doc-refresh` and all subsequent stages within the `sprint-0` sub-pipeline, sets `sprint-0` back to `in_progress`, and resumes from there. Arbitrary nesting depth is supported.
+
 What gets cleaned:
-- **Stage state**: status reset to `pending`, iteration/pgeStep/artifacts/duration/error cleared
+- **Stage state**: status reset to `pending`, iteration/pgeStep/artifacts/outputs/duration/error cleared
 - **Pipeline state**: status set to `running`, `completedAt` and `gate` cleared
+- **Ancestor stages** (dotted paths only): set to `in_progress` so the runner re-enters them
 - **SQLite**: events and checkpoints deleted for the reset stages
 - **Artifact directories**: `{artifactDir}/{stageName}/` removed (task plans, contracts, evaluations)
 - **Stream logs**: `{artifactDir}/.cccp/{stageName}-*.stream.jsonl` deleted
@@ -148,6 +151,9 @@ Stages before the `--from` stage are left untouched (still passed/skipped).
 ```bash
 # Re-run from the "review" stage onward
 npx @alevental/cccp resume -p my-project -r a1b2c3d4 --from review
+
+# Re-run from a child stage within a sub-pipeline
+npx @alevental/cccp resume -p my-project -r a1b2c3d4 --from sprint-0.doc-refresh
 ```
 
 ### TUI behavior

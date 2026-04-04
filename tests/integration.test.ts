@@ -685,4 +685,78 @@ stages:
     // The variable override should appear in the resolved output path
     expect(dispatcher.calls[0].expectedOutput).toContain("from-parent");
   });
+
+  it("resumes sub-pipeline from correct child stage after crash", async () => {
+    const dir = tmpProjectDir();
+    await writeAgent(dir, "worker.md", "# Worker\nDo work.");
+
+    // Write sub-pipeline with 3 stages
+    const subDir = join(dir, "pipelines");
+    await mkdir(subDir, { recursive: true });
+    await writeFile(join(subDir, "multi-sub.yaml"), `
+name: multi-sub
+stages:
+  - name: child-a
+    type: agent
+    agent: agents/worker.md
+    task: First child task
+  - name: child-b
+    type: agent
+    agent: agents/worker.md
+    task: Second child task
+  - name: child-c
+    type: agent
+    agent: agents/worker.md
+    task: Third child task
+`, "utf-8");
+
+    const pipeline = await writePipeline(dir, `
+name: resume-parent
+stages:
+  - name: run-sub
+    type: pipeline
+    file: pipelines/multi-sub.yaml
+`);
+
+    // First run: child-a passes, child-b crashes
+    const firstDispatcher = new ScriptedDispatcher([
+      async () => ({ exitCode: 0, outputExists: false, durationMs: 10 }),  // child-a passes
+      async () => ({ exitCode: 1, outputExists: false, durationMs: 10 }),  // child-b crashes
+    ]);
+
+    const ctx1 = buildTestContext({ projectDir: dir, pipeline, dispatcher: firstDispatcher });
+    const result1 = await runPipeline(ctx1);
+
+    expect(result1.status).toBe("failed");
+
+    // Load state for resume
+    const { openDatabase } = await import("../src/db.js");
+    const db = await openDatabase(dir);
+    const runs = db.listRuns();
+    expect(runs.length).toBeGreaterThan(0);
+    // Find the parent run (it has the pipeline name "resume-parent")
+    const parentRun = runs.find(r => r.state.pipeline === "resume-parent");
+    expect(parentRun).toBeDefined();
+    const existingState = parentRun!.state;
+
+    // Verify the child state was saved in the parent
+    expect(existingState.stages["run-sub"].children).toBeDefined();
+    expect(existingState.stages["run-sub"].children!.stages["child-a"].status).toBe("passed");
+
+    // Resume: child-b should run (not child-a again), then child-c
+    const resumeDispatcher = new ScriptedDispatcher([
+      async () => ({ exitCode: 0, outputExists: false, durationMs: 10 }),  // child-b retry
+      async () => ({ exitCode: 0, outputExists: false, durationMs: 10 }),  // child-c
+    ]);
+
+    const ctx2 = buildTestContext({ projectDir: dir, pipeline, dispatcher: resumeDispatcher });
+    const result2 = await runPipeline(ctx2, { existingState });
+
+    expect(result2.status).toBe("passed");
+    // Only 2 dispatches on resume (child-b and child-c), NOT 3
+    expect(resumeDispatcher.calls).toHaveLength(2);
+    // Verify child-b prompt is the second task, not the first
+    expect(resumeDispatcher.calls[0].userPrompt).toContain("Second child task");
+    expect(resumeDispatcher.calls[1].userPrompt).toContain("Third child task");
+  });
 });

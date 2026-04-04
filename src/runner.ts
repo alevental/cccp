@@ -809,16 +809,34 @@ async function runPipelineStage(
     launchScopedDashboard(state.runId, ctx.projectDir, stage.name).catch(() => {});
   }
 
-  // --- Execute child stages ---
+  // --- Link child state to parent BEFORE execution ---
+  // Pre-create child state so stageState.children is set before runStages().
+  // JavaScript pass-by-reference means child mutations inside runStages() are
+  // visible through the parent's reference, so parentOnProgress → saveStateWithEvent
+  // persists the parent state with up-to-date child progress after each child event.
+  // Without this, a crash mid-child leaves children=undefined and resume restarts
+  // the sub-pipeline from scratch.
   const stageState = state.stages[stage.name];
-  const existingChildState = stageState?.children;
+  let childState = stageState?.children;
 
-  const childResult = await runStages(
-    childCtx,
-    existingChildState,
-  );
+  if (!childState && !ctx.dryRun) {
+    childState = createState(
+      childPipeline.name,
+      ctx.project,
+      filePath,
+      flattenStageEntries(childPipeline.stages),
+      childArtifactDir,
+      ctx.projectDir,
+    );
+    if (stageState) {
+      stageState.children = childState;
+      await saveState(state);
+    }
+  }
 
-  // Store child state in parent.
+  const childResult = await runStages(childCtx, childState);
+
+  // Update parent with final child state.
   if (stageState) {
     stageState.children = childResult.state;
   }

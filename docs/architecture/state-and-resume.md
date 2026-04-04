@@ -141,25 +141,50 @@ The `resume` CLI command launches the inline TUI dashboard (via `startDashboard(
 
 ## Clean reset (`--from`)
 
-`resetFromStage(state, fromStageName)` in `src/state.ts`:
+`resetFromStage(state, fromStagePath)` in `src/state.ts`:
 
 When `cccp resume --from <stage>` is used, the named stage and all subsequent stages are wiped clean before the runner starts. This enables a fresh re-run from a specific point.
+
+### Dotted paths for sub-pipeline stages
+
+`--from` supports dotted paths to target stages inside sub-pipelines:
+
+```bash
+# Reset from a top-level stage
+cccp resume -r a1b2c3d4 --from review
+
+# Reset from a child stage within a sub-pipeline
+cccp resume -r a1b2c3d4 --from sprint-0.doc-refresh
+```
+
+For dotted paths, the function walks the `children` chain (`state.stages["sprint-0"].children.stages["doc-refresh"]`), resets child stages from the target onward, and sets all ancestor stages to `in_progress` so the runner re-enters them. Arbitrary nesting depth is supported (e.g., `a.b.c`).
 
 ### What gets reset
 
 | Layer | Cleanup |
 |-------|---------|
-| In-memory stage state | `status → "pending"`, clear `iteration`, `pgeStep`, `artifacts`, `durationMs`, `error` |
+| In-memory stage state | `status → "pending"`, clear `iteration`, `pgeStep`, `artifacts`, `outputs`, `durationMs`, `error` |
 | Pipeline state | `status → "running"`, clear `completedAt`, clear `gate` |
-| SQLite events | `DELETE FROM events WHERE run_id = ? AND stage_name IN (...)` |
+| Ancestor stages (dotted paths) | `status → "in_progress"`, clear `durationMs`, `error` |
+| SQLite events | Top-level: `DELETE ... WHERE stage_name IN (...)`. Dotted: child events matched via `json_extract(data_json, '$.childStage')` |
 | SQLite checkpoints | `DELETE FROM checkpoints WHERE run_id = ? AND stage_name IN (...)` |
-| Artifact dirs | `rm -rf {artifactDir}/{stageName}/` |
+| Artifact dirs | `rm -rf {artifactDir}/{stageName}/` (uses child's artifact dir for dotted paths) |
 | Stream logs | Delete `{artifactDir}/.cccp/{stageName}-*.stream.jsonl` |
 | Gate feedback | Delete `{artifactDir}/.cccp/{stageName}-gate-feedback-*.md` |
 
 Deliverable files (which may live outside the stage directory in the project tree) are intentionally not deleted — they may serve as inputs to other stages.
 
 After reset, the standard resume path takes over: `findResumePoint()` sees the target stage as `pending` and the runner starts from there.
+
+## Sub-pipeline state persistence
+
+Sub-pipeline (type: pipeline) stages store their child state as a nested `PipelineState` in `stageState.children`. The runner pre-creates and links this child state to the parent BEFORE executing child stages. This enables:
+
+1. **Crash recovery**: If the process crashes mid-child-execution, the parent state in the DB already has the `children` reference with up-to-date child progress. On resume, the runner passes this to `runStages()` and `findResumePoint()` resumes from the correct child stage.
+
+2. **Live persistence**: The `parentOnProgress` callback calls `saveStateWithEvent(parentState, ...)` after each child event. Since `stageState.children` is a JavaScript reference to the child state object (which `runStages()` mutates in-place), the parent state always contains the latest child progress when saved.
+
+3. **Dotted path reset**: `resetFromStage("parent.child")` walks the `children` chain to target specific child stages without resetting the entire sub-pipeline.
 
 ## Parallel group resume
 

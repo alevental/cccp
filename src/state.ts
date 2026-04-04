@@ -278,22 +278,24 @@ export function findResumePoint(state: PipelineState): ResumePoint | null {
  *
  * Returns the list of stage names that were reset.
  */
-export async function resetFromStage(
-  state: PipelineState,
+/**
+ * Reset stages within a single PipelineState from the named stage onward.
+ * Returns the list of stage names that were reset.
+ */
+function resetStagesInPipeline(
+  pipelineState: PipelineState,
   fromStageName: string,
-): Promise<string[]> {
-  const idx = state.stageOrder.indexOf(fromStageName);
+): string[] {
+  const idx = pipelineState.stageOrder.indexOf(fromStageName);
   if (idx === -1) {
     throw new Error(
-      `Stage "${fromStageName}" not found. Available stages: ${state.stageOrder.join(", ")}`,
+      `Stage "${fromStageName}" not found. Available stages: ${pipelineState.stageOrder.join(", ")}`,
     );
   }
 
-  const stagesToReset = state.stageOrder.slice(idx);
-
-  // --- Reset in-memory stage state ---
+  const stagesToReset = pipelineState.stageOrder.slice(idx);
   for (const name of stagesToReset) {
-    const stage = state.stages[name];
+    const stage = pipelineState.stages[name];
     if (!stage) continue;
     stage.status = "pending";
     delete stage.iteration;
@@ -303,30 +305,22 @@ export async function resetFromStage(
     delete stage.durationMs;
     delete stage.error;
   }
+  return stagesToReset;
+}
 
-  // --- Reset pipeline-level state ---
-  state.status = "running";
-  delete state.completedAt;
-  delete state.gate;
-
-  // --- Clean SQLite records ---
-  const dir = resolveProjectDir(state);
-  const db = await openDatabase(dir);
-  db.deleteEventsForStages(state.runId, stagesToReset);
-  db.deleteCheckpointsForStages(state.runId, stagesToReset);
-  db.upsertRun(state, state.artifactDir);
-  db.flush();
-
-  // --- Clean filesystem ---
-  const artifactDir = state.artifactDir;
+/**
+ * Clean filesystem artifacts for the given stage names within an artifact directory.
+ */
+async function cleanStageArtifacts(
+  artifactDir: string,
+  stageNames: string[],
+): Promise<void> {
   const cccpDir = resolve(artifactDir, ".cccp");
 
-  for (const name of stagesToReset) {
-    // Remove stage artifact directory.
+  for (const name of stageNames) {
     const stageDir = resolve(artifactDir, name);
     await rm(stageDir, { recursive: true, force: true });
 
-    // Remove stream logs and gate feedback files.
     try {
       const files = await readdir(cccpDir);
       for (const file of files) {
@@ -341,8 +335,93 @@ export async function resetFromStage(
       // .cccp dir may not exist yet — that's fine.
     }
   }
+}
 
-  return stagesToReset;
+/**
+ * Reset from a named stage and clear all subsequent stages.
+ * Supports dotted paths for sub-pipeline stages (e.g., "sprint-0.doc-refresh").
+ */
+export async function resetFromStage(
+  state: PipelineState,
+  fromStagePath: string,
+): Promise<string[]> {
+  const segments = fromStagePath.split(".");
+
+  if (segments.length === 1) {
+    // --- Top-level reset (existing behavior) ---
+    const stagesToReset = resetStagesInPipeline(state, segments[0]);
+
+    state.status = "running";
+    delete state.completedAt;
+    delete state.gate;
+
+    const dir = resolveProjectDir(state);
+    const db = await openDatabase(dir);
+    db.deleteEventsForStages(state.runId, stagesToReset);
+    db.deleteCheckpointsForStages(state.runId, stagesToReset);
+    db.upsertRun(state, state.artifactDir);
+    db.flush();
+
+    await cleanStageArtifacts(state.artifactDir, stagesToReset);
+    return stagesToReset;
+  }
+
+  // --- Dotted path: walk children chain ---
+  let current: PipelineState = state;
+  const ancestors: Array<{ state: PipelineState; stageName: string }> = [];
+
+  for (let i = 0; i < segments.length - 1; i++) {
+    const parentName = segments[i];
+    const parentStage = current.stages[parentName];
+    if (!parentStage) {
+      throw new Error(
+        `Stage "${parentName}" not found. Available stages: ${current.stageOrder.join(", ")}`,
+      );
+    }
+    if (!parentStage.children) {
+      throw new Error(
+        parentStage.type === "pipeline"
+          ? `Sub-pipeline "${parentName}" has not started yet. Use '--from ${parentName}' to reset the entire stage.`
+          : `Stage "${parentName}" is type "${parentStage.type}", not "pipeline". Dotted paths only work with sub-pipeline stages.`,
+      );
+    }
+    ancestors.push({ state: current, stageName: parentName });
+    current = parentStage.children;
+  }
+
+  const targetStage = segments[segments.length - 1];
+  const childStagesToReset = resetStagesInPipeline(current, targetStage);
+
+  // Reset child pipeline status.
+  current.status = "running";
+  delete current.completedAt;
+
+  // Set ancestor stages back to in_progress so the runner re-enters them.
+  for (const { state: ancestorState, stageName } of ancestors) {
+    const stage = ancestorState.stages[stageName];
+    stage.status = "in_progress";
+    delete stage.durationMs;
+    delete stage.error;
+  }
+
+  // Reset top-level pipeline status.
+  state.status = "running";
+  delete state.completedAt;
+  delete state.gate;
+
+  // DB cleanup.
+  const dir = resolveProjectDir(state);
+  const db = await openDatabase(dir);
+  const parentStageName = ancestors[ancestors.length - 1].stageName;
+  db.deleteChildEventsForStages(state.runId, parentStageName, childStagesToReset);
+  db.deleteCheckpointsForStages(state.runId, childStagesToReset);
+  db.upsertRun(state, state.artifactDir);
+  db.flush();
+
+  // Clean child filesystem artifacts.
+  await cleanStageArtifacts(current.artifactDir, childStagesToReset);
+
+  return childStagesToReset.map((n) => `${segments.slice(0, -1).join(".")}.${n}`);
 }
 
 // ---------------------------------------------------------------------------
