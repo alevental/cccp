@@ -82,7 +82,7 @@ function StageRow({ name, stage }: { name: string; stage: StageState }) {
 }
 
 type StageRow_t =
-  | { kind: "stage"; name: string; childLevel?: number }
+  | { kind: "stage"; name: string; childLevel?: number; parentName?: string }
   | { kind: "group-start" }
   | { kind: "group-end" };
 
@@ -109,7 +109,7 @@ export function StageList({ state }: StageListProps) {
     // Render nested sub-pipeline children inline.
     if (stage.type === "pipeline" && stage.children) {
       for (const childName of stage.children.stageOrder) {
-        rows.push({ kind: "stage", name: childName, childLevel: 1 });
+        rows.push({ kind: "stage", name: childName, childLevel: 1, parentName: name });
       }
     }
   }
@@ -135,12 +135,10 @@ export function StageList({ state }: StageListProps) {
         }
 
         // Nested sub-pipeline child stage.
-        if (row.childLevel) {
-          // Look up child stage from parent pipeline stages that have children.
-          const childStage = Object.values(state.stages)
-            .filter((s) => s.children)
-            .map((s) => s.children!.stages[row.name])
-            .find(Boolean);
+        if (row.childLevel && row.parentName) {
+          // Look up child stage from the specific parent pipeline stage.
+          const parentStage = state.stages[row.parentName];
+          const childStage = parentStage?.children?.stages[row.name];
           if (!childStage) return null;
           return (
             <Box key={`child-${row.name}`}>
