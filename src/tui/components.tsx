@@ -242,14 +242,44 @@ function CompactAgentRow({ activity, elapsed }: { activity: AgentActivity; elaps
   );
 }
 
+/**
+ * For PGE/autoresearch stages, determine the agent suffix currently running
+ * based on the last completed sub-step (pgeStep). Returns undefined if no
+ * agent is actively dispatched (e.g., during routing).
+ */
+function currentPgeSuffix(step: StageState["pgeStep"]): string | undefined {
+  switch (step) {
+    case undefined: return "-planner";
+    case "planner_dispatched": return "-contract";
+    case "contract_dispatched": return "-generator";
+    case "generator_dispatched": return "-evaluator";
+    case "evaluator_dispatched": return undefined; // routing, no agent
+    case "routed": return "-generator"; // next iteration starting
+    case "adjuster_dispatched": return "-executor"; // autoresearch
+    case "executor_dispatched": return "-evaluator"; // autoresearch
+    default: return undefined;
+  }
+}
+
+/** Check if an agent key matches a stage's currently active agent. */
+function matchesStage(agentKey: string, s: StageState): boolean {
+  if (s.status !== "in_progress") return false;
+  // For PGE/autoresearch stages, only match the currently active phase agent.
+  if (s.type === "pge" || s.type === "autoresearch") {
+    const suffix = currentPgeSuffix(s.pgeStep);
+    return suffix != null && agentKey === `${s.name}${suffix}`;
+  }
+  return agentKey.startsWith(s.name);
+}
+
 /** Check if an agent key matches any in_progress stage, including sub-pipeline children. */
 export function isAgentActive(agentKey: string, stages: Record<string, StageState>): boolean {
   return Object.values(stages).some((s) => {
-    if (s.status === "in_progress" && agentKey.startsWith(s.name)) return true;
+    if (matchesStage(agentKey, s)) return true;
     // Check sub-pipeline children.
     if (s.type === "pipeline" && s.status === "in_progress" && s.children) {
       return Object.values(s.children.stages).some(
-        (cs) => cs.status === "in_progress" && agentKey.startsWith(cs.name),
+        (cs) => matchesStage(agentKey, cs),
       );
     }
     return false;
