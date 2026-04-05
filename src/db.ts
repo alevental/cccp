@@ -169,6 +169,11 @@ export class CccpDatabase {
       this.db.run(`ALTER TABLE runs ADD COLUMN session_id TEXT`);
       this.db.run(`PRAGMA user_version = 2`);
     }
+
+    if (version < 3) {
+      this.db.run(`ALTER TABLE runs ADD COLUMN pause_requested INTEGER DEFAULT 0`);
+      this.db.run(`PRAGMA user_version = 3`);
+    }
   }
 
   private pragma(name: string): number {
@@ -302,7 +307,7 @@ export class CccpDatabase {
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     const results = this.db.exec(
       `SELECT * FROM runs ${where} ORDER BY
-        CASE WHEN status = 'running' THEN 0 ELSE 1 END,
+        CASE WHEN status = 'running' THEN 0 WHEN status = 'paused' THEN 1 ELSE 2 END,
         started_at DESC`,
       params,
     );
@@ -444,6 +449,26 @@ export class CccpDatabase {
       out[row[0] as string] = row[1] as string;
     }
     return out;
+  }
+
+  // -------------------------------------------------------------------------
+  // Pause — cross-process pause signalling (separate from state JSON)
+  // -------------------------------------------------------------------------
+
+  setPauseRequested(runId: string, requested: boolean): void {
+    this.db.run(
+      `UPDATE runs SET pause_requested = ? WHERE run_id = ?`,
+      [requested ? 1 : 0, runId],
+    );
+  }
+
+  isPauseRequested(runId: string): boolean {
+    const results = this.db.exec(
+      `SELECT pause_requested FROM runs WHERE run_id = ?`,
+      [runId],
+    );
+    if (results.length === 0 || results[0].values.length === 0) return false;
+    return results[0].values[0][0] === 1;
   }
 
   // -------------------------------------------------------------------------

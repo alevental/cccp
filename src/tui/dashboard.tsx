@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { render, Box, Text, useStdout } from "ink";
+import { render, Box, Text, useStdout, useInput } from "ink";
 import { resolve } from "node:path";
 import { loadState } from "../state.js";
 import { openDatabase, reclaimWasmMemory } from "../db.js";
@@ -7,7 +7,7 @@ import { activityBus } from "../activity-bus.js";
 import { StreamTailer } from "../stream/stream-tail.js";
 import type { PipelineState, StateEvent } from "../types.js";
 import type { AgentActivity } from "../stream/stream.js";
-import { Header, StageList, AgentActivityPanel } from "./components.js";
+import { Header, StageList, AgentActivityPanel, isAgentActive } from "./components.js";
 import { DetailLog } from "./detail-log.js";
 
 // ---------------------------------------------------------------------------
@@ -103,6 +103,18 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
     return () => { tailer.stop(); };
   }, [artifactDir, useEventBus, updateActivity]);
 
+  // Pause request via keyboard.
+  const [pauseRequested, setPauseRequested] = useState(false);
+  useInput((input) => {
+    if ((input === "p" || input === "P") && state.status === "running" && !pauseRequested) {
+      setPauseRequested(true);
+      openDatabase(projectDir).then((db) => {
+        db.setPauseRequested(state.runId, true);
+        db.flush();
+      }).catch(() => {});
+    }
+  });
+
   // Unified poll: state, events, and elapsed timer via setTimeout chain.
   // Adaptive interval: 500ms when active, 5s when idle (gate pending).
   useEffect(() => {
@@ -153,10 +165,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
                 const next = new Map(prev);
                 let changed = false;
                 for (const [agentKey] of next) {
-                  const stillActive = Object.values(displayState.stages).some(
-                    (s) => s.status === "in_progress" && agentKey.startsWith(s.name),
-                  );
-                  if (!stillActive) {
+                  if (!isAgentActive(agentKey, displayState.stages)) {
                     next.delete(agentKey);
                     changed = true;
                   }
@@ -167,10 +176,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
                 const next = new Map(prev);
                 let changed = false;
                 for (const key of next.keys()) {
-                  const stillActive = Object.values(displayState.stages).some(
-                    (s) => s.status === "in_progress" && key.startsWith(s.name),
-                  );
-                  if (!stillActive) {
+                  if (!isAgentActive(key, displayState.stages)) {
                     next.delete(key);
                     changed = true;
                   }
@@ -181,7 +187,8 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
               if (
                 displayState.status === "passed" ||
                 displayState.status === "failed" ||
-                displayState.status === "error"
+                displayState.status === "error" ||
+                displayState.status === "paused"
               ) {
                 setTimeout(() => onComplete?.(), 500);
               }
@@ -230,9 +237,22 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
   const isComplete =
     state.status === "passed" ||
     state.status === "failed" ||
-    state.status === "error";
+    state.status === "error" ||
+    state.status === "paused";
 
   const terminalRows = stdout.rows ?? 24;
+
+  // Compute visible row count including sub-pipeline children and parallel group markers.
+  let stageListRows = state.stageOrder.length;
+  const groupIds = new Set<string>();
+  for (const name of state.stageOrder) {
+    const stage = state.stages[name];
+    if (stage.type === "pipeline" && stage.children) {
+      stageListRows += stage.children.stageOrder.length;
+    }
+    if (stage.groupId) groupIds.add(stage.groupId);
+  }
+  stageListRows += groupIds.size * 2; // group start + end markers
 
   return (
     <Box flexDirection="column" height={terminalRows} overflow="hidden">
@@ -245,17 +265,25 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
 
       {/* Split pane: Stages (left) | Activity (right)
          Fixed height prevents Ink re-render corruption when content changes. */}
-      <Box marginTop={1} flexDirection="row" height={Math.max(state.stageOrder.length + 3, 8)} overflow="hidden">
+      <Box marginTop={1} flexDirection="row" height={Math.max(stageListRows + 3, 8)} overflow="hidden">
         <StageList state={state} />
         {!isComplete ? (
-          <AgentActivityPanel activities={activities} stages={state.stages} dispatchStartTimes={dispatchStartTimes} now={now} />
+          <Box flexDirection="column" flexGrow={1}>
+            <AgentActivityPanel activities={activities} stages={state.stages} dispatchStartTimes={dispatchStartTimes} now={now} />
+            {pauseRequested && (
+              <Text color="blue"> {"\u23F8"} Pause requested {"\u2014"} will pause after current stage</Text>
+            )}
+            {!pauseRequested && (
+              <Text dimColor> [p] pause</Text>
+            )}
+          </Box>
         ) : (
           <Box flexDirection="column" flexGrow={1} marginLeft={1}>
             <Text
-              color={state.status === "passed" ? "green" : "red"}
+              color={state.status === "passed" ? "green" : state.status === "paused" ? "blue" : "red"}
               bold
             >
-              Pipeline {state.status}.
+              Pipeline {state.status}.{state.status === "paused" ? " Resume with: cccp resume" : ""}
             </Text>
             {(() => {
               const totalCost = [...activities.values()].reduce((sum, a) => sum + a.totalCostUsd, 0);
@@ -268,7 +296,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
       </Box>
 
       {/* Event log (bottom) */}
-      <DetailLog events={events} chromeHeight={Math.max(state.stageOrder.length + 3, 8) + 3} />
+      <DetailLog events={events} chromeHeight={Math.max(stageListRows + 3, 8) + 3} />
     </Box>
   );
 }

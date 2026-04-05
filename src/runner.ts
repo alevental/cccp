@@ -12,7 +12,7 @@ import { openDatabase } from "./db.js";
 import { loadPipeline } from "./pipeline.js";
 import { runPgeCycle, dispatchEvaluatorWithFeedback, type PgeCycleOptions } from "./pge.js";
 import { interpolate, resolveTaskBody, loadAgentMarkdown, buildTaskContext, writeSystemPromptFile } from "./prompt.js";
-import { updatePipelineStatus, notifyPipelineComplete, launchScopedDashboard, isCmuxAvailable } from "./tui/cmux.js";
+import { updatePipelineStatus, notifyPipelineComplete, notifyPipelinePaused, launchScopedDashboard, isCmuxAvailable } from "./tui/cmux.js";
 import {
   createState,
   flattenStageEntries,
@@ -332,6 +332,7 @@ async function runPgeStage(
   const onProgress = async (eventType?: string, eventData?: Record<string, unknown>) => {
     if (eventType) {
       await saveStateWithEvent(state, eventType, stage.name, eventData);
+      ctx.parentOnProgress?.(eventType, stage.name, eventData);
     } else {
       await saveState(state);
     }
@@ -508,6 +509,7 @@ async function runAutoresearchStage(
   const onProgress = async (eventType?: string, eventData?: Record<string, unknown>) => {
     if (eventType) {
       await saveStateWithEvent(state, eventType, stage.name, eventData);
+      ctx.parentOnProgress?.(eventType, stage.name, eventData);
     } else {
       await saveState(state);
     }
@@ -1195,6 +1197,30 @@ async function runStages(
   let stageIndexOffset = 0;
 
   for (const step of plan) {
+    // --- Pause check: stop at clean breakpoint if requested ---
+    if (!ctx.dryRun) {
+      const db = await openDatabase(ctx.projectDir);
+      if (db.isPauseRequested(state.runId)) {
+        db.setPauseRequested(state.runId, false);
+        const nextStage = step.stages[0].name;
+        state.status = "paused";
+        state.completedAt = new Date().toISOString();
+        await saveStateWithEvent(state, "pipeline_paused", undefined, { nextStage });
+        getLogger(ctx).log(`\n  \u23F8 Pipeline paused before stage "${nextStage}"`);
+        notifyPipelinePaused(ctx.pipeline.name).catch(() => {});
+        return {
+          state,
+          pipelineResult: {
+            pipeline: ctx.pipeline.name,
+            project: ctx.project,
+            stages: results,
+            status: "passed",
+            durationMs: Date.now() - start,
+          },
+        };
+      }
+    }
+
     if (step.kind === "sequential") {
       const stage = step.stages[0];
 

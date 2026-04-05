@@ -264,6 +264,39 @@ export async function startMcpServer(): Promise<void> {
     },
   );
 
+  // --- cccp_pause ---
+  server.tool(
+    "cccp_pause",
+    "Request a running pipeline to pause at the next clean breakpoint (between stages). The pipeline will finish its current stage and stop. Resume later with `cccp resume`.",
+    {
+      run_id: z
+        .string()
+        .optional()
+        .describe("Run ID prefix (8+ chars). Omit if only one run exists."),
+    },
+    async ({ run_id }) => {
+      const result = await resolveRun(run_id);
+      if ("error" in result) return textResult(result.error);
+
+      const { state } = result.run;
+
+      if (state.status !== "running") {
+        return textResult(
+          `Cannot pause: pipeline is "${state.status}", not running.`,
+        );
+      }
+
+      const db = await openDatabase(process.cwd());
+      db.setPauseRequested(state.runId, true);
+      db.flush();
+
+      const short = state.runId.slice(0, 8);
+      return textResult(
+        `Pause requested for run ${short}. The pipeline will pause after the current stage completes.`,
+      );
+    },
+  );
+
   // --- cccp_logs ---
   server.tool(
     "cccp_logs",

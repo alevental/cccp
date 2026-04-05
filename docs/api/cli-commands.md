@@ -61,6 +61,7 @@ Variables are merged in this order (later overrides earlier):
 - Disabled when `--headless`, `--dry-run`, or `--no-tui` is set
 - When TUI is active, console output from agents is suppressed (`quiet: true`)
 - Detail log is keyboard-scrollable: Up/Down, PageUp/PageDown, Home/End
+- Press `p` to request a pause — the pipeline finishes the current stage and stops
 - Active agents panel shows only in-progress agents with elapsed timers
 - Sub-pipeline stages are shown inline with `├─` indentation; in cmux, depth-1 sub-pipelines also get their own split-pane dashboard
 - Stage/phase start events include model, effort, inputs, and output metadata
@@ -91,7 +92,7 @@ npx @alevental/cccp run -f pipelines/build-docs.yaml -p my-project --headless
 
 ### Exit codes
 
-- `0` -- pipeline passed
+- `0` -- pipeline passed or paused
 - `1` -- pipeline failed or errored
 
 ---
@@ -123,11 +124,13 @@ npx @alevental/cccp resume -p <name> -r <run-id-prefix> [options]
 
 ### Resume behavior
 
+Works for both interrupted/crashed runs and paused runs (via `p` key or `cccp_pause` MCP tool):
+
 1. Looks up the run by ID prefix from the SQLite database
 2. Finds the resume point (first non-passed, non-skipped stage)
 3. Re-loads the original pipeline YAML from the path recorded in state
 4. Skips already-completed stages
-5. Continues from the interrupted stage
+5. Continues from the interrupted/paused stage
 
 For PGE stages, resume includes the iteration number and sub-step, so a crashed generator or evaluator can be retried without restarting the entire PGE cycle.
 

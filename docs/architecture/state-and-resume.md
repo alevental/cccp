@@ -18,7 +18,7 @@ interface PipelineState {
   pipelineFile: string;    // path to pipeline YAML (for resume)
   startedAt: string;       // ISO timestamp
   completedAt?: string;    // set on finish
-  status: "running" | "passed" | "failed" | "error" | "interrupted";
+  status: "running" | "passed" | "failed" | "error" | "interrupted" | "paused";
   stages: Record<string, StageState>;
   stageOrder: string[];    // preserves YAML order
   gate?: GateInfo;         // active gate, if any
@@ -54,7 +54,9 @@ CREATE TABLE IF NOT EXISTS runs (
   stages_json TEXT NOT NULL,     -- JSON-serialized Record<string, StageState>
   stage_order_json TEXT NOT NULL, -- JSON-serialized string[]
   gate_json TEXT,                -- JSON-serialized GateInfo | null
-  project_dir TEXT
+  project_dir TEXT,
+  session_id TEXT,
+  pause_requested INTEGER DEFAULT 0  -- cross-process pause signal (v3)
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -82,7 +84,7 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 |-------|-------|--------|-----------|
 | `runner.ts` | `loadState` (resume) | `saveState`, `saveStateWithEvent` | Direct DB access via `state.ts` |
 | `pge.ts` | — | Mutates in-memory state via `updatePgeProgress`, `setStageArtifact` | State passed by reference; runner persists via `onProgress` callback |
-| `mcp-server.ts` | `listRuns`, `getRunByArtifactDir` | `saveState` (gate response only) | Direct DB access; calls `reload()` before reads for cross-process sync |
+| `mcp-server.ts` | `listRuns`, `getRunByArtifactDir` | `saveState` (gate response), `setPauseRequested` (pause) | Direct DB access; calls `reload()` before reads for cross-process sync |
 | `gate-watcher.ts` | `loadState` (polling every 5s) | — | Read-only; passes `reloadFromDisk: true` for cross-process sync. Calls `reclaimWasmMemory()` every ~15 min. |
 | `dashboard.tsx` | `loadState` (adaptive: 500ms active, 5s gate-idle), `getEvents` | — | Read-only; uses setTimeout chain with overlap guard |
 | `cli.ts` | `loadState` (resume, dashboard commands) | `saveState` (initial state for TUI) | Direct DB access |
@@ -97,6 +99,7 @@ State is saved after every transition in the runner and PGE engine:
 | `runner.ts` | Stage start | `status: "in_progress"` |
 | `runner.ts` | Stage complete | `status`, `durationMs`, `error` |
 | `runner.ts` | Pipeline finish | `status`, `completedAt` |
+| `runner.ts` | Pipeline paused | `status: "paused"`, `completedAt` |
 | `pge.ts` (via callback) | Planner done | `pgeStep: "planner_dispatched"`, task plan path |
 | `pge.ts` (via callback) | Contract done | `pgeStep: "contract_dispatched"`, contract path |
 | `pge.ts` (via callback) | Generator done | `pgeStep: "generator_dispatched"`, `iteration`, deliverable path |
@@ -109,7 +112,7 @@ The runner writes state; the MCP server, gate watcher, and dashboard read it. Sy
 
 - **Atomic flush**: `db.flush()` writes to a `.tmp` file, then renames. This prevents partial reads.
 - **Reload**: `db.reload()` re-reads the database file from disk into the in-memory sql.js instance. Readers call this before querying to pick up the runner's latest writes.
-- **No locking**: There is no file-level or row-level locking. In practice, only one writer (the runner) writes state at any given time. The MCP server only writes gate responses (`gate.status = "approved"/"rejected"`), which the gate watcher detects on its next poll.
+- **No locking**: There is no file-level or row-level locking. In practice, only one writer (the runner) writes state at any given time. The MCP server writes gate responses (`gate.status = "approved"/"rejected"`) and pause requests (`pause_requested` column). Pause uses a dedicated DB column (not the state JSON) to avoid write races with the runner.
 
 ### Gate response flow
 
@@ -131,13 +134,22 @@ The runner uses this to skip completed stages and restart from the right point. 
 
 The `resume` CLI command launches the inline TUI dashboard (via `startDashboard()` with `useEventBus={true}`) identically to `cccp run`, using `QuietLogger` to suppress raw console output. The `--headless` flag disables the TUI on resume just as it does on fresh runs.
 
+### Pause request flow
+
+1. User presses `p` in TUI or calls `cccp_pause` MCP tool
+2. The `pause_requested` column is set to `1` on the `runs` table (separate from state JSON to avoid write races)
+3. Runner checks `db.isPauseRequested(runId)` before each execution step in the main loop
+4. When detected: clears the flag, sets `status = "paused"` and `completedAt`, emits `pipeline_paused` event
+5. Runner returns early; user resumes with `cccp resume`
+
 ## State lifecycle
 
 1. **Created**: `createState()` called by the runner at pipeline start
 2. **Updated**: After every stage transition (see write points above)
-3. **Completed**: `finishPipeline()` sets `status` and `completedAt`
-4. **Resumed**: `findResumePoint()` scans for first non-completed stage
-5. **Garbage collected**: Never — old runs persist in the database until manually deleted
+3. **Paused**: Runner detects `pause_requested` flag, sets `status: "paused"` and `completedAt`
+4. **Completed**: `finishPipeline()` sets `status` and `completedAt`
+5. **Resumed**: `findResumePoint()` scans for first non-completed stage (works for both interrupted and paused pipelines)
+6. **Garbage collected**: Never — old runs persist in the database until manually deleted
 
 ## Clean reset (`--from`)
 

@@ -244,13 +244,24 @@ function CompactAgentRow({ activity, elapsed }: { activity: AgentActivity; elaps
   );
 }
 
+/** Check if an agent key matches any in_progress stage, including sub-pipeline children. */
+export function isAgentActive(agentKey: string, stages: Record<string, StageState>): boolean {
+  return Object.values(stages).some((s) => {
+    if (s.status === "in_progress" && agentKey.startsWith(s.name)) return true;
+    // Check sub-pipeline children.
+    if (s.type === "pipeline" && s.status === "in_progress" && s.children) {
+      return Object.values(s.children.stages).some(
+        (cs) => cs.status === "in_progress" && agentKey.startsWith(cs.name),
+      );
+    }
+    return false;
+  });
+}
+
 export function AgentActivityPanel({ activities, stages, dispatchStartTimes, now }: AgentActivityPanelProps) {
   // Filter to only agents with a corresponding in_progress stage.
   const activeEntries = [...activities.entries()].filter(([agentKey]) => {
-    // Agent keys are like "stage-name-generator" — match if any in_progress stage name is a prefix.
-    return Object.values(stages).some(
-      (s) => s.status === "in_progress" && agentKey.startsWith(s.name),
-    );
+    return isAgentActive(agentKey, stages);
   });
 
   if (activeEntries.length === 0) {

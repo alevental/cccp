@@ -84,6 +84,13 @@ const BAR = "\u2502";
 
 const MAX_PREVIEW_LINES = 15;
 
+/** Build a compact "[pipeline] stage: " prefix for child events. */
+function childPrefix(d: Record<string, unknown>): string {
+  const childStage = String(d.childStage ?? "?");
+  const childPipeline = d.childPipeline as string | undefined;
+  return `${childPipeline ? `[${childPipeline}] ` : ""}${childStage}: `;
+}
+
 /** Format a compact model · effort badge from event data. */
 function modelBadge(d: Record<string, unknown>): string {
   const parts: string[] = [];
@@ -291,6 +298,140 @@ export function formatDetailEvent(event: StateEvent): React.ReactNode[] {
       ];
     }
 
+    // --- Sub-pipeline PGE events (compact inline) ---
+
+    case "child_pge_planner_start": {
+      const prefix = childPrefix(d);
+      const agent = String(d.agent ?? "?");
+      return [
+        <Text key="cpps"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text color="yellow">{"\u25B6"} Planner [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text></Text>,
+      ];
+    }
+
+    case "child_pge_planner_done": {
+      const prefix = childPrefix(d);
+      return [
+        <Text key="cppd"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text dimColor>{"\u2713"} Task plan {"\u2192"} </Text><Text color="white">{String(d.taskPlanPath ?? "")}</Text></Text>,
+      ];
+    }
+
+    case "child_pge_contract_start": {
+      const prefix = childPrefix(d);
+      const agent = String(d.agent ?? "?");
+      return [
+        <Text key="cccs"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text color="yellow">{"\u25B6"} Contract [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text></Text>,
+      ];
+    }
+
+    case "child_pge_contract_done": {
+      const prefix = childPrefix(d);
+      return [
+        <Text key="cccd"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text dimColor>{"\u2713"} Contract {"\u2192"} </Text><Text color="white">{String(d.contractPath ?? "")}</Text></Text>,
+      ];
+    }
+
+    case "child_pge_generator_start": {
+      const prefix = childPrefix(d);
+      const agent = String(d.agent ?? "?");
+      const iter = String(d.iteration ?? "?");
+      const maxI = String(d.maxIterations ?? "?");
+      return [
+        <Text key="cpgs"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text color="yellow">{"\u25B6"} Generator [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text><Text color="yellow"> iter {iter}/{maxI}</Text></Text>,
+      ];
+    }
+
+    case "child_pge_evaluator_start": {
+      const prefix = childPrefix(d);
+      const agent = String(d.agent ?? "?");
+      const iter = String(d.iteration ?? "?");
+      const maxI = String(d.maxIterations ?? "?");
+      return [
+        <Text key="cpes"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text color="yellow">{"\u25B6"} Evaluator [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text><Text color="yellow"> iter {iter}/{maxI}</Text></Text>,
+      ];
+    }
+
+    case "child_pge_evaluation": {
+      const prefix = childPrefix(d);
+      const outcome = String(d.outcome ?? "?");
+      const iter = String(d.iteration ?? "?");
+      const maxI = String(d.maxIterations ?? "?");
+      const willRetry = d.willRetry as boolean | undefined;
+      if (outcome === "pass") {
+        return [
+          <Text key="cpev"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text color="green" bold>{"\u2714"} PASS (iter {iter}/{maxI})</Text></Text>,
+        ];
+      }
+      const suffix = willRetry ? " \u2014 retrying" : ` \u2014 exhausted`;
+      return [
+        <Text key="cpev"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text color="red">{"\u2717"} FAIL (iter {iter}/{maxI}){suffix}</Text></Text>,
+      ];
+    }
+
+    // Catch-all for other child PGE events (pge_start, generator_done, evaluator_done).
+    case "child_pge_start":
+    case "child_pge_generator_done":
+    case "child_pge_evaluator_done": {
+      // Suppress verbose intermediate events — the phase start/evaluation events are enough.
+      return [];
+    }
+
+    // --- Sub-pipeline autoresearch events (compact inline) ---
+
+    case "child_autoresearch_executor_start": {
+      const prefix = childPrefix(d);
+      const agent = String(d.agent ?? "?");
+      const iter = String(d.iteration ?? "?");
+      const maxI = d.maxIterations != null ? String(d.maxIterations) : "\u221E";
+      return [
+        <Text key="caes"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text color="yellow">{"\u25B6"} Executor [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text><Text color="yellow"> iter {iter}/{maxI}</Text></Text>,
+      ];
+    }
+
+    case "child_autoresearch_adjuster_start": {
+      const prefix = childPrefix(d);
+      const agent = String(d.agent ?? "?");
+      const iter = String(d.iteration ?? "?");
+      const maxI = d.maxIterations != null ? String(d.maxIterations) : "\u221E";
+      return [
+        <Text key="caas"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text color="yellow">{"\u25B6"} Adjuster [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text><Text color="yellow"> iter {iter}/{maxI}</Text></Text>,
+      ];
+    }
+
+    case "child_autoresearch_evaluator_start": {
+      const prefix = childPrefix(d);
+      const agent = String(d.agent ?? "?");
+      const iter = String(d.iteration ?? "?");
+      const maxI = d.maxIterations != null ? String(d.maxIterations) : "\u221E";
+      return [
+        <Text key="cares"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text color="yellow">{"\u25B6"} Evaluator [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text><Text color="yellow"> iter {iter}/{maxI}</Text></Text>,
+      ];
+    }
+
+    case "child_autoresearch_evaluation": {
+      const prefix = childPrefix(d);
+      const outcome = String(d.outcome ?? "?");
+      const iter = String(d.iteration ?? "?");
+      const maxI = d.maxIterations != null ? String(d.maxIterations) : "\u221E";
+      const willRetry = d.willRetry as boolean | undefined;
+      if (outcome === "pass") {
+        return [
+          <Text key="carev"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text color="green" bold>{"\u2714"} PASS (iter {iter}/{maxI})</Text></Text>,
+        ];
+      }
+      const suffix = willRetry ? " \u2014 retrying" : ` \u2014 exhausted`;
+      return [
+        <Text key="carev"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text color="red">{"\u2717"} FAIL (iter {iter}/{maxI}){suffix}</Text></Text>,
+      ];
+    }
+
+    // Suppress verbose autoresearch intermediate events.
+    case "child_autoresearch_start":
+    case "child_autoresearch_adjuster_done":
+    case "child_autoresearch_executor_done":
+    case "child_autoresearch_evaluator_done": {
+      return [];
+    }
+
     case "gate_pending":
       return [
         <Text key="gp"><Text dimColor>{time}</Text><Text color="blue">  {"\u23F8"} Gate pending: {event.stageName}</Text></Text>,
@@ -300,6 +441,13 @@ export function formatDetailEvent(event: StateEvent): React.ReactNode[] {
       return [
         <Text key="gr"><Text dimColor>{time}</Text><Text color="green">  {"\u2713"} Gate responded: {event.stageName}</Text></Text>,
       ];
+
+    case "pipeline_paused": {
+      const nextStage = d.nextStage as string | undefined;
+      return [
+        <Text key="pp"><Text dimColor>{time}</Text><Text color="blue" bold>  {"\u23F8"} Pipeline paused{nextStage ? ` (next: ${nextStage})` : ""}</Text></Text>,
+      ];
+    }
 
     case "pipeline_complete": {
       const status = d.status as string ?? "?";

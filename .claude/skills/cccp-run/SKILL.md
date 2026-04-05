@@ -94,7 +94,7 @@ Launches a standalone TUI dashboard. Can run in a separate terminal or cmux pane
 npx @alevental/cccp@latest mcp-server
 ```
 
-Exposes tools over stdio: `cccp_session_id`, `cccp_runs`, `cccp_status`, `cccp_gate_respond`, `cccp_gate_review`, `cccp_logs`, `cccp_artifacts`.
+Exposes tools over stdio: `cccp_session_id`, `cccp_runs`, `cccp_status`, `cccp_gate_respond`, `cccp_gate_review`, `cccp_pause`, `cccp_logs`, `cccp_artifacts`.
 
 Register in `.mcp.json`:
 ```json
@@ -133,6 +133,18 @@ Updates `/cccp-run` and `/cccp-pipeline` skills to the version shipped with the 
 ```bash
 npx @alevental/cccp@latest examples [-d <dir>] [--agents-only] [--pipelines-only]
 ```
+
+## Pausing a Pipeline
+
+To pause a running pipeline at the next clean breakpoint:
+
+**Via TUI:** Press `p` in the dashboard. Shows "Pause requested — will pause after current stage". The pipeline finishes the current stage and stops with `status: "paused"`.
+
+**Via MCP:** Call `cccp_pause` tool with optional `run_id`.
+
+**Resume:** Standard `cccp resume` picks up from the next pending stage.
+
+Clean breakpoints: between sequential stages, after parallel groups complete, after sub-pipelines complete, after PGE/autoresearch cycles finish.
 
 ## Gate Interaction
 

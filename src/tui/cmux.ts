@@ -122,6 +122,14 @@ export async function launchScopedDashboard(
   return surfaceRef;
 }
 
+/** Notify that the pipeline has been paused. */
+export async function notifyPipelinePaused(
+  pipelineName: string,
+): Promise<void> {
+  if (!isCmuxAvailable()) return;
+  await notify("Pipeline Paused", `${pipelineName}: paused at clean breakpoint`);
+}
+
 /** Notify that the pipeline has completed. */
 export async function notifyPipelineComplete(
   pipelineName: string,

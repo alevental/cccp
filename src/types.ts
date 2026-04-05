@@ -268,7 +268,7 @@ export interface PipelineState {
   /** ISO timestamp when the run completed (set on finish). */
   completedAt?: string;
   /** Overall status. */
-  status: "running" | "passed" | "failed" | "error" | "interrupted";
+  status: "running" | "passed" | "failed" | "error" | "interrupted" | "paused";
   /** Per-stage state, keyed by stage name. */
   stages: Record<string, StageState>;
   /** Stage execution order (preserves YAML order). */

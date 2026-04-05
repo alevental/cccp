@@ -1,6 +1,6 @@
 # MCP Tools
 
-The CCCP MCP server exposes seven tools for interacting with pipeline runs from Claude Code. The server runs on stdio and is started via `cccp mcp-server`. It also includes a background gate notifier that proactively pushes gate notifications via channels (preferred) or elicitation forms (fallback).
+The CCCP MCP server exposes eight tools for interacting with pipeline runs from Claude Code. The server runs on stdio and is started via `cccp mcp-server`. It also includes a background gate notifier that proactively pushes gate notifications via channels (preferred) or elicitation forms (fallback).
 
 **Source files:**
 - [`src/mcp/mcp-server.ts`](../../src/mcp/mcp-server.ts) -- MCP server and tool definitions
@@ -227,6 +227,52 @@ No pending gate on this run.
 
 ---
 
+## `cccp_pause`
+
+Request a running pipeline to pause at the next clean breakpoint (between stages). The pipeline finishes its current stage and stops with `status: "paused"`. Resume later with `cccp resume`.
+
+### Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `run_id` | `string` | No | Run ID prefix (8+ chars). Omit if only one run exists. |
+
+### Behavior
+
+1. Resolves the run
+2. Validates the pipeline is currently `"running"`
+3. Sets the `pause_requested` flag in the database (a dedicated column, separate from the state JSON to avoid write races with the runner)
+4. The runner checks this flag before each execution step and pauses at the next clean breakpoint
+
+### Clean breakpoints
+
+- **Between sequential stages**: pause checked before each stage
+- **After parallel groups**: all stages in the group complete, then pause is checked
+- **After sub-pipelines**: the entire sub-pipeline completes before pause is checked
+- **After PGE/autoresearch cycles**: the full cycle finishes (not mid-iteration)
+
+### Response
+
+```
+Pause requested for run a1b2c3d4. The pipeline will pause after the current stage completes.
+```
+
+### Error cases
+
+```
+Cannot pause: pipeline is "passed", not running.
+```
+
+### Resume
+
+```bash
+cccp resume -p my-project -r a1b2c3d4
+```
+
+Standard resume picks up from the first pending stage after the pause point.
+
+---
+
 ## `cccp_logs`
 
 View recent agent activity logs for a pipeline run.
@@ -334,7 +380,8 @@ When the MCP server is registered, the typical flow is:
 
 1. **Get session ID:** `cccp_session_id` -- **always** pass this as `--session-id` when starting pipelines to prevent duplicate gate notifications
 2. **Automatic:** The gate notifier detects pending gates and pushes via channel notification (or elicitation form) -- no manual action needed
-3. **Manual fallback:** If automatic notification is unavailable:
+3. **Pause:** `cccp_pause` to pause a running pipeline at the next clean breakpoint
+4. **Manual fallback:** If automatic notification is unavailable:
    1. **Check status:** `cccp_runs` to see active runs
    2. **Get details:** `cccp_status` with the run ID to see stage progress and pending gates
    3. **Review gate context:** `cccp_gate_review` to see artifacts, evaluations, contract, and pipeline status

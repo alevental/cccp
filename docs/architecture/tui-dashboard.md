@@ -145,7 +145,7 @@ When scrolled up, shows `[scrolled — press End to resume]` indicator. When at 
 
 Stage start events include metadata: agent name, model, effort, inputs, and output. PGE phase starts show model/effort badges: `▶ Generator [architect] sonnet · high iter 1/3`.
 
-Sub-pipeline child events render as `↳ [child-pipeline] stage: started/completed`.
+Sub-pipeline child events render as `↳ [child-pipeline] stage: started/completed`. Child PGE/autoresearch phase events also render inline with `↳` prefix showing planner/generator/evaluator starts and PASS/FAIL results.
 
 | Event Type | Display | Color |
 |------------|---------|-------|
@@ -157,8 +157,20 @@ Sub-pipeline child events render as `↳ [child-pipeline] stage: started/complet
 | `pge_evaluation` | `✔ PASS` or `✗ FAIL` with artifact preview | green/red |
 | `child_stage_start` | `↳ [pipeline] stage: started` | yellow |
 | `child_stage_complete` | `↳ [pipeline] stage: status` | green/red |
+| `child_pge_*` | `↳ [pipeline] stage: ▶ Phase [agent]` / `✔ PASS` / `✗ FAIL` | cyan/green/red |
 | `gate_pending` | `⏸ Gate pending: name` | blue |
+| `pipeline_paused` | `⏸ Pipeline paused (next: stage)` | blue |
 | `pipeline_complete` | `═ Pipeline status` | green/red |
+
+### Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Scroll detail log |
+| `PgUp` / `PgDn` | Page scroll detail log |
+| `Home` / `g` | Jump to top |
+| `End` / `G` | Jump to bottom (auto-scroll) |
+| `p` | Request pipeline pause at next clean breakpoint |
 
 ## Polling and Update Strategy
 
