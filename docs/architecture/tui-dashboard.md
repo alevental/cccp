@@ -150,7 +150,7 @@ Sub-pipeline child events render as `↳ [child-pipeline] stage: started/complet
 | Event Type | Display | Color |
 |------------|---------|-------|
 | `stage_start` | `▶ Started: name (type)` + metadata lines | yellow |
-| `stage_complete` | `✓ Completed: name status (Xs)` | green/red |
+| `stage_complete` | `✓ Completed: name status (Xs)` or `✗ name: error — message` | green/red |
 | `pge_planner_start` | `┌─ PGE: name` + `▶ Planner [agent] model · effort` | cyan/yellow |
 | `pge_generator_start` | `▶ Generator [agent] model · effort iter X/Y` | yellow |
 | `pge_evaluator_start` | `▶ Evaluator [agent] model · effort iter X/Y` | yellow |

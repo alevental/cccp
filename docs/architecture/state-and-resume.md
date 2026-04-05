@@ -97,7 +97,7 @@ State is saved after every transition in the runner and PGE engine:
 |----------|-----------|----------------|
 | `runner.ts` | Pipeline start | Full state created |
 | `runner.ts` | Stage start | `status: "in_progress"` |
-| `runner.ts` | Stage complete | `status`, `durationMs`, `error` |
+| `runner.ts` | Stage complete | `status`, `durationMs`, `error` (emits `stage_complete` event on both success and error paths) |
 | `runner.ts` | Pipeline finish | `status`, `completedAt` |
 | `runner.ts` | Pipeline paused | `status: "paused"`, `completedAt` |
 | `pge.ts` (via callback) | Planner done | `pgeStep: "planner_dispatched"`, task plan path |

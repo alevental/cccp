@@ -50,7 +50,7 @@ Every stage type supports these base fields:
 | `task_file` | string | No | Path to file containing task (mutually exclusive with `task`) |
 | `mcp_profile` | string | No | Named MCP profile from `cccp.yaml` |
 | `variables` | map | No | Stage-level variable overrides |
-| `outputs` | map | No | Structured outputs: keys are variable names, values are descriptions for the agent |
+| `outputs` | map | No | Structured outputs: keys are variable names, values are descriptions for the agent. For PGE stages, the generator writes `.outputs.json` and the evaluator verifies it exists |
 | `when` | string or list | No | Condition(s) — stage is skipped if any condition is not met |
 
 `task` and `task_file` cannot both be set on the same stage.
@@ -493,6 +493,8 @@ Stages can declare structured outputs. The runner tells the agent to write `.out
 ```
 
 After the stage passes, the runner reads `{artifactDir}/{stageName}/.outputs.json` and validates all keys. Output values become variables: `{research.decision}`, `{research.risk_level}`.
+
+Works with all stage types including PGE. For PGE stages, the **generator** receives the outputs path and keys in its prompt, and the **evaluator** receives guidance to verify `.outputs.json` exists with all declared keys (missing file = automatic FAIL).
 
 ### `when:` — Conditional stage execution
 

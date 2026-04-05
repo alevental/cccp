@@ -246,7 +246,10 @@ export interface StageBase {
   mcp_profile?: string;
   /** Stage-level variable overrides. */
   variables?: Record<string, string>;
-  /** Declared structured outputs — keys are variable names, values are descriptions for the agent prompt. */
+  /** Declared structured outputs — keys are variable names, values are descriptions for the agent prompt.
+   *  For agent stages, the agent receives outputsPath/outputKeys in its prompt.
+   *  For PGE stages, the generator receives the outputs instructions and the evaluator
+   *  receives guidance to verify .outputs.json exists with all declared keys. */
   outputs?: Record<string, string>;
   /** Condition(s) for running this stage. If not met, stage is skipped. */
   when?: string | string[];

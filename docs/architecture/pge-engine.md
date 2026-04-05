@@ -31,12 +31,12 @@ runPgeCycle(stage, ctx)
         +-- for iter = 1..maxIter:
               |
               +-- writeSystemPromptFile(genMarkdown)
-              +-- buildTaskContext(task, contract, task-plan, output, prevEval, iter)
+              +-- buildTaskContext(task, contract, task-plan, output, prevEval, iter, outputsPath?, outputKeys?)
               +-- dispatchAgent(generator) -> check exit code, check output exists
               +-- saveState(generator_dispatched)
               |
               +-- writeSystemPromptFile(evalMarkdown)
-              +-- buildTaskContext(evaluate, contract, deliverable, evalOutput, iter)
+              +-- buildTaskContext(evaluate, contract, deliverable, evalOutput, iter, outputsGuidance?)
               +-- dispatchAgent(evaluator in evaluation mode) -> check exit code, check output exists
               +-- saveState(evaluator_dispatched)
               |
@@ -62,6 +62,8 @@ runPgeCycle(stage, ctx)
 5. **The planner runs once, before the generate-evaluate loop.** The planner produces a task plan that feeds into both the contract writer and the generator. The planner's user prompt explicitly frames the task as planning (not execution) with bookended instructions -- an opening framing that identifies the agent as a planner producing work for a separate generator, and a closing reminder to not produce the deliverable itself.
 
 6. **The evaluator serves dual roles.** In contract mode, it reads the task plan and writes a contract with verifiable acceptance criteria. In evaluation mode, it reads the contract and deliverable and writes an evaluation.
+
+7. **Structured outputs are handled by generator + evaluator.** When a PGE stage declares `outputs:`, the generator receives `outputsPath` and `outputKeys` in its task context (same mechanism as agent stages). The evaluator receives additional guidance requiring it to verify `.outputs.json` exists and contains all declared keys — a missing or incomplete file causes the evaluation to FAIL, triggering a retry within the iteration budget.
 
 ## Evaluation regex
 
@@ -139,5 +141,6 @@ When `on_fail` is triggered (max iterations exhausted with FAIL):
     contract.md           # written by evaluator (contract mode)
     evaluation-1.md       # written by evaluator (evaluation mode) on iteration 1
     evaluation-2.md       # written by evaluator on iteration 2 (if retry)
+    .outputs.json         # written by generator (only if stage declares outputs:)
   {deliverable}           # written by generator (path from YAML)
 ```

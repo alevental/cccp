@@ -437,6 +437,8 @@ Declare key-value outputs the agent should produce. The runner injects instructi
 
 After the stage passes, the runner reads `{artifactDir}/{stageName}/.outputs.json`, validates all declared keys are present, and stores the values. If the file is missing or incomplete, the stage errors.
 
+**PGE stages with outputs:** For PGE stages, the **generator** receives the outputs instructions (path and keys) in its task context. The **evaluator** receives additional guidance requiring it to verify `.outputs.json` exists and contains all declared keys — a missing or incomplete outputs file causes the evaluation to FAIL, triggering a retry.
+
 Output values become available as variables for downstream stages: `{research.decision}`, `{research.risk_level}`, `{research.summary}`.
 
 ### Conditional execution (`when:`)

@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { mkdir, readFile } from "node:fs/promises";
 import { activityBus } from "./activity-bus.js";
 import { DefaultAgentDispatcher, type AgentDispatcher } from "./dispatcher.js";
@@ -68,6 +68,11 @@ export async function runPgeCycle(
   const stageDir = resolve(ctx.artifactDir, stage.name);
   const contractPath = resolve(stageDir, "contract.md");
   const taskPlanPath = resolve(stageDir, "task-plan.md");
+
+  // Compute outputs path if this stage declares structured outputs.
+  const outputsPath = stage.outputs && Object.keys(stage.outputs).length > 0
+    ? join(stageDir, ".outputs.json")
+    : undefined;
 
   await mkdir(stageDir, { recursive: true });
 
@@ -294,6 +299,8 @@ export async function runPgeCycle(
       gateFeedback: options?.gateFeedbackPath,
       iteration: iter,
       maxIterations: maxIter,
+      outputsPath,
+      outputKeys: stage.outputs,
     });
 
     getLogger(ctx).log(`    dispatching generator: ${stage.generator.agent}`);
@@ -337,6 +344,20 @@ export async function runPgeCycle(
     // --- Step 3: Dispatch evaluator ---
     const evalSystemFile = await writeSystemPromptFile(evalAgent.markdown, ctx.tempTracker);
     const evalInputs = mergeInputs(stage.inputs, stage.evaluator.inputs, vars, [deliverable]);
+
+    // If the stage declares structured outputs, instruct the evaluator to verify
+    // that .outputs.json exists and contains the required keys.
+    let evalOutputsGuidance: string | undefined;
+    if (outputsPath && stage.outputs && Object.keys(stage.outputs).length > 0) {
+      const keys = Object.keys(stage.outputs);
+      evalOutputsGuidance = [
+        `**Structured Outputs Check (REQUIRED):** This stage declares structured outputs.`,
+        `The generator must have written a JSON file at: ${outputsPath}`,
+        `The file must be a flat JSON object containing these keys: ${keys.map(k => `"${k}"`).join(", ")}.`,
+        `If the file does not exist or is missing required keys, the evaluation MUST FAIL regardless of other criteria.`,
+      ].join("\n");
+    }
+
     const evalPrompt = buildTaskContext({
       task: `Evaluate the deliverable against the contract for: ${stage.name}`,
       contractPath: effectiveContractPath,
@@ -345,6 +366,7 @@ export async function runPgeCycle(
       iteration: iter,
       maxIterations: maxIter,
       evaluatorFormat: true,
+      guidance: evalOutputsGuidance,
     });
 
     getLogger(ctx).log(`    dispatching evaluator: ${stage.evaluator.agent}`);

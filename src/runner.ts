@@ -1039,7 +1039,16 @@ async function runStageWithLifecycle(
 
     if (!ctx.dryRun) {
       updateStageStatus(state, stage.name, "error", { error: message });
-      await saveState(state);
+      await saveStateWithEvent(state, "stage_complete", stage.name, {
+        status: "error",
+        error: message,
+        durationMs: result.durationMs,
+      });
+      ctx.parentOnProgress?.("stage_complete", stage.name, {
+        status: "error",
+        error: message,
+        durationMs: result.durationMs,
+      });
     }
 
     getLogger(ctx).error(`  ✗ ${stage.name}: error — ${message}`);

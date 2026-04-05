@@ -785,3 +785,242 @@ describe("PGE cycle with PgeCycleOptions", () => {
     expect(captured[3].effort).toBe("low");
   });
 });
+
+// ---------------------------------------------------------------------------
+// PGE stages with structured outputs
+// ---------------------------------------------------------------------------
+
+describe("PGE stages with structured outputs", () => {
+  it("passes outputsPath and outputKeys to generator prompt when stage declares outputs", async () => {
+    const dir = tmpPath();
+    const artifactDir = join(dir, "artifacts");
+    const agentsDir = join(dir, "agents");
+    await mkdir(agentsDir, { recursive: true });
+    await writeFile(join(agentsDir, "planner.md"), "# Planner", "utf-8");
+    await writeFile(join(agentsDir, "gen.md"), "# Generator", "utf-8");
+    await writeFile(join(agentsDir, "eval.md"), "# Evaluator", "utf-8");
+
+    const dispatches: { agentName?: string; prompt: string }[] = [];
+    let count = 0;
+    let evalIndex = 0;
+
+    const trackingDispatcher: AgentDispatcher = {
+      async dispatch(opts: DispatchOptions): Promise<AgentResult> {
+        count++;
+        dispatches.push({ agentName: opts.agentName, prompt: opts.userPrompt });
+        if (opts.expectedOutput) {
+          await mkdir(join(opts.expectedOutput, ".."), { recursive: true }).catch(() => {});
+          if (count === 1) {
+            await writeFile(opts.expectedOutput, "# Task Plan\n\n1. Do it\n", "utf-8");
+          } else if (count === 2) {
+            await writeFile(opts.expectedOutput, "## Contract\n\n### Criteria\n\n1. OK\n", "utf-8");
+          } else {
+            const geIndex = count - 2;
+            if (geIndex % 2 === 1) {
+              // Generator — also write .outputs.json
+              await writeFile(opts.expectedOutput, "# Output\n", "utf-8");
+              const stageDir = join(artifactDir, "outputs-test");
+              await mkdir(stageDir, { recursive: true });
+              await writeFile(
+                join(stageDir, ".outputs.json"),
+                JSON.stringify({ has_issues: "no" }),
+                "utf-8",
+              );
+            } else {
+              await writeFile(opts.expectedOutput, "### Overall: PASS\n", "utf-8");
+            }
+          }
+        }
+        return { exitCode: 0, outputPath: opts.expectedOutput, outputExists: true, durationMs: 100 };
+      },
+    };
+
+    const { runPgeCycle } = await import("../src/pge.js");
+
+    const stage: PgeStage = {
+      name: "outputs-test",
+      type: "pge",
+      planner: { agent: "agents/planner.md" },
+      generator: { agent: "agents/gen.md" },
+      evaluator: { agent: "agents/eval.md" },
+      contract: {
+        deliverable: "artifacts/outputs-test/output.md",
+        max_iterations: 2,
+      },
+      outputs: {
+        has_issues: "yes if the review found issues, no if clean",
+      },
+    };
+
+    const ctx: RunContext = {
+      project: "test",
+      projectDir: dir,
+      artifactDir: artifactDir,
+      pipelineFile: "test.yaml",
+      pipeline: { name: "test", stages: [stage] },
+      dryRun: false,
+      variables: { project: "test", project_dir: dir, artifact_dir: artifactDir, pipeline_name: "test" },
+      agentSearchPaths: [agentsDir],
+      dispatcher: trackingDispatcher,
+    };
+
+    const state = createState("test", "test", "test.yaml", [stage], artifactDir);
+    const result = await runPgeCycle(stage, ctx, state);
+
+    expect(result.outcome).toBe("pass");
+
+    // Generator prompt (dispatch 3) should contain structured outputs instructions
+    const genPrompt = dispatches[2].prompt;
+    expect(genPrompt).toContain("Structured Outputs");
+    expect(genPrompt).toContain(".outputs.json");
+    expect(genPrompt).toContain("has_issues");
+  });
+
+  it("injects outputs verification guidance into evaluator prompt", async () => {
+    const dir = tmpPath();
+    const artifactDir = join(dir, "artifacts");
+    const agentsDir = join(dir, "agents");
+    await mkdir(agentsDir, { recursive: true });
+    await writeFile(join(agentsDir, "planner.md"), "# Planner", "utf-8");
+    await writeFile(join(agentsDir, "gen.md"), "# Generator", "utf-8");
+    await writeFile(join(agentsDir, "eval.md"), "# Evaluator", "utf-8");
+
+    const dispatches: { agentName?: string; prompt: string }[] = [];
+    let count = 0;
+
+    const trackingDispatcher: AgentDispatcher = {
+      async dispatch(opts: DispatchOptions): Promise<AgentResult> {
+        count++;
+        dispatches.push({ agentName: opts.agentName, prompt: opts.userPrompt });
+        if (opts.expectedOutput) {
+          await mkdir(join(opts.expectedOutput, ".."), { recursive: true }).catch(() => {});
+          if (count === 1) {
+            await writeFile(opts.expectedOutput, "# Task Plan\n\n1. Do it\n", "utf-8");
+          } else if (count === 2) {
+            await writeFile(opts.expectedOutput, "## Contract\n\n### Criteria\n\n1. OK\n", "utf-8");
+          } else {
+            const geIndex = count - 2;
+            if (geIndex % 2 === 1) {
+              await writeFile(opts.expectedOutput, "# Output\n", "utf-8");
+            } else {
+              await writeFile(opts.expectedOutput, "### Overall: PASS\n", "utf-8");
+            }
+          }
+        }
+        return { exitCode: 0, outputPath: opts.expectedOutput, outputExists: true, durationMs: 100 };
+      },
+    };
+
+    const { runPgeCycle } = await import("../src/pge.js");
+
+    const stage: PgeStage = {
+      name: "eval-outputs-check",
+      type: "pge",
+      planner: { agent: "agents/planner.md" },
+      generator: { agent: "agents/gen.md" },
+      evaluator: { agent: "agents/eval.md" },
+      contract: {
+        deliverable: "artifacts/eval-outputs-check/output.md",
+        max_iterations: 2,
+      },
+      outputs: {
+        has_issues: "yes if the review found issues, no if clean",
+      },
+    };
+
+    const ctx: RunContext = {
+      project: "test",
+      projectDir: dir,
+      artifactDir: artifactDir,
+      pipelineFile: "test.yaml",
+      pipeline: { name: "test", stages: [stage] },
+      dryRun: false,
+      variables: { project: "test", project_dir: dir, artifact_dir: artifactDir, pipeline_name: "test" },
+      agentSearchPaths: [agentsDir],
+      dispatcher: trackingDispatcher,
+    };
+
+    const state = createState("test", "test", "test.yaml", [stage], artifactDir);
+    await runPgeCycle(stage, ctx, state);
+
+    // Evaluator prompt (dispatch 4) should contain outputs verification guidance
+    const evalPrompt = dispatches[3].prompt;
+    expect(evalPrompt).toContain("Structured Outputs Check");
+    expect(evalPrompt).toContain(".outputs.json");
+    expect(evalPrompt).toContain("has_issues");
+    expect(evalPrompt).toContain("MUST FAIL");
+  });
+
+  it("does not inject outputs instructions when stage has no outputs", async () => {
+    const dir = tmpPath();
+    const artifactDir = join(dir, "artifacts");
+    const agentsDir = join(dir, "agents");
+    await mkdir(agentsDir, { recursive: true });
+    await writeFile(join(agentsDir, "planner.md"), "# Planner", "utf-8");
+    await writeFile(join(agentsDir, "gen.md"), "# Generator", "utf-8");
+    await writeFile(join(agentsDir, "eval.md"), "# Evaluator", "utf-8");
+
+    const dispatches: { agentName?: string; prompt: string }[] = [];
+    let count = 0;
+
+    const trackingDispatcher: AgentDispatcher = {
+      async dispatch(opts: DispatchOptions): Promise<AgentResult> {
+        count++;
+        dispatches.push({ agentName: opts.agentName, prompt: opts.userPrompt });
+        if (opts.expectedOutput) {
+          await mkdir(join(opts.expectedOutput, ".."), { recursive: true }).catch(() => {});
+          if (count === 1) {
+            await writeFile(opts.expectedOutput, "# Task Plan\n\n1. Do it\n", "utf-8");
+          } else if (count === 2) {
+            await writeFile(opts.expectedOutput, "## Contract\n\n### Criteria\n\n1. OK\n", "utf-8");
+          } else {
+            const geIndex = count - 2;
+            if (geIndex % 2 === 1) {
+              await writeFile(opts.expectedOutput, "# Output\n", "utf-8");
+            } else {
+              await writeFile(opts.expectedOutput, "### Overall: PASS\n", "utf-8");
+            }
+          }
+        }
+        return { exitCode: 0, outputPath: opts.expectedOutput, outputExists: true, durationMs: 100 };
+      },
+    };
+
+    const { runPgeCycle } = await import("../src/pge.js");
+
+    const stage: PgeStage = {
+      name: "no-outputs",
+      type: "pge",
+      planner: { agent: "agents/planner.md" },
+      generator: { agent: "agents/gen.md" },
+      evaluator: { agent: "agents/eval.md" },
+      contract: {
+        deliverable: "artifacts/no-outputs/output.md",
+        max_iterations: 2,
+      },
+      // No outputs declared
+    };
+
+    const ctx: RunContext = {
+      project: "test",
+      projectDir: dir,
+      artifactDir: artifactDir,
+      pipelineFile: "test.yaml",
+      pipeline: { name: "test", stages: [stage] },
+      dryRun: false,
+      variables: { project: "test", project_dir: dir, artifact_dir: artifactDir, pipeline_name: "test" },
+      agentSearchPaths: [agentsDir],
+      dispatcher: trackingDispatcher,
+    };
+
+    const state = createState("test", "test", "test.yaml", [stage], artifactDir);
+    await runPgeCycle(stage, ctx, state);
+
+    // Neither generator nor evaluator should mention outputs
+    const genPrompt = dispatches[2].prompt;
+    const evalPrompt = dispatches[3].prompt;
+    expect(genPrompt).not.toContain("Structured Outputs");
+    expect(genPrompt).not.toContain(".outputs.json");
+    expect(evalPrompt).not.toContain("Structured Outputs Check");
+  });
+});
