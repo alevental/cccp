@@ -229,6 +229,9 @@ export function buildTaskContext(ctx: TaskContext): string {
     lines.push("");
   }
 
+  // Repeat task at the bottom so it sandwiches all context
+  lines.push(`# Reminder: Your Task\n`, ctx.task, "");
+
   return lines.join("\n");
 }
 

@@ -286,6 +286,21 @@ describe("buildTaskContext", () => {
     expect(result).not.toContain("Gate Feedback");
   });
 
+  it("repeats the task at the bottom of the prompt", () => {
+    const result = buildTaskContext({
+      task: "Summarize the project.",
+      inputs: ["src/main.ts"],
+      output: "docs/summary.md",
+    });
+    const firstIdx = result.indexOf("# Task");
+    const lastIdx = result.lastIndexOf("# Reminder: Your Task");
+    expect(firstIdx).toBe(0);
+    expect(lastIdx).toBeGreaterThan(firstIdx);
+    // The reminder section should contain the task text
+    const reminder = result.slice(lastIdx);
+    expect(reminder).toContain("Summarize the project.");
+  });
+
   it("includes both gate feedback and previous evaluation when both are set", () => {
     const result = buildTaskContext({
       task: "Fix the issues.",
