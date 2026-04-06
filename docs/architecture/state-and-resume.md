@@ -27,10 +27,10 @@ interface PipelineState {
 
 interface StageState {
   name: string;
-  type: string;            // "agent" | "pge" | "human_gate" | "autoresearch" | "pipeline"
+  type: string;            // "agent" | "pge" | "ge" | "human_gate" | "autoresearch" | "pipeline" | "loop"
   status: StageStatus;     // pending | in_progress | passed | failed | skipped | error
-  iteration?: number;      // PGE: current iteration (1-based)
-  pgeStep?: PgeStep;       // PGE: last completed sub-step within iteration
+  iteration?: number;      // PGE/GE/loop: current iteration (1-based)
+  pgeStep?: PgeStep;       // PGE/GE/loop: last completed sub-step within iteration
   artifacts?: Record<string, string>;  // key → absolute path
   outputs?: Record<string, string>;    // collected structured outputs (key → value)
   durationMs?: number;

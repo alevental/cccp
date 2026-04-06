@@ -56,6 +56,7 @@ const StageEntrySchema = z.union([StageSchema, ParallelGroupSchema]);
 const StageSchema = z.discriminatedUnion("type", [
   AgentStageSchema,
   PgeStageSchema,
+  GeStageSchema,
   HumanGateStageSchema,
   AutoresearchStageSchema,
   PipelineStageSchema,
@@ -63,7 +64,7 @@ const StageSchema = z.discriminatedUnion("type", [
 ]);
 ```
 
-The `type` field is the discriminator. Valid values: `"agent"`, `"pge"`, `"human_gate"`, `"autoresearch"`, `"pipeline"`, `"loop"`.
+The `type` field is the discriminator. Valid values: `"agent"`, `"pge"`, `"ge"`, `"human_gate"`, `"autoresearch"`, `"pipeline"`, `"loop"`.
 
 ### ParallelGroupSchema
 
@@ -145,6 +146,34 @@ const PgeStageSchema = z.object({
   }),
   on_fail: z.enum(["stop", "human_gate", "skip"]).optional(),
   variables: z.record(z.string()).optional(),
+});
+```
+
+### GeStageSchema
+
+```typescript
+const GeStageSchema = z.object({
+  name: z.string(),
+  task: z.string().optional(),
+  task_file: z.string().optional(),
+  type: z.literal("ge"),
+  mcp_profile: z.string().optional(),
+  model: ModelSchema,
+  effort: EffortSchema,
+  inputs: z.array(z.string()).optional(),
+  generator: PgeAgentConfigSchema,
+  evaluator: PgeAgentConfigSchema,
+  contract: z.object({
+    deliverable: z.string(),
+    template: z.string().optional(),
+    guidance: z.string().optional(),
+    max_iterations: z.number().int().min(1).max(10),
+  }),
+  on_fail: z.enum(["stop", "human_gate", "skip"]).optional(),
+  human_review: z.boolean().optional(),
+  variables: z.record(z.string()).optional(),
+  outputs: OutputsSchema,
+  when: WhenSchema,
 });
 ```
 
@@ -274,7 +303,7 @@ export function isParallelGroup(entry: StageEntry): entry is ParallelGroup;
 ### Stage (discriminated union)
 
 ```typescript
-export type Stage = AgentStage | PgeStage | HumanGateStage | AutoresearchStage | PipelineStage | LoopStage;
+export type Stage = AgentStage | PgeStage | GeStage | HumanGateStage | AutoresearchStage | PipelineStage | LoopStage;
 ```
 
 ### StageBase (shared fields)
@@ -399,6 +428,48 @@ export interface PgeStage extends StageBase {
 | `max_iterations` | `number` | Yes | 1-10, integer | Maximum retry iterations |
 | `template` | `string` | No | -- | Structural guide for the evaluator when writing the contract |
 | `guidance` | `string` | No | -- | Free-form guidance for planner and contract writer |
+
+### GeStage
+
+```typescript
+export interface GeStage extends StageBase {
+  type: "ge";
+  inputs?: string[];
+  model?: string;
+  effort?: EffortLevel;
+  generator: PgeAgentConfig;
+  evaluator: PgeAgentConfig;
+  contract: {
+    deliverable: string;
+    template?: string;
+    guidance?: string;
+    max_iterations: number;
+  };
+  on_fail?: EscalationStrategy;
+  human_review?: boolean;
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"ge"` | Yes | Stage type discriminator |
+| `inputs` | `string[]` | No | Stage-level input files shared across all agents |
+| `model` | `string` | No | Stage-level model default (inherited by sub-agents unless overridden) |
+| `effort` | `EffortLevel` | No | Stage-level effort default (inherited by sub-agents unless overridden) |
+| `generator` | `PgeAgentConfig` | Yes | Generator agent configuration |
+| `evaluator` | `PgeAgentConfig` | Yes | Evaluator agent configuration |
+| `contract` | object | Yes | Contract specification (same fields as PGE) |
+| `on_fail` | `EscalationStrategy` | No | What to do when max iterations fail (default: `"stop"`) |
+| `human_review` | `boolean` | No | Fire a human review gate after completion |
+
+#### Contract fields
+
+| Field | Type | Required | Constraints | Description |
+|-------|------|----------|-------------|-------------|
+| `deliverable` | `string` | Yes | -- | Path where generator writes output |
+| `max_iterations` | `number` | Yes | 1-10, integer | Maximum retry iterations |
+| `template` | `string` | No | -- | Structural guide for the evaluator when writing the contract |
+| `guidance` | `string` | No | -- | Free-form guidance for contract writer |
 
 ### HumanGateStage
 
@@ -573,6 +644,21 @@ export interface LoopResult {
 }
 ```
 
+### GeResult
+
+Returned by a full GE cycle:
+
+```typescript
+export interface GeResult {
+  outcome: "pass" | "fail" | "error";
+  iterations: number;
+  maxIterations: number;
+  evaluationPath?: string;
+  contractPath?: string;
+  durationMs: number;
+}
+```
+
 ### StageResult
 
 Returned by a single stage execution:
@@ -581,7 +667,7 @@ Returned by a single stage execution:
 export interface StageResult {
   stageName: string;
   status: "passed" | "failed" | "skipped" | "error";
-  result?: AgentResult | PgeResult | LoopResult;
+  result?: AgentResult | PgeResult | GeResult | LoopResult;
   error?: string;
   durationMs: number;
 }
@@ -631,8 +717,8 @@ export interface StageState {
   name: string;
   type: string;
   status: StageStatus;
-  iteration?: number;        // PGE iteration (1-based)
-  pgeStep?: PgeStep;         // Sub-step within PGE iteration
+  iteration?: number;        // PGE/GE iteration (1-based)
+  pgeStep?: PgeStep | GeStep; // Sub-step within PGE/GE iteration
   artifacts?: Record<string, string>;
   outputs?: Record<string, string>;  // Collected structured outputs (key → value)
   children?: PipelineState;
@@ -659,6 +745,16 @@ export type StageStatus =
 ```typescript
 export type PgeStep =
   | "planner_dispatched"
+  | "contract_dispatched"
+  | "generator_dispatched"
+  | "evaluator_dispatched"
+  | "routed";
+```
+
+### GeStep
+
+```typescript
+export type GeStep =
   | "contract_dispatched"
   | "generator_dispatched"
   | "evaluator_dispatched"

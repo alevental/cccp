@@ -247,6 +247,103 @@ export function formatDetailEvent(event: StateEvent): React.ReactNode[] {
       ];
     }
 
+    // --- GE events ---
+
+    case "ge_contract_start": {
+      const agent = String(d.agent ?? "?");
+      return [
+        <Text key="gcs"><Text dimColor>{time}</Text><Text color="cyan">  {"\u250C\u2500"} GE: {event.stageName}</Text></Text>,
+        <Text key="gcs2"><Text dimColor>{PAD}</Text><Text color="cyan">{BAR}</Text><Text color="yellow">  {"\u25B6"} Contract [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text></Text>,
+      ];
+    }
+
+    case "ge_contract_done": {
+      const contractPath = String(d.contractPath ?? "");
+      const contract = d.contractContent as string ?? "";
+      return [
+        <Text key="gcd"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text dimColor>  {"\u2713"} Contract {"\u2192"} </Text><Text color="white">{contractPath}</Text></Text>,
+        ...summaryLine(d),
+        ...(contract ? artifactPreview(contract) : []),
+      ];
+    }
+
+    case "ge_start": {
+      const gen = d.generator as string ?? "?";
+      const eval_ = d.evaluator as string ?? "?";
+      const maxIter = String(d.maxIterations ?? "?");
+      return [
+        <Text key="ges1"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text>  Generator: <Text color="green">{gen}</Text>  Evaluator: <Text color="green">{eval_}</Text></Text></Text>,
+        <Text key="ges2"><Text dimColor>{PAD}</Text><Text color="cyan">{BAR}</Text><Text>  Max: {maxIter} iters — GE loop starting</Text></Text>,
+      ];
+    }
+
+    case "ge_generator_start": {
+      const agent = String(d.agent ?? "?");
+      const iter = String(d.iteration ?? "?");
+      const maxI = String(d.maxIterations ?? "?");
+      return [
+        <Text key="gegs"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text color="yellow">  {"\u25B6"} Generator [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text><Text color="yellow"> iter {iter}/{maxI}</Text></Text>,
+      ];
+    }
+
+    case "ge_generator_done":
+      return [
+        <Text key="gegd"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text dimColor>  {"\u2713"} Deliverable {"\u2192"} </Text><Text color="white">{String(d.deliverablePath ?? "")}</Text></Text>,
+        ...summaryLine(d),
+      ];
+
+    case "ge_evaluator_start": {
+      const agent = String(d.agent ?? "?");
+      const iter = String(d.iteration ?? "?");
+      const maxI = String(d.maxIterations ?? "?");
+      return [
+        <Text key="gees"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text color="yellow">  {"\u25B6"} Evaluator [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text><Text color="yellow"> iter {iter}/{maxI}</Text></Text>,
+      ];
+    }
+
+    case "ge_evaluator_done":
+      return [
+        <Text key="geed"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text dimColor>  {"\u2713"} Evaluation {"\u2192"} </Text><Text color="white">{String(d.evaluationPath ?? "")}</Text></Text>,
+        ...summaryLine(d),
+      ];
+
+    case "ge_evaluation": {
+      const outcome = String(d.outcome ?? "?");
+      const iter = String(d.iteration ?? "?");
+      const maxIter = String(d.maxIterations ?? "?");
+      const evalContent = d.evaluationContent as string ?? "";
+      const evalPath = String(d.evaluationPath ?? "");
+      const willRetry = d.willRetry as boolean | undefined;
+      const escalation = d.escalation as string | undefined;
+
+      if (outcome === "pass") {
+        return [
+          <Text key="geep"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text color="green" bold>  {"\u2714"} PASS (iter {iter}/{maxIter})</Text><Text dimColor> {"\u2192"} </Text><Text color="white">{evalPath}</Text></Text>,
+          ...(evalContent ? artifactPreview(evalContent) : []),
+          <Text key="geepc"><Text dimColor>{PAD}</Text><Text color="cyan">{"\u2514\u2500\u2500\u2500\u2500\u2500\u2500"}</Text></Text>,
+        ];
+      }
+
+      if (outcome === "fail") {
+        const suffix = willRetry
+          ? " \u2014 retrying"
+          : ` \u2014 exhausted, escalation: ${escalation ?? "stop"}`;
+        return [
+          <Text key="geef"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text color="red">  {"\u2717"} FAIL (iter {iter}/{maxIter}){suffix}</Text><Text dimColor> {"\u2192"} </Text><Text color="white">{evalPath}</Text></Text>,
+          ...(evalContent ? artifactPreview(evalContent) : []),
+          ...(!willRetry ? [
+            <Text key="geefc"><Text dimColor>{PAD}</Text><Text color="cyan">{"\u2514\u2500\u2500\u2500\u2500\u2500\u2500"}</Text></Text>,
+          ] : []),
+        ];
+      }
+
+      // parse_error
+      return [
+        <Text key="geee"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text color="red">  {"\u26A0"} PARSE ERROR: {String(d.error ?? "unknown")}</Text></Text>,
+        <Text key="geeec"><Text dimColor>{PAD}</Text><Text color="cyan">{"\u2514\u2500\u2500\u2500\u2500\u2500\u2500"}</Text></Text>,
+      ];
+    }
+
     // --- Loop events ---
 
     case "loop_start": {
@@ -525,6 +622,60 @@ export function formatDetailEvent(event: StateEvent): React.ReactNode[] {
     case "child_pge_generator_done":
     case "child_pge_evaluator_done": {
       // Suppress verbose intermediate events — the phase start/evaluation events are enough.
+      return [];
+    }
+
+    // --- Sub-pipeline GE events (compact inline) ---
+
+    case "child_ge_contract_start": {
+      const prefix = childPrefix(d);
+      const agent = String(d.agent ?? "?");
+      return [
+        <Text key="cgcs"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text color="yellow">{"\u25B6"} Contract [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text></Text>,
+      ];
+    }
+
+    case "child_ge_generator_start": {
+      const prefix = childPrefix(d);
+      const agent = String(d.agent ?? "?");
+      const iter = String(d.iteration ?? "?");
+      const maxI = String(d.maxIterations ?? "?");
+      return [
+        <Text key="cggs"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text color="yellow">{"\u25B6"} Generator [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text><Text color="yellow"> iter {iter}/{maxI}</Text></Text>,
+      ];
+    }
+
+    case "child_ge_evaluator_start": {
+      const prefix = childPrefix(d);
+      const agent = String(d.agent ?? "?");
+      const iter = String(d.iteration ?? "?");
+      const maxI = String(d.maxIterations ?? "?");
+      return [
+        <Text key="cges"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text color="yellow">{"\u25B6"} Evaluator [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text><Text color="yellow"> iter {iter}/{maxI}</Text></Text>,
+      ];
+    }
+
+    case "child_ge_evaluation": {
+      const prefix = childPrefix(d);
+      const outcome = String(d.outcome ?? "?");
+      const iter = String(d.iteration ?? "?");
+      const maxI = String(d.maxIterations ?? "?");
+      const willRetry = d.willRetry as boolean | undefined;
+      if (outcome === "pass") {
+        return [
+          <Text key="cgev"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text color="green" bold>{"\u2714"} PASS (iter {iter}/{maxI})</Text></Text>,
+        ];
+      }
+      const suffix = willRetry ? " — retrying" : " — exhausted";
+      return [
+        <Text key="cgev"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text color="red">{"\u2717"} FAIL (iter {iter}/{maxI}){suffix}</Text></Text>,
+      ];
+    }
+
+    case "child_ge_start":
+    case "child_ge_contract_done":
+    case "child_ge_generator_done":
+    case "child_ge_evaluator_done": {
       return [];
     }
 

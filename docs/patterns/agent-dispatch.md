@@ -1,6 +1,6 @@
 # Agent Dispatch
 
-Agent dispatch is the mechanism by which CCCP executes Claude Code as a subprocess. Every agent stage and every planner/generator/evaluator in a PGE cycle goes through the same dispatch path.
+Agent dispatch is the mechanism by which CCCP executes Claude Code as a subprocess. Every agent stage and every planner/generator/evaluator in a PGE cycle (or contract/generator/evaluator in a GE cycle) goes through the same dispatch path.
 
 **Source files:**
 - [`src/agent.ts`](../../src/agent.ts) -- `dispatchAgent()` and `buildArgs()`
@@ -237,7 +237,7 @@ When `streamLogDir` is set (always set by the runner to `<artifact-dir>/.cccp/`)
   write-evaluator.stream.jsonl
 ```
 
-The `agentName` determines the file name. For PGE stages, the runner sets names like `documentation-planner`, `documentation-contract`, `documentation-generator`, and `documentation-evaluator`.
+The `agentName` determines the file name. For PGE stages, the runner sets names like `documentation-planner`, `documentation-contract`, `documentation-generator`, and `documentation-evaluator`. For GE stages (no planner), names are `documentation-contract`, `documentation-generator`, and `documentation-evaluator`.
 
 ## Activity Propagation
 

@@ -147,7 +147,7 @@ Stage start events include metadata: agent name, model, effort, inputs, and outp
 
 Agent completion events (`stage_complete`, `pge_*_done`) include an optional `summary` field — the last `task_progress` description from Claude Code's stream output. When present, the detail log renders it as a dimmed line under the completion entry, giving a narrative snapshot of what the agent was doing when it finished.
 
-Sub-pipeline child events render as `↳ [child-pipeline] stage: started/completed`. Child PGE/autoresearch phase events also render inline with `↳` prefix showing planner/generator/evaluator starts and PASS/FAIL results.
+Sub-pipeline child events render as `↳ [child-pipeline] stage: started/completed`. Child PGE/GE/autoresearch phase events also render inline with `↳` prefix showing planner/generator/evaluator starts and PASS/FAIL results.
 
 | Event Type | Display | Color |
 |------------|---------|-------|
@@ -176,6 +176,22 @@ Sub-pipeline child events render as `↳ [child-pipeline] stage: started/complet
 | `child_loop_start` | _(suppressed verbose event)_ | -- |
 | `child_loop_body_done` | _(suppressed verbose event)_ | -- |
 | `child_loop_evaluator_done` | _(suppressed verbose event)_ | -- |
+| `ge_contract_start` | `┌─ GE: name` + `▶ Contract [agent] model · effort` | cyan/yellow |
+| `ge_contract_done` | `✓ Contract → path` + optional summary + artifact preview | dim |
+| `ge_start` | Generator + Evaluator agent names, max iters | cyan |
+| `ge_generator_start` | `▶ Generator [agent] model · effort iter X/Y` | yellow |
+| `ge_generator_done` | `✓ Deliverable → path` + optional summary | dim |
+| `ge_evaluator_start` | `▶ Evaluator [agent] model · effort iter X/Y` | yellow |
+| `ge_evaluator_done` | `✓ Evaluation → path` + optional summary | dim |
+| `ge_evaluation` | `✔ PASS` or `✗ FAIL` with artifact preview | green/red |
+| `child_ge_contract_start` | `↳ [pipeline] stage: ▶ Contract [agent]` | yellow |
+| `child_ge_generator_start` | `↳ [pipeline] stage: ▶ Generator [agent]` | yellow |
+| `child_ge_evaluator_start` | `↳ [pipeline] stage: ▶ Evaluator [agent]` | yellow |
+| `child_ge_evaluation` | `↳ [pipeline] stage: ✔ PASS` / `✗ FAIL` | green/red |
+| `child_ge_start` | _(suppressed verbose event)_ | -- |
+| `child_ge_contract_done` | _(suppressed verbose event)_ | -- |
+| `child_ge_generator_done` | _(suppressed verbose event)_ | -- |
+| `child_ge_evaluator_done` | _(suppressed verbose event)_ | -- |
 | `gate_pending` | `⏸ Gate pending: name` | blue |
 | `pipeline_paused` | `⏸ Pipeline paused (next: stage)` | blue |
 | `pipeline_complete` | `═ Pipeline status` | green/red |

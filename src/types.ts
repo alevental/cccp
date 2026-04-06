@@ -39,7 +39,7 @@ export interface Pipeline {
 }
 
 /** A single stage in a pipeline. Discriminated on `type`. */
-export type Stage = AgentStage | PgeStage | HumanGateStage | AutoresearchStage | PipelineStage | LoopStage;
+export type Stage = AgentStage | PgeStage | GeStage | HumanGateStage | AutoresearchStage | PipelineStage | LoopStage;
 
 /** Base fields shared by every stage type. */
 export interface StageBase {
@@ -110,6 +110,33 @@ export interface PgeStage extends StageBase {
     /** Structural template for the contract writer to follow. */
     template?: string;
     /** Free-form guidance for the planner and contract writer. */
+    guidance?: string;
+    max_iterations: number;
+  };
+  /** What to do when max iterations reached with FAIL. */
+  on_fail?: EscalationStrategy;
+  /** Fire a human review gate after successful completion. */
+  human_review?: boolean;
+}
+
+/** Generate-Evaluate stage — PGE without the planner. Contract → Generate → Evaluate → retry. */
+export interface GeStage extends StageBase {
+  type: "ge";
+  /** Stage-level inputs shared across generator and evaluator. */
+  inputs?: string[];
+  /** Stage-level default model (inherited by sub-agents unless overridden). */
+  model?: string;
+  /** Stage-level default effort (inherited by sub-agents unless overridden). */
+  effort?: EffortLevel;
+  /** Generator agent — reads contract, produces deliverable. */
+  generator: PgeAgentConfig;
+  /** Evaluator agent — writes contract, then evaluates deliverable on each iteration. */
+  evaluator: PgeAgentConfig;
+  contract: {
+    deliverable: string;
+    /** Structural template for the contract writer to follow. */
+    template?: string;
+    /** Free-form guidance for the contract writer. */
     guidance?: string;
     max_iterations: number;
   };
@@ -256,6 +283,12 @@ export type LoopStep =
   | "evaluator_dispatched"
   | "routed";
 
+export type GeStep =
+  | "contract_dispatched"
+  | "generator_dispatched"
+  | "evaluator_dispatched"
+  | "routed";
+
 export interface StageState {
   name: string;
   type: string;
@@ -263,7 +296,7 @@ export interface StageState {
   /** Current PGE iteration (1-based). Only for type: pge. */
   iteration?: number;
   /** Last completed sub-step within the current iteration (PGE, autoresearch, or loop). */
-  pgeStep?: PgeStep | AutoresearchStep | LoopStep;
+  pgeStep?: PgeStep | GeStep | AutoresearchStep | LoopStep;
   /** Paths to artifacts produced by this stage. */
   artifacts?: Record<string, string>;
   /** Duration in ms (set on completion). */
@@ -452,11 +485,27 @@ export interface LoopResult {
   durationMs: number;
 }
 
+/** Result of a full GE cycle (contract → generate → evaluate, no planner). */
+export interface GeResult {
+  /** Final evaluation outcome. */
+  outcome: "pass" | "fail" | "error";
+  /** Number of iterations executed. */
+  iterations: number;
+  /** Max iterations allowed. */
+  maxIterations: number;
+  /** Path to the final evaluation file. */
+  evaluationPath?: string;
+  /** Path to the contract file. */
+  contractPath?: string;
+  /** Duration in milliseconds (total across all iterations). */
+  durationMs: number;
+}
+
 /** Result of a single stage execution. */
 export interface StageResult {
   stageName: string;
   status: "passed" | "failed" | "skipped" | "error";
-  result?: AgentResult | PgeResult | AutoresearchResult | LoopResult;
+  result?: AgentResult | PgeResult | GeResult | AutoresearchResult | LoopResult;
   error?: string;
   durationMs: number;
 }

@@ -8,6 +8,7 @@ import type {
   StageStatus,
   StageEntry,
   PgeStep,
+  GeStep,
   AutoresearchStep,
   LoopStep,
   GateInfo,
@@ -201,7 +202,7 @@ export function updatePgeProgress(
   state: PipelineState,
   stageName: string,
   iteration: number,
-  step: PgeStep | AutoresearchStep | LoopStep,
+  step: PgeStep | GeStep | AutoresearchStep | LoopStep,
 ): void {
   const stage = state.stages[stageName];
   if (!stage) return;
@@ -253,7 +254,7 @@ export function findResumePoint(state: PipelineState): ResumePoint | null {
       stageName: name,
     };
 
-    if ((stage.type === "pge" || stage.type === "autoresearch" || stage.type === "loop") && stage.status === "in_progress") {
+    if ((stage.type === "pge" || stage.type === "ge" || stage.type === "autoresearch" || stage.type === "loop") && stage.status === "in_progress") {
       point.resumeIteration = stage.iteration ?? 1;
       point.resumeStep = stage.pgeStep;
     }

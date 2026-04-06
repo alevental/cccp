@@ -155,6 +155,42 @@ The evaluator output must contain `### Overall: PASS` or `### Overall: FAIL`.
 | `"skip"` | Mark stage skipped, continue pipeline |
 | `"human_gate"` | Pause for human approval |
 
+## Stage Type: `ge`
+
+Generate-Evaluate cycle — PGE without the planner. The evaluator writes the contract directly from the task description and inputs, then the generate-evaluate loop runs against that contract.
+
+```yaml
+- name: write-docs
+  type: ge
+  task: "Write comprehensive API documentation."
+  inputs:                                # Optional. Shared across generator and evaluator.
+    - "{artifact_dir}/research.md"
+  generator:                             # Required. Generator agent config.
+    agent: writer
+    inputs:                              # Optional. Generator-specific inputs.
+      - "{artifact_dir}/api-spec.md"
+  evaluator:                             # Required. Evaluator agent config.
+    agent: reviewer
+  contract:
+    deliverable: "{artifact_dir}/api-docs.md"    # Required. Output path.
+    guidance: "Must cover all endpoints."         # Optional. Free-form.
+    template: "templates/doc-contract.md"         # Optional. Structural guide.
+    max_iterations: 3                             # Required. 1-10.
+  on_fail: human_gate                    # Optional. Default: "stop".
+  human_review: true                     # Optional. Gate after PASS.
+```
+
+### GE Execution Flow
+
+1. **Contract**: Evaluator reads task + all inputs (stage + generator), writes `contract.md`
+2. **Generator**: Reads contract + inputs, produces `deliverable`
+3. **Evaluator**: Reads contract + deliverable, writes `evaluation-N.md`
+4. **Route**: PASS → stage succeeds. FAIL → retry from step 2. Max iterations → apply `on_fail`.
+
+Uses same `PgeAgentConfig` for generator and evaluator, same contract fields, same `on_fail` strategies as PGE.
+
+**When to use GE vs PGE:** Use GE when the task is clear and specific enough that a planner is unnecessary. Use PGE when you need a planner to decompose complex work into a detailed task plan first.
+
 ## Stage Type: `autoresearch`
 
 Iterative artifact optimization. Adjust-Execute-Evaluate loop.

@@ -68,6 +68,30 @@ const PgeStageSchema = z.object({
   when: WhenSchema,
 });
 
+const GeStageSchema = z.object({
+  name: z.string(),
+  task: z.string().optional(),
+  task_file: z.string().optional(),
+  type: z.literal("ge"),
+  mcp_profile: z.string().optional(),
+  model: ModelSchema,
+  effort: EffortSchema,
+  inputs: z.array(z.string()).optional(),
+  generator: PgeAgentConfigSchema,
+  evaluator: PgeAgentConfigSchema,
+  contract: z.object({
+    deliverable: z.string(),
+    template: z.string().optional(),
+    guidance: z.string().optional(),
+    max_iterations: z.number().int().min(1).max(10),
+  }),
+  on_fail: z.enum(["stop", "human_gate", "skip"]).optional(),
+  human_review: z.boolean().optional(),
+  variables: z.record(z.string()).optional(),
+  outputs: OutputsSchema,
+  when: WhenSchema,
+});
+
 const AutoresearchStageSchema = z.object({
   name: z.string(),
   task: z.string().optional(),
@@ -154,6 +178,7 @@ const PipelineStageSchema = z.object({
 const StageSchema = z.discriminatedUnion("type", [
   AgentStageSchema,
   PgeStageSchema,
+  GeStageSchema,
   HumanGateStageSchema,
   AutoresearchStageSchema,
   PipelineStageSchema,
@@ -224,6 +249,7 @@ const PipelineSchema = z.object({
         const outputPath =
           stage.type === "agent" ? stage.output :
           stage.type === "pge" ? stage.contract?.deliverable :
+          stage.type === "ge" ? stage.contract?.deliverable :
           stage.type === "autoresearch" ? stage.output :
           undefined;
         if (outputPath) {

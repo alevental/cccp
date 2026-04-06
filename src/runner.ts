@@ -8,6 +8,7 @@ import { FilesystemGateStrategy } from "./gate/gate-watcher.js";
 import { ConsoleLogger, type Logger } from "./logger.js";
 import { writeMcpConfigFile } from "./mcp/mcp-config.js";
 import { runAutoresearchCycle, type AutoresearchCycleOptions } from "./autoresearch.js";
+import { runGeCycle, dispatchGeEvaluatorWithFeedback, type GeCycleOptions } from "./ge.js";
 import { runLoopCycle, type LoopCycleOptions } from "./loop.js";
 import { openDatabase } from "./db.js";
 import { loadPipeline } from "./pipeline.js";
@@ -27,6 +28,7 @@ import {
 import type {
   AgentStage,
   AutoresearchStage,
+  GeStage,
   HumanGateStage,
   LoopStage,
   PgeStage,
@@ -487,6 +489,177 @@ async function runPgeStage(
       stageName: stage.name,
       status: "failed",
       result: pgeResult,
+      error: gateRetries >= MAX_GATE_RETRIES
+        ? `Failed and max gate retries (${MAX_GATE_RETRIES}) reached`
+        : `Failed and gate rejected${gateResponse.feedback ? `: ${gateResponse.feedback}` : ""}`,
+      durationMs: Date.now() - start,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Stage dispatch — type: ge
+// ---------------------------------------------------------------------------
+
+async function runGeStage(
+  stage: GeStage,
+  ctx: RunContext,
+  state: PipelineState,
+): Promise<StageResult> {
+  const start = Date.now();
+  let geOptions: GeCycleOptions | undefined;
+  let gateRetries = 0;
+
+  const onProgress = async (eventType?: string, eventData?: Record<string, unknown>) => {
+    if (eventType) {
+      await saveStateWithEvent(state, eventType, stage.name, eventData);
+      ctx.parentOnProgress?.(eventType, stage.name, eventData);
+    } else {
+      await saveState(state);
+    }
+  };
+
+  // Retry loop: runs the GE cycle, handles escalation, and retries with feedback.
+  while (true) {
+    const geResult = await runGeCycle(stage, ctx, state, onProgress, geOptions);
+
+    if (geResult.outcome === "pass") {
+      // Check human_review gate — fire a gate after GE passes for human quality review.
+      if (stage.human_review && ctx.gateStrategy && !ctx.dryRun) {
+        const reviewGate: GateInfo = {
+          stageName: stage.name,
+          status: "pending",
+          prompt: `GE stage "${stage.name}" passed evaluation. Review the deliverable and approve or reject with feedback.`,
+        };
+        state.gate = reviewGate;
+        await saveState(state);
+        const reviewResponse = await ctx.gateStrategy.waitForGate(reviewGate);
+        state.gate = undefined;
+        await saveState(state);
+
+        if (!reviewResponse.approved && reviewResponse.feedbackPath && gateRetries < MAX_GATE_RETRIES) {
+          gateRetries++;
+          getLogger(ctx).log(`    human review rejected with feedback — dispatching evaluator with feedback (retry ${gateRetries}/${MAX_GATE_RETRIES})`);
+
+          // Route feedback through the evaluator to produce a structured FAIL evaluation.
+          const humanEvalPath = await dispatchGeEvaluatorWithFeedback(
+            stage, ctx, state, geResult, reviewResponse.feedbackPath, onProgress,
+          );
+
+          // Re-enter GE loop with the human-mediated evaluation.
+          geOptions = {
+            existingContractPath: geResult.contractPath,
+          };
+          geOptions.gateFeedbackPath = humanEvalPath;
+          continue;
+        }
+
+        if (!reviewResponse.approved) {
+          return {
+            stageName: stage.name,
+            status: "failed",
+            result: geResult,
+            error: gateRetries >= MAX_GATE_RETRIES
+              ? `Failed and max gate retries (${MAX_GATE_RETRIES}) reached`
+              : `Human review rejected${reviewResponse.feedback ? `: ${reviewResponse.feedback}` : ""}`,
+            durationMs: Date.now() - start,
+          };
+        }
+
+        getLogger(ctx).log(`    human review approved`);
+      }
+
+      return {
+        stageName: stage.name,
+        status: "passed",
+        result: geResult,
+        durationMs: Date.now() - start,
+      };
+    }
+
+    if (geResult.outcome === "error") {
+      return {
+        stageName: stage.name,
+        status: "error",
+        result: geResult,
+        error: "Evaluation parse error",
+        durationMs: Date.now() - start,
+      };
+    }
+
+    // outcome === "fail" — apply escalation strategy
+    const strategy = stage.on_fail ?? "stop";
+
+    if (strategy === "stop") {
+      return {
+        stageName: stage.name,
+        status: "failed",
+        result: geResult,
+        error: `Failed after ${geResult.iterations}/${geResult.maxIterations} iterations`,
+        durationMs: Date.now() - start,
+      };
+    }
+
+    if (strategy === "skip") {
+      getLogger(ctx).log(`    escalation: skip — continuing pipeline`);
+      return {
+        stageName: stage.name,
+        status: "skipped",
+        result: geResult,
+        durationMs: Date.now() - start,
+      };
+    }
+
+    // strategy === "human_gate"
+    if (!ctx.gateStrategy) {
+      getLogger(ctx).log(`    escalation: human_gate — no gate strategy, stopping`);
+      return {
+        stageName: stage.name,
+        status: "failed",
+        result: geResult,
+        error: `Failed after ${geResult.iterations} iterations (no gate strategy configured)`,
+        durationMs: Date.now() - start,
+      };
+    }
+
+    getLogger(ctx).log(`    escalation: human_gate — awaiting approval`);
+    const gateInfo: GateInfo = {
+      stageName: stage.name,
+      status: "pending",
+      prompt: `GE stage "${stage.name}" failed after ${geResult.iterations} iterations. Approve to skip and continue, reject to stop, or reject with feedback to retry the generation cycle.`,
+    };
+    state.gate = gateInfo;
+    await saveState(state);
+    const gateResponse = await ctx.gateStrategy.waitForGate(gateInfo);
+    state.gate = undefined;
+    await saveState(state);
+
+    if (gateResponse.approved) {
+      getLogger(ctx).log(`    gate approved — continuing pipeline`);
+      return {
+        stageName: stage.name,
+        status: "skipped",
+        result: geResult,
+        durationMs: Date.now() - start,
+      };
+    }
+
+    // Rejected — check for feedback retry
+    if (gateResponse.feedbackPath && gateRetries < MAX_GATE_RETRIES) {
+      gateRetries++;
+      getLogger(ctx).log(`    gate rejected with feedback — retrying GE cycle (retry ${gateRetries}/${MAX_GATE_RETRIES})`);
+      geOptions = {
+        gateFeedbackPath: gateResponse.feedbackPath,
+        existingContractPath: geResult.contractPath,
+      };
+      continue; // Re-enter the GE cycle with feedback
+    }
+
+    // Rejected without feedback, or max retries reached
+    return {
+      stageName: stage.name,
+      status: "failed",
+      result: geResult,
       error: gateRetries >= MAX_GATE_RETRIES
         ? `Failed and max gate retries (${MAX_GATE_RETRIES}) reached`
         : `Failed and gate rejected${gateResponse.feedback ? `: ${gateResponse.feedback}` : ""}`,
@@ -1053,6 +1226,9 @@ async function runStage(
 
     case "pge":
       return runPgeStage(stage, ctx, state);
+
+    case "ge":
+      return runGeStage(stage, ctx, state);
 
     case "human_gate":
       return runHumanGateStage(stage, ctx, state);

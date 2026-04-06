@@ -138,6 +138,7 @@ stages:
 |------|-------------|
 | `agent` | Dispatch one agent, collect output |
 | `pge` | Dispatch planner -> evaluator writes contract -> dispatch generator -> dispatch evaluator -> parse `### Overall: PASS/FAIL` -> retry generator/evaluator on FAIL up to `max_iterations` |
+| `ge` | PGE without the planner — evaluator writes contract from task directly -> dispatch generator -> dispatch evaluator -> parse `### Overall: PASS/FAIL` -> retry on FAIL up to `max_iterations` |
 | `autoresearch` | Iterative artifact optimization — adjust artifact, execute task, evaluate against ground truth, retry on FAIL |
 | `pipeline` | Invoke another pipeline YAML as a sub-pipeline — runs inline, shares the parent run lifecycle |
 | `human_gate` | Block until approved via MCP tool call or state file edit |

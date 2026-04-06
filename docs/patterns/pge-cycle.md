@@ -303,21 +303,30 @@ Artifacts tracked per stage:
 - `deliverable` -- deliverable file path
 - `evaluation-N` -- evaluation file for iteration N
 
-## When to Use PGE vs Simple Agent
+## When to Use PGE vs GE vs Simple Agent
 
 ### Use `pge` when:
 
 - The output has objective quality criteria that can be evaluated
 - You want automatic retry on failure
 - The deliverable is high-stakes and worth multiple iterations
-- You have or can write planner and evaluator agents
+- The task is complex enough to benefit from a planner decomposing it into a detailed task plan
+
+### Use `ge` when:
+
+- The task is clear and specific enough that a planner isn't needed
+- You still want contract-based evaluation and automatic retry
+- The deliverable has objective quality criteria
+- You want a lighter-weight quality loop (contract → generate → evaluate) without the planning overhead
+
+GE is identical to PGE but skips the planner step — the evaluator writes the contract directly from the task description and inputs. See [`src/ge.ts`](../../src/ge.ts).
 
 ### Use `agent` when:
 
 - The task is straightforward (research, file operations, simple transforms)
 - There are no clear pass/fail criteria
 - Speed matters more than guaranteed quality
-- The output is intermediate (consumed by a later PGE stage)
+- The output is intermediate (consumed by a later PGE or GE stage)
 
 ## Complete YAML Example
 

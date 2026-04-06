@@ -61,7 +61,7 @@ All stages share these base fields:
 | `name` | `string` | Yes | Unique stage identifier |
 | `task` | `string` | No | Task instruction for the agent (supports `{variable}` interpolation) |
 | `task_file` | `string` | No | Path to file containing task (mutually exclusive with `task`) |
-| `type` | `"agent" \| "pge" \| "autoresearch" \| "pipeline" \| "human_gate"` | Yes | Stage discriminator |
+| `type` | `"agent" \| "pge" \| "ge" \| "autoresearch" \| "pipeline" \| "human_gate"` | Yes | Stage discriminator |
 | `mcp_profile` | `string` | No | Named MCP profile from `cccp.yaml` |
 | `variables` | `Record<string, string>` | No | Stage-level variable overrides |
 | `outputs` | `Record<string, string>` | No | Structured outputs the agent should produce (key → description) |
@@ -191,6 +191,70 @@ Controls what happens when `max_iterations` are exhausted with a FAIL verdict:
 | `skip` | Stage is marked `skipped`, pipeline continues |
 
 See [PGE Cycle](../patterns/pge-cycle.md) for detailed flow documentation.
+
+---
+
+### `ge` -- Generate-Evaluate
+
+GE is PGE without the planner. The evaluator writes the contract directly from the task description and inputs, then the generate-evaluate loop runs against that contract. Use GE when the task is clear and specific enough that a separate planning step is unnecessary.
+
+```yaml
+- name: implementation
+  type: ge
+  task: "Implement the login page with email/password authentication."
+  inputs:
+    - "{artifact_dir}/design.md"
+  generator:
+    agent: implementer
+    mcp_profile: writing-tools
+  evaluator:
+    agent: code-reviewer
+  contract:
+    deliverable: "{artifact_dir}/login-page.md"
+    guidance: "Must include form validation, error handling, and unit tests."
+    max_iterations: 3
+  on_fail: human_gate
+```
+
+#### GE flow
+
+```
+1. Evaluator (contract mode) — reads task + inputs, writes contract.md
+2. Generator — reads contract, produces deliverable
+3. Evaluator (evaluation mode) — grades deliverable against contract
+4. Parse ### Overall: PASS/FAIL, retry generator/evaluator on FAIL
+```
+
+#### Generator and evaluator
+
+Both use the same `PgeAgentConfig` shape:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `agent` | `string` | Yes | Agent name |
+| `operation` | `string` | No | Operation for directory-style agents |
+| `mcp_profile` | `string` | No | MCP profile override |
+| `allowed_tools` | `string[]` | No | Tool allowlist |
+| `inputs` | `string[]` | No | Agent-specific input files (merged with stage-level `inputs`) |
+
+#### Contract
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `deliverable` | `string` | Yes | Path where the generator writes output |
+| `max_iterations` | `number` | Yes | 1-10 retry attempts |
+| `template` | `string` | No | Structural guide for the evaluator when writing the contract |
+| `guidance` | `string` | No | Free-form guidance for contract writer |
+
+The contract is written by the evaluator agent (in contract mode). The evaluator reads the task description and inputs, then produces a contract with verifiable acceptance criteria -- no planner involved.
+
+#### When to use GE vs PGE
+
+| Stage type | When to use |
+|------------|-------------|
+| `ge` | Task is clear and specific -- no decomposition needed. The contract can be written directly from the task description. |
+| `pge` | Complex work that needs a planner to decompose into a detailed task plan before the contract is written. |
+| `agent` | Simple dispatch -- you don't need evaluation or retry at all. |
 
 ---
 
@@ -544,8 +608,9 @@ Pipeline validation failed for pipelines/build-docs.yaml:
 
 The schema enforces:
 - At least one stage
-- Valid `type` discriminator (`agent`, `pge`, `autoresearch`, `pipeline`, `human_gate`)
+- Valid `type` discriminator (`agent`, `pge`, `ge`, `autoresearch`, `pipeline`, `human_gate`)
 - PGE stages must have `planner`, `generator`, and `evaluator`
+- GE stages must have `generator` and `evaluator` (no planner)
 - `max_iterations` between 1 and 10
 - `on_fail` must be one of `stop`, `human_gate`, `skip`
 - `on_reject` must be one of `stop`, `retry`

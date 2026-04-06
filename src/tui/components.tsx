@@ -49,7 +49,7 @@ function StageRow({ name, stage }: { name: string; stage: StageState }) {
   const icon = stageIcon(stage.status);
   const color = stageColor(stage.status);
   const iterInfo =
-    (stage.type === "pge" || stage.type === "loop") && stage.iteration
+    (stage.type === "pge" || stage.type === "ge" || stage.type === "loop") && stage.iteration
       ? ` (${stage.iteration})`
       : "";
   const duration =
@@ -267,6 +267,15 @@ function matchesStage(agentKey: string, s: StageState): boolean {
   // For PGE/autoresearch stages, only match the currently active phase agent.
   if (s.type === "pge" || s.type === "autoresearch") {
     const suffix = currentPgeSuffix(s.pgeStep);
+    return suffix != null && agentKey === `${s.name}${suffix}`;
+  }
+  // For GE stages: contract is first (no planner).
+  if (s.type === "ge") {
+    const suffix = s.pgeStep === undefined ? "-contract"
+      : s.pgeStep === "contract_dispatched" ? "-generator"
+      : s.pgeStep === "generator_dispatched" ? "-evaluator"
+      : s.pgeStep === "routed" ? "-generator"
+      : undefined;
     return suffix != null && agentKey === `${s.name}${suffix}`;
   }
   // For loop stages, use prefix matching (body agents are named `{stage}-{body}`).

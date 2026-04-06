@@ -209,9 +209,9 @@ Sequence number `N` increments based on existing feedback files for the stage. T
 
 The feedback artifact path is the mechanism by which the runner decides whether to retry: the runner checks `gateResponse.feedbackPath` (not just `gateResponse.feedback`) to determine if structured feedback was provided. This distinction matters because the feedback path is passed into agent prompts as a file reference.
 
-## PGE Escalation Gates
+## PGE/GE Escalation Gates
 
-Gates can also be triggered as an escalation strategy for PGE stages. When a PGE stage exhausts its `max_iterations` with a FAIL result and `on_fail: human_gate` is set, the runner creates a gate with a descriptive prompt:
+Gates can also be triggered as an escalation strategy for PGE and GE stages. When a PGE or GE stage exhausts its `max_iterations` with a FAIL result and `on_fail: human_gate` is set, the runner creates a gate with a descriptive prompt:
 
 ```typescript
 const gateInfo: GateInfo = {
@@ -233,7 +233,7 @@ The same pattern applies to autoresearch stages with `on_fail: human_gate`. On r
 
 ## Human Review Gates
 
-The `human_review: true` flag on `agent` and `pge` stages fires a gate after successful completion, giving a human reviewer a chance to inspect and reject output before the pipeline continues.
+The `human_review: true` flag on `agent`, `pge`, and `ge` stages fires a gate after successful completion, giving a human reviewer a chance to inspect and reject output before the pipeline continues.
 
 ### PGE stages with `human_review: true`
 
@@ -241,6 +241,16 @@ After the PGE cycle passes evaluation, the runner creates a review gate. On reje
 
 1. The runner calls `dispatchEvaluatorWithFeedback()` -- dispatches the evaluator agent with the human feedback file to produce a structured FAIL evaluation incorporating the reviewer's concerns.
 2. The PGE cycle re-enters the GE loop with `PgeCycleOptions` (skipping planner/contract, using the human-mediated evaluation as `gateFeedbackPath`).
+3. Max 3 gate retries.
+
+On approval, the stage passes normally.
+
+### GE stages with `human_review: true`
+
+Same pattern as PGE. After the GE cycle passes, the runner creates a review gate. On rejection with feedback:
+
+1. The runner calls `dispatchGeEvaluatorWithFeedback()` -- dispatches the evaluator with human feedback to produce a structured FAIL evaluation.
+2. The GE cycle re-enters with `GeCycleOptions` (reusing `existingContractPath`, injecting feedback as `gateFeedbackPath`).
 3. Max 3 gate retries.
 
 On approval, the stage passes normally.
