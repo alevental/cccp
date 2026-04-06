@@ -59,10 +59,11 @@ const StageSchema = z.discriminatedUnion("type", [
   HumanGateStageSchema,
   AutoresearchStageSchema,
   PipelineStageSchema,
+  LoopStageSchema,
 ]);
 ```
 
-The `type` field is the discriminator. Valid values: `"agent"`, `"pge"`, `"human_gate"`, `"autoresearch"`, `"pipeline"`.
+The `type` field is the discriminator. Valid values: `"agent"`, `"pge"`, `"human_gate"`, `"autoresearch"`, `"pipeline"`, `"loop"`.
 
 ### ParallelGroupSchema
 
@@ -182,6 +183,48 @@ const PipelineStageSchema = z.object({
 });
 ```
 
+### LoopBodyStageSchema
+
+```typescript
+const LoopBodyStageSchema = z.object({
+  name: z.string(),
+  agent: z.string(),
+  operation: z.string().optional(),
+  mcp_profile: z.string().optional(),
+  allowed_tools: z.array(z.string()).optional(),
+  inputs: z.array(z.string()).optional(),
+  task: z.string().optional(),
+  task_file: z.string().optional(),
+  output: z.string().optional(),
+  skip_first: z.boolean().optional(),
+  model: ModelSchema,
+  effort: EffortSchema,
+});
+```
+
+### LoopStageSchema
+
+```typescript
+const LoopStageSchema = z.object({
+  name: z.string(),
+  task: z.string().optional(),
+  task_file: z.string().optional(),
+  type: z.literal("loop"),
+  mcp_profile: z.string().optional(),
+  inputs: z.array(z.string()).optional(),
+  model: ModelSchema,
+  effort: EffortSchema,
+  stages: z.array(LoopBodyStageSchema).min(1),
+  evaluator: PgeAgentConfigSchema,
+  max_iterations: z.number().int().min(1).max(20),
+  on_fail: z.enum(["stop", "human_gate", "skip"]).optional(),
+  human_review: z.boolean().optional(),
+  variables: z.record(z.string()).optional(),
+  outputs: OutputsSchema,
+  when: WhenSchema,
+});
+```
+
 ## TypeScript Types
 
 ### Pipeline
@@ -231,7 +274,7 @@ export function isParallelGroup(entry: StageEntry): entry is ParallelGroup;
 ### Stage (discriminated union)
 
 ```typescript
-export type Stage = AgentStage | PgeStage | HumanGateStage | AutoresearchStage | PipelineStage;
+export type Stage = AgentStage | PgeStage | HumanGateStage | AutoresearchStage | PipelineStage | LoopStage;
 ```
 
 ### StageBase (shared fields)
@@ -393,6 +436,68 @@ export interface PipelineStage extends StageBase {
 | `artifact_dir` | `string` | No | Override artifact directory for child |
 | `on_fail` | `EscalationStrategy` | No | Behavior on sub-pipeline failure (default: `"stop"`) |
 
+### LoopBodyStage
+
+```typescript
+export interface LoopBodyStage {
+  name: string;
+  agent: string;
+  operation?: string;
+  mcp_profile?: string;
+  allowed_tools?: string[];
+  inputs?: string[];
+  task?: string;
+  task_file?: string;
+  output?: string;
+  skip_first?: boolean;
+  model?: string;
+  effort?: EffortLevel;
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | `string` | Yes | Body stage name |
+| `agent` | `string` | Yes | Agent name or path |
+| `operation` | `string` | No | Operation for directory-style agents |
+| `mcp_profile` | `string` | No | MCP profile override |
+| `allowed_tools` | `string[]` | No | Tool allowlist for the agent |
+| `inputs` | `string[]` | No | Input file paths (support variable interpolation) |
+| `task` | `string` | No | Inline task description |
+| `task_file` | `string` | No | Path to file containing task (mutually exclusive with `task`) |
+| `output` | `string` | No | Expected output path |
+| `skip_first` | `boolean` | No | Skip this body stage on the first iteration |
+| `model` | `string` | No | Model override |
+| `effort` | `EffortLevel` | No | Effort level override |
+
+### LoopStage
+
+```typescript
+export interface LoopStage extends StageBase {
+  type: "loop";
+  inputs?: string[];
+  model?: string;
+  effort?: EffortLevel;
+  stages: LoopBodyStage[];
+  evaluator: PgeAgentConfig;
+  max_iterations: number;
+  on_fail?: EscalationStrategy;
+  human_review?: boolean;
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"loop"` | Yes | Stage type discriminator |
+| `inputs` | `string[]` | No | Stage-level input files shared across body stages and evaluator |
+| `model` | `string` | No | Stage-level model default (inherited by body stages/evaluator unless overridden) |
+| `effort` | `EffortLevel` | No | Stage-level effort default (inherited by body stages/evaluator unless overridden) |
+| `stages` | `LoopBodyStage[]` | Yes | Body stages executed sequentially each iteration |
+| `evaluator` | `PgeAgentConfig` | Yes | Evaluator agent configuration (uses same `### Overall: PASS/FAIL` routing as PGE) |
+| `max_iterations` | `number` | Yes | Maximum retry iterations (1-20, integer) |
+| `on_fail` | `EscalationStrategy` | No | What to do when max iterations fail (default: `"stop"`) |
+| `human_review` | `boolean` | No | Fire a human review gate after completion |
+
 ### EscalationStrategy
 
 ```typescript
@@ -454,6 +559,20 @@ export interface PgeResult {
 }
 ```
 
+### LoopResult
+
+Returned by a full loop cycle:
+
+```typescript
+export interface LoopResult {
+  outcome: "pass" | "fail" | "error";
+  iterations: number;
+  maxIterations: number;
+  evaluationPath?: string;
+  durationMs: number;
+}
+```
+
 ### StageResult
 
 Returned by a single stage execution:
@@ -462,7 +581,7 @@ Returned by a single stage execution:
 export interface StageResult {
   stageName: string;
   status: "passed" | "failed" | "skipped" | "error";
-  result?: AgentResult | PgeResult;
+  result?: AgentResult | PgeResult | LoopResult;
   error?: string;
   durationMs: number;
 }

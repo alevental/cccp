@@ -33,6 +33,8 @@ export interface AgentActivity {
   toolCallCount: number;
   /** Cumulative cost in USD. */
   totalCostUsd: number;
+  /** Latest task_progress description (narrative step summary from sub-agents). */
+  taskProgress: string;
 }
 ```
 
@@ -86,7 +88,7 @@ Claude's `stream-json` output uses a nested `message.content[]` format. The pars
 ```
 
 - `init`: Extracts the model name
-- `task_progress`: Tracks sub-agent activity
+- `task_progress`: Tracks sub-agent activity. The `description` field is stored in `AgentActivity.taskProgress` (separate from `lastText`, which is overwritten by all text events). At agent completion, `dispatchAgent()` returns this as `AgentResult.summary`, which is attached to `_done` and `stage_complete` events for display in the detail log.
 
 #### `assistant` events (nested content blocks)
 

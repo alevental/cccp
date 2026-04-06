@@ -35,7 +35,7 @@ Pipeline Stage
       +---> StreamParser  -- parse stdout for activity tracking
       |
       v
-  AgentResult             -- exit code, output check, duration
+  AgentResult             -- exit code, output check, duration, summary
 ```
 
 ## Claude CLI Arguments
@@ -205,8 +205,12 @@ export interface AgentResult {
   outputExists: boolean;
   /** Duration in milliseconds. */
   durationMs: number;
+  /** Last task_progress description from the agent (narrative step summary). */
+  summary?: string;
 }
 ```
+
+The `summary` field captures the last `task_progress` description from Claude Code's stream output. It is extracted from `AgentActivity.taskProgress` after the subprocess exits. The runner, PGE engine, and autoresearch cycle attach this to `_done` and `stage_complete` events, where the TUI detail log renders it as a dimmed line under completion entries.
 
 ## Dry Run Mode
 

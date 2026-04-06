@@ -99,6 +99,16 @@ function modelBadge(d: Record<string, unknown>): string {
   return parts.length > 0 ? ` ${parts.join(" \u00B7 ")}` : "";
 }
 
+/** Render a dimmed summary line (agent task_progress description). */
+function summaryLine(d: Record<string, unknown>, prefix: string = PAD): React.ReactNode[] {
+  const summary = d.summary as string | undefined;
+  if (!summary) return [];
+  const truncated = summary.length > 100 ? summary.slice(0, 97) + "..." : summary;
+  return [
+    <Text key="sum"><Text dimColor>{prefix}</Text><Text color="cyan">{BAR}</Text><Text dimColor>    {truncated}</Text></Text>,
+  ];
+}
+
 /** Render a preview of artifact content under the PGE gutter bar. */
 function artifactPreview(content: string): React.ReactNode[] {
   if (!content.trim()) return [];
@@ -139,6 +149,7 @@ export function formatDetailEvent(event: StateEvent): React.ReactNode[] {
     case "pge_planner_done":
       return [
         <Text key="pd"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text dimColor>  {"\u2713"} Task plan {"\u2192"} </Text><Text color="white">{String(d.taskPlanPath ?? "")}</Text></Text>,
+        ...summaryLine(d),
       ];
 
     case "pge_contract_start": {
@@ -153,6 +164,7 @@ export function formatDetailEvent(event: StateEvent): React.ReactNode[] {
       const contract = d.contractContent as string ?? "";
       return [
         <Text key="cd"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text dimColor>  {"\u2713"} Contract {"\u2192"} </Text><Text color="white">{contractPath}</Text></Text>,
+        ...summaryLine(d),
         ...(contract ? artifactPreview(contract) : []),
       ];
     }
@@ -180,6 +192,7 @@ export function formatDetailEvent(event: StateEvent): React.ReactNode[] {
     case "pge_generator_done":
       return [
         <Text key="gd"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text dimColor>  {"\u2713"} Deliverable {"\u2192"} </Text><Text color="white">{String(d.deliverablePath ?? "")}</Text></Text>,
+        ...summaryLine(d),
       ];
 
     case "pge_evaluator_start": {
@@ -194,6 +207,7 @@ export function formatDetailEvent(event: StateEvent): React.ReactNode[] {
     case "pge_evaluator_done":
       return [
         <Text key="ed"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text dimColor>  {"\u2713"} Evaluation {"\u2192"} </Text><Text color="white">{String(d.evaluationPath ?? "")}</Text></Text>,
+        ...summaryLine(d),
       ];
 
     case "pge_evaluation": {
@@ -233,6 +247,137 @@ export function formatDetailEvent(event: StateEvent): React.ReactNode[] {
       ];
     }
 
+    // --- Loop events ---
+
+    case "loop_start": {
+      const bodyNames = (d.stages as string[] ?? []).join(", ");
+      const eval_ = String(d.evaluator ?? "?");
+      const maxIter = String(d.maxIterations ?? "?");
+      return [
+        <Text key="ls"><Text dimColor>{time}</Text><Text color="cyan">  {"\u250C\u2500"} Loop: {event.stageName}</Text></Text>,
+        <Text key="ls2"><Text dimColor>{PAD}</Text><Text color="cyan">{BAR}</Text><Text>  Body: <Text color="green">{bodyNames}</Text>  Evaluator: <Text color="green">{eval_}</Text></Text></Text>,
+        <Text key="ls3"><Text dimColor>{PAD}</Text><Text color="cyan">{BAR}</Text><Text>  Max: {maxIter} iters</Text></Text>,
+      ];
+    }
+
+    case "loop_body_start": {
+      const bodyName = String(d.bodyName ?? "?");
+      const agent = String(d.agent ?? "?");
+      const iter = String(d.iteration ?? "?");
+      const maxI = String(d.maxIterations ?? "?");
+      return [
+        <Text key="lbs"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text color="yellow">  {"\u25B6"} {bodyName} [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text><Text color="yellow"> iter {iter}/{maxI}</Text></Text>,
+      ];
+    }
+
+    case "loop_body_done": {
+      const bodyName = String(d.bodyName ?? "?");
+      const output = d.output as string | undefined;
+      return [
+        <Text key="lbd"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text dimColor>  {"\u2713"} {bodyName}{output ? ` \u2192 ${output}` : ""}</Text></Text>,
+        ...summaryLine(d),
+      ];
+    }
+
+    case "loop_evaluator_start": {
+      const agent = String(d.agent ?? "?");
+      const iter = String(d.iteration ?? "?");
+      const maxI = String(d.maxIterations ?? "?");
+      return [
+        <Text key="les"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text color="yellow">  {"\u25B6"} Evaluator [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text><Text color="yellow"> iter {iter}/{maxI}</Text></Text>,
+      ];
+    }
+
+    case "loop_evaluator_done":
+      return [
+        <Text key="led"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text dimColor>  {"\u2713"} Evaluation {"\u2192"} </Text><Text color="white">{String(d.evaluationPath ?? "")}</Text></Text>,
+        ...summaryLine(d),
+      ];
+
+    case "loop_evaluation": {
+      const outcome = String(d.outcome ?? "?");
+      const iter = String(d.iteration ?? "?");
+      const maxIter = String(d.maxIterations ?? "?");
+      const evalContent = d.evaluationContent as string ?? "";
+      const evalPath = String(d.evaluationPath ?? "");
+      const willRetry = d.willRetry as boolean | undefined;
+      const escalation = d.escalation as string | undefined;
+
+      if (outcome === "pass") {
+        return [
+          <Text key="lep"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text color="green" bold>  {"\u2714"} PASS (iter {iter}/{maxIter})</Text><Text dimColor> {"\u2192"} </Text><Text color="white">{evalPath}</Text></Text>,
+          ...(evalContent ? artifactPreview(evalContent) : []),
+          <Text key="lepc"><Text dimColor>{PAD}</Text><Text color="cyan">{"\u2514\u2500\u2500\u2500\u2500\u2500\u2500"}</Text></Text>,
+        ];
+      }
+
+      if (outcome === "fail") {
+        const suffix = willRetry
+          ? " \u2014 retrying"
+          : ` \u2014 exhausted, escalation: ${escalation ?? "stop"}`;
+        return [
+          <Text key="lef"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text color="red">  {"\u2717"} FAIL (iter {iter}/{maxIter}){suffix}</Text><Text dimColor> {"\u2192"} </Text><Text color="white">{evalPath}</Text></Text>,
+          ...(evalContent ? artifactPreview(evalContent) : []),
+          ...(!willRetry ? [
+            <Text key="lefc"><Text dimColor>{PAD}</Text><Text color="cyan">{"\u2514\u2500\u2500\u2500\u2500\u2500\u2500"}</Text></Text>,
+          ] : []),
+        ];
+      }
+
+      // parse_error
+      return [
+        <Text key="lee"><Text dimColor>{time}</Text><Text color="cyan">  {BAR}</Text><Text color="red">  {"\u26A0"} PARSE ERROR: {String(d.error ?? "unknown")}</Text></Text>,
+        <Text key="leec"><Text dimColor>{PAD}</Text><Text color="cyan">{"\u2514\u2500\u2500\u2500\u2500\u2500\u2500"}</Text></Text>,
+      ];
+    }
+
+    // --- Sub-pipeline loop events (compact inline) ---
+
+    case "child_loop_body_start": {
+      const prefix = childPrefix(d);
+      const bodyName = String(d.bodyName ?? "?");
+      const agent = String(d.agent ?? "?");
+      const iter = String(d.iteration ?? "?");
+      const maxI = String(d.maxIterations ?? "?");
+      return [
+        <Text key="clbs"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text color="yellow">{"\u25B6"} {bodyName} [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text><Text color="yellow"> iter {iter}/{maxI}</Text></Text>,
+      ];
+    }
+
+    case "child_loop_evaluator_start": {
+      const prefix = childPrefix(d);
+      const agent = String(d.agent ?? "?");
+      const iter = String(d.iteration ?? "?");
+      const maxI = String(d.maxIterations ?? "?");
+      return [
+        <Text key="cles"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text color="yellow">{"\u25B6"} Evaluator [{agent}]</Text><Text dimColor>{modelBadge(d)}</Text><Text color="yellow"> iter {iter}/{maxI}</Text></Text>,
+      ];
+    }
+
+    case "child_loop_evaluation": {
+      const prefix = childPrefix(d);
+      const outcome = String(d.outcome ?? "?");
+      const iter = String(d.iteration ?? "?");
+      const maxI = String(d.maxIterations ?? "?");
+      const willRetry = d.willRetry as boolean | undefined;
+      if (outcome === "pass") {
+        return [
+          <Text key="clev"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text color="green" bold>{"\u2714"} PASS (iter {iter}/{maxI})</Text></Text>,
+        ];
+      }
+      const suffix = willRetry ? " \u2014 retrying" : ` \u2014 exhausted`;
+      return [
+        <Text key="clev"><Text dimColor>{time}</Text><Text color="cyan">  {"\u21B3"} {prefix}</Text><Text color="red">{"\u2717"} FAIL (iter {iter}/{maxI}){suffix}</Text></Text>,
+      ];
+    }
+
+    // Suppress verbose loop intermediate events.
+    case "child_loop_start":
+    case "child_loop_body_done":
+    case "child_loop_evaluator_done": {
+      return [];
+    }
+
     // --- Non-PGE events (compact single line) ---
 
     case "stage_start": {
@@ -269,9 +414,17 @@ export function formatDetailEvent(event: StateEvent): React.ReactNode[] {
       const ms = d.durationMs as number | undefined;
       const dur = ms != null ? ` (${(ms / 1000).toFixed(1)}s)` : "";
       const color = status === "passed" ? "green" : "red";
-      return [
+      const summary = d.summary as string | undefined;
+      const lines: React.ReactNode[] = [
         <Text key="sc"><Text dimColor>{time}</Text><Text color={color}>  {status === "passed" ? "\u2713" : "\u2717"} Completed: {event.stageName} {status}{dur}</Text></Text>,
       ];
+      if (summary) {
+        const truncated = summary.length > 100 ? summary.slice(0, 97) + "..." : summary;
+        lines.push(
+          <Text key="sc-sum"><Text dimColor>{PAD}  {truncated}</Text></Text>,
+        );
+      }
+      return lines;
     }
 
     // --- Sub-pipeline child events ---

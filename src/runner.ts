@@ -8,6 +8,7 @@ import { FilesystemGateStrategy } from "./gate/gate-watcher.js";
 import { ConsoleLogger, type Logger } from "./logger.js";
 import { writeMcpConfigFile } from "./mcp/mcp-config.js";
 import { runAutoresearchCycle, type AutoresearchCycleOptions } from "./autoresearch.js";
+import { runLoopCycle, type LoopCycleOptions } from "./loop.js";
 import { openDatabase } from "./db.js";
 import { loadPipeline } from "./pipeline.js";
 import { runPgeCycle, dispatchEvaluatorWithFeedback, type PgeCycleOptions } from "./pge.js";
@@ -27,6 +28,7 @@ import type {
   AgentStage,
   AutoresearchStage,
   HumanGateStage,
+  LoopStage,
   PgeStage,
   PipelineStage,
   RunContext,
@@ -620,6 +622,165 @@ async function runAutoresearchStage(
 }
 
 // ---------------------------------------------------------------------------
+// Stage dispatch — type: loop
+// ---------------------------------------------------------------------------
+
+async function runLoopStage(
+  stage: LoopStage,
+  ctx: RunContext,
+  state: PipelineState,
+): Promise<StageResult> {
+  const start = Date.now();
+  let loopOptions: LoopCycleOptions | undefined;
+  let gateRetries = 0;
+
+  const onProgress = async (eventType?: string, eventData?: Record<string, unknown>) => {
+    if (eventType) {
+      await saveStateWithEvent(state, eventType, stage.name, eventData);
+      ctx.parentOnProgress?.(eventType, stage.name, eventData);
+    } else {
+      await saveState(state);
+    }
+  };
+
+  // Retry loop: runs loop cycle, handles escalation, retries with feedback.
+  while (true) {
+    const result = await runLoopCycle(stage, ctx, state, onProgress, loopOptions);
+
+    if (result.outcome === "pass") {
+      // Check for human_review gate after successful completion
+      if (stage.human_review && ctx.gateStrategy && !ctx.dryRun) {
+        getLogger(ctx).log(`    human review gate — awaiting approval`);
+        const reviewGateInfo: GateInfo = {
+          stageName: stage.name,
+          status: "pending",
+          prompt: `Loop stage "${stage.name}" completed successfully after ${result.iterations} iteration(s). Please review and approve.`,
+        };
+        state.gate = reviewGateInfo;
+        await saveState(state);
+        const reviewResponse = await ctx.gateStrategy.waitForGate(reviewGateInfo);
+        state.gate = undefined;
+        await saveState(state);
+
+        if (!reviewResponse.approved && reviewResponse.feedbackPath && gateRetries < MAX_GATE_RETRIES) {
+          gateRetries++;
+          getLogger(ctx).log(`    human review rejected with feedback — retrying loop (retry ${gateRetries}/${MAX_GATE_RETRIES})`);
+          loopOptions = { gateFeedbackPath: reviewResponse.feedbackPath };
+          continue;
+        }
+
+        if (!reviewResponse.approved) {
+          return {
+            stageName: stage.name,
+            status: "failed",
+            result,
+            error: gateRetries >= MAX_GATE_RETRIES
+              ? `Failed and max gate retries (${MAX_GATE_RETRIES}) reached`
+              : `Human review rejected${reviewResponse.feedback ? `: ${reviewResponse.feedback}` : ""}`,
+            durationMs: Date.now() - start,
+          };
+        }
+
+        getLogger(ctx).log(`    human review approved`);
+      }
+
+      return {
+        stageName: stage.name,
+        status: "passed",
+        result,
+        durationMs: Date.now() - start,
+      };
+    }
+
+    if (result.outcome === "error") {
+      return {
+        stageName: stage.name,
+        status: "error",
+        result,
+        error: "Evaluation parse error",
+        durationMs: Date.now() - start,
+      };
+    }
+
+    // outcome === "fail" — apply escalation strategy
+    const strategy = stage.on_fail ?? "stop";
+
+    if (strategy === "stop") {
+      return {
+        stageName: stage.name,
+        status: "failed",
+        result,
+        error: `Failed after ${result.iterations}/${result.maxIterations} iterations`,
+        durationMs: Date.now() - start,
+      };
+    }
+
+    if (strategy === "skip") {
+      getLogger(ctx).log(`    escalation: skip — continuing pipeline`);
+      return {
+        stageName: stage.name,
+        status: "skipped",
+        result,
+        durationMs: Date.now() - start,
+      };
+    }
+
+    // strategy === "human_gate"
+    if (!ctx.gateStrategy) {
+      getLogger(ctx).log(`    escalation: human_gate — no gate strategy, stopping`);
+      return {
+        stageName: stage.name,
+        status: "failed",
+        result,
+        error: `Failed after ${result.iterations}/${result.maxIterations} iterations (no gate strategy configured)`,
+        durationMs: Date.now() - start,
+      };
+    }
+
+    getLogger(ctx).log(`    escalation: human_gate — awaiting approval`);
+    const gateInfo: GateInfo = {
+      stageName: stage.name,
+      status: "pending",
+      prompt: `Loop stage "${stage.name}" failed after ${result.iterations}/${result.maxIterations} iterations. Approve to skip and continue, reject to stop, or reject with feedback to retry.`,
+    };
+    state.gate = gateInfo;
+    await saveState(state);
+    const gateResponse = await ctx.gateStrategy.waitForGate(gateInfo);
+    state.gate = undefined;
+    await saveState(state);
+
+    if (gateResponse.approved) {
+      getLogger(ctx).log(`    gate approved — continuing pipeline`);
+      return {
+        stageName: stage.name,
+        status: "skipped",
+        result,
+        durationMs: Date.now() - start,
+      };
+    }
+
+    // Rejected — check for feedback retry
+    if (gateResponse.feedbackPath && gateRetries < MAX_GATE_RETRIES) {
+      gateRetries++;
+      getLogger(ctx).log(`    gate rejected with feedback — retrying loop cycle (retry ${gateRetries}/${MAX_GATE_RETRIES})`);
+      loopOptions = { gateFeedbackPath: gateResponse.feedbackPath };
+      continue;
+    }
+
+    // Rejected without feedback, or max retries reached
+    return {
+      stageName: stage.name,
+      status: "failed",
+      result,
+      error: gateRetries >= MAX_GATE_RETRIES
+        ? `Failed and max gate retries (${MAX_GATE_RETRIES}) reached`
+        : `Failed and gate rejected${gateResponse.feedback ? `: ${gateResponse.feedback}` : ""}`,
+      durationMs: Date.now() - start,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Stage dispatch — type: human_gate
 // ---------------------------------------------------------------------------
 
@@ -901,6 +1062,9 @@ async function runStage(
 
     case "pipeline":
       return runPipelineStage(stage, ctx, state);
+
+    case "loop":
+      return runLoopStage(stage, ctx, state);
   }
 }
 
@@ -998,10 +1162,13 @@ async function runStageWithLifecycle(
   try {
     const result = await runStage(stage, ctx, state);
 
-    const completeData = {
+    const completeData: Record<string, unknown> = {
       status: result.status,
       durationMs: result.durationMs,
     };
+    // Attach agent summary (last task_progress description) if available.
+    const agentSummary = result.result && "summary" in result.result ? result.result.summary : undefined;
+    if (agentSummary) completeData.summary = agentSummary;
 
     if (!ctx.dryRun) {
       // Collect structured outputs before finalizing state.

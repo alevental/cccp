@@ -145,19 +145,37 @@ When scrolled up, shows `[scrolled — press End to resume]` indicator. When at 
 
 Stage start events include metadata: agent name, model, effort, inputs, and output. PGE phase starts show model/effort badges: `▶ Generator [architect] sonnet · high iter 1/3`.
 
+Agent completion events (`stage_complete`, `pge_*_done`) include an optional `summary` field — the last `task_progress` description from Claude Code's stream output. When present, the detail log renders it as a dimmed line under the completion entry, giving a narrative snapshot of what the agent was doing when it finished.
+
 Sub-pipeline child events render as `↳ [child-pipeline] stage: started/completed`. Child PGE/autoresearch phase events also render inline with `↳` prefix showing planner/generator/evaluator starts and PASS/FAIL results.
 
 | Event Type | Display | Color |
 |------------|---------|-------|
 | `stage_start` | `▶ Started: name (type)` + metadata lines | yellow |
-| `stage_complete` | `✓ Completed: name status (Xs)` or `✗ name: error — message` | green/red |
+| `stage_complete` | `✓ Completed: name status (Xs)` + optional summary | green/red |
 | `pge_planner_start` | `┌─ PGE: name` + `▶ Planner [agent] model · effort` | cyan/yellow |
+| `pge_planner_done` | `✓ Task plan → path` + optional summary | dim |
+| `pge_contract_done` | `✓ Contract → path` + optional summary + artifact preview | dim |
 | `pge_generator_start` | `▶ Generator [agent] model · effort iter X/Y` | yellow |
+| `pge_generator_done` | `✓ Deliverable → path` + optional summary | dim |
 | `pge_evaluator_start` | `▶ Evaluator [agent] model · effort iter X/Y` | yellow |
+| `pge_evaluator_done` | `✓ Evaluation → path` + optional summary | dim |
 | `pge_evaluation` | `✔ PASS` or `✗ FAIL` with artifact preview | green/red |
 | `child_stage_start` | `↳ [pipeline] stage: started` | yellow |
 | `child_stage_complete` | `↳ [pipeline] stage: status` | green/red |
 | `child_pge_*` | `↳ [pipeline] stage: ▶ Phase [agent]` / `✔ PASS` / `✗ FAIL` | cyan/green/red |
+| `loop_start` | `┌─ Loop: name` | cyan |
+| `loop_body_start` | `▶ Body [agent] model · effort iter X/Y` | yellow |
+| `loop_body_done` | `✓ Body stage → path` + optional summary | dim |
+| `loop_evaluator_start` | `▶ Evaluator [agent] model · effort iter X/Y` | yellow |
+| `loop_evaluator_done` | `✓ Evaluation → path` + optional summary | dim |
+| `loop_evaluation` | `✔ PASS` or `✗ FAIL` | green/red |
+| `child_loop_body_start` | `↳ [pipeline] stage: ▶ Body [agent]` | yellow |
+| `child_loop_evaluator_start` | `↳ [pipeline] stage: ▶ Evaluator [agent]` | yellow |
+| `child_loop_evaluation` | `↳ [pipeline] stage: ✔ PASS` / `✗ FAIL` | green/red |
+| `child_loop_start` | _(suppressed verbose event)_ | -- |
+| `child_loop_body_done` | _(suppressed verbose event)_ | -- |
+| `child_loop_evaluator_done` | _(suppressed verbose event)_ | -- |
 | `gate_pending` | `⏸ Gate pending: name` | blue |
 | `pipeline_paused` | `⏸ Pipeline paused (next: stage)` | blue |
 | `pipeline_complete` | `═ Pipeline status` | green/red |

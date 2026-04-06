@@ -128,6 +128,7 @@ export async function runPgeCycle(
 
   let effectiveContractPath = contractPath;
   let effectiveTaskPlanPath = taskPlanPath;
+  let contractSummary: string | undefined;
 
   if (skipPlanning) {
     effectiveContractPath = options.existingContractPath!;
@@ -206,6 +207,7 @@ export async function runPgeCycle(
     getLogger(ctx).log(`    task plan written: ${taskPlanPath}`);
     await onProgress?.("pge_planner_done", {
       agent: stage.planner.agent, taskPlanPath,
+      summary: plannerResult.summary,
     });
 
     // --- Step 1: Dispatch evaluator for contract writing ---
@@ -256,6 +258,7 @@ export async function runPgeCycle(
 
     setStageArtifact(state, stage.name, "contract", contractPath);
     updatePgeProgress(state, stage.name, 0, "contract_dispatched");
+    contractSummary = contractResult.summary;
     getLogger(ctx).log(`    contract written: ${contractPath}`);
   }
 
@@ -265,6 +268,7 @@ export async function runPgeCycle(
   if (!skipPlanning) {
     await onProgress?.("pge_contract_done", {
       agent: stage.evaluator.agent, contractPath: effectiveContractPath, contractContent,
+      summary: contractSummary,
     });
   }
 
@@ -339,6 +343,7 @@ export async function runPgeCycle(
     await onProgress?.("pge_generator_done", {
       iteration: iter, maxIterations: maxIter,
       agent: stage.generator.agent, deliverablePath,
+      summary: genResult.summary,
     });
 
     // --- Step 3: Dispatch evaluator ---
@@ -405,6 +410,7 @@ export async function runPgeCycle(
     await onProgress?.("pge_evaluator_done", {
       iteration: iter, maxIterations: maxIter,
       agent: stage.evaluator.agent, evaluationPath: evalPath,
+      summary: evalResult.summary,
     });
 
     // --- Step 4: Parse evaluation ---
@@ -569,6 +575,7 @@ export async function dispatchEvaluatorWithFeedback(
   await onProgress?.("pge_evaluator_done", {
     iteration: 0, maxIterations: stage.contract.max_iterations,
     agent: stage.evaluator.agent, evaluationPath: evalPath, humanReview: true,
+    summary: evalResult.summary,
   });
 
   return evalPath;

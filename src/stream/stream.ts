@@ -151,6 +151,8 @@ export interface AgentActivity {
   toolCallCount: number;
   /** Cumulative cost in USD. */
   totalCostUsd: number;
+  /** Latest task_progress description (narrative step summary from sub-agents). */
+  taskProgress: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,6 +183,7 @@ export class StreamParser extends EventEmitter {
       outputTokens: 0,
       toolCallCount: 0,
       totalCostUsd: 0,
+      taskProgress: "",
     };
   }
 
@@ -267,6 +270,9 @@ export class StreamParser extends EventEmitter {
         const desc = progressEvent.description;
         if (toolName) {
           this.activity.lastText = `[sub-agent] ${toolName}: ${desc ?? ""}`.slice(-200);
+        }
+        if (desc) {
+          this.activity.taskProgress = desc.slice(-200);
         }
       }
       return;

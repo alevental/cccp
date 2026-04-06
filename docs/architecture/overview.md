@@ -15,6 +15,7 @@ Reads YAML pipeline definitions and validates them against a Zod schema. Produce
 - **`autoresearch`** — Iterative artifact optimization: adjust artifact, execute task, evaluate against ground truth, retry on FAIL
 - **`pipeline`** — Invoke another pipeline YAML as a sub-pipeline, runs inline with nested state
 - **`human_gate`** — Block pipeline until approved via MCP tool call or state file edit
+- **`loop`** — Configurable body stages + evaluator retry cycle: execute body stages sequentially, evaluate with `### Overall: PASS/FAIL` routing, retry on FAIL up to max_iterations
 
 Stages can be wrapped in `parallel` blocks for concurrent execution. Independent stages within a group run simultaneously as separate subprocesses. Supports `fail_fast` (default) and `wait_all` failure modes.
 

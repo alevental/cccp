@@ -39,7 +39,7 @@ export interface Pipeline {
 }
 
 /** A single stage in a pipeline. Discriminated on `type`. */
-export type Stage = AgentStage | PgeStage | HumanGateStage | AutoresearchStage | PipelineStage;
+export type Stage = AgentStage | PgeStage | HumanGateStage | AutoresearchStage | PipelineStage | LoopStage;
 
 /** Base fields shared by every stage type. */
 export interface StageBase {
@@ -163,6 +163,35 @@ export interface AutoresearchStage extends StageBase {
   on_fail?: EscalationStrategy;
 }
 
+/** A single body stage inside a loop. */
+export interface LoopBodyStage {
+  name: string;
+  agent: string;
+  operation?: string;
+  mcp_profile?: string;
+  allowed_tools?: string[];
+  inputs?: string[];
+  task?: string;
+  task_file?: string;
+  output?: string;
+  skip_first?: boolean;
+  model?: string;
+  effort?: EffortLevel;
+}
+
+/** Loop stage: run N body stages, evaluate, retry on FAIL. */
+export interface LoopStage extends StageBase {
+  type: "loop";
+  inputs?: string[];
+  model?: string;
+  effort?: EffortLevel;
+  stages: LoopBodyStage[];
+  evaluator: PgeAgentConfig;
+  max_iterations: number;
+  on_fail?: EscalationStrategy;
+  human_review?: boolean;
+}
+
 /** Sub-pipeline stage — invokes another pipeline YAML inline. */
 export interface PipelineStage extends StageBase {
   type: "pipeline";
@@ -222,14 +251,19 @@ export type AutoresearchStep =
   | "evaluator_dispatched"
   | "routed";
 
+export type LoopStep =
+  | `body_${string}_dispatched`
+  | "evaluator_dispatched"
+  | "routed";
+
 export interface StageState {
   name: string;
   type: string;
   status: StageStatus;
   /** Current PGE iteration (1-based). Only for type: pge. */
   iteration?: number;
-  /** Last completed sub-step within the current iteration (PGE or autoresearch). */
-  pgeStep?: PgeStep | AutoresearchStep;
+  /** Last completed sub-step within the current iteration (PGE, autoresearch, or loop). */
+  pgeStep?: PgeStep | AutoresearchStep | LoopStep;
   /** Paths to artifacts produced by this stage. */
   artifacts?: Record<string, string>;
   /** Duration in ms (set on completion). */
@@ -290,8 +324,8 @@ export interface ResumePoint {
   stageName: string;
   /** For PGE stages: which iteration to resume at. */
   resumeIteration?: number;
-  /** For PGE/autoresearch stages: which sub-step to resume at within the iteration. */
-  resumeStep?: PgeStep | AutoresearchStep;
+  /** For PGE/autoresearch/loop stages: which sub-step to resume at within the iteration. */
+  resumeStep?: PgeStep | AutoresearchStep | LoopStep;
 }
 
 /** Event in the state audit log. */
@@ -364,6 +398,8 @@ export interface AgentResult {
   outputExists: boolean;
   /** Duration in milliseconds. */
   durationMs: number;
+  /** Last task_progress description from the agent (narrative step summary). */
+  summary?: string;
 }
 
 /** Result of a full PGE cycle (may span multiple iterations). */
@@ -402,11 +438,25 @@ export interface AutoresearchResult {
   durationMs: number;
 }
 
+/** Result of a full loop cycle. */
+export interface LoopResult {
+  /** Final evaluation outcome. */
+  outcome: "pass" | "fail" | "error";
+  /** Number of iterations executed. */
+  iterations: number;
+  /** Max iterations allowed. */
+  maxIterations: number;
+  /** Path to the final evaluation file. */
+  evaluationPath?: string;
+  /** Duration in milliseconds (total across all iterations). */
+  durationMs: number;
+}
+
 /** Result of a single stage execution. */
 export interface StageResult {
   stageName: string;
   status: "passed" | "failed" | "skipped" | "error";
-  result?: AgentResult | PgeResult | AutoresearchResult;
+  result?: AgentResult | PgeResult | AutoresearchResult | LoopResult;
   error?: string;
   durationMs: number;
 }

@@ -49,7 +49,7 @@ function StageRow({ name, stage }: { name: string; stage: StageState }) {
   const icon = stageIcon(stage.status);
   const color = stageColor(stage.status);
   const iterInfo =
-    stage.type === "pge" && stage.iteration
+    (stage.type === "pge" || stage.type === "loop") && stage.iteration
       ? ` (${stage.iteration})`
       : "";
   const duration =
@@ -268,6 +268,10 @@ function matchesStage(agentKey: string, s: StageState): boolean {
   if (s.type === "pge" || s.type === "autoresearch") {
     const suffix = currentPgeSuffix(s.pgeStep);
     return suffix != null && agentKey === `${s.name}${suffix}`;
+  }
+  // For loop stages, use prefix matching (body agents are named `{stage}-{body}`).
+  if (s.type === "loop") {
+    return agentKey.startsWith(`${s.name}-`);
   }
   return agentKey.startsWith(s.name);
 }

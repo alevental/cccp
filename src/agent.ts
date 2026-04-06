@@ -173,10 +173,13 @@ export async function dispatchAgent(
     }
   }
 
+  const finalActivity = parser.getActivity();
+
   return {
     exitCode,
     outputPath: opts.expectedOutput,
     outputExists,
     durationMs,
+    summary: finalActivity.taskProgress || undefined,
   };
 }

@@ -35,7 +35,7 @@ phase_defaults:                 # Optional. Per-phase model/effort defaults.
     effort: low|medium|high|max
 stages:                         # Required. At least one stage.
   - name: string                # Required. Unique stage identifier.
-    type: agent | pge | autoresearch | pipeline | human_gate
+    type: agent | pge | autoresearch | pipeline | human_gate | loop
     # ... stage-specific fields
 ```
 
@@ -245,7 +245,73 @@ Sub-pipeline composition. Invokes another pipeline YAML inline within the parent
 - Variables are **explicit pass-through only**: child gets built-in vars (`{project}`, `{project_dir}`, `{artifact_dir}`, `{pipeline_name}`) recomputed for its context, plus any `variables` explicitly passed
 - Circular dependencies are detected (max depth 5) and cause the stage to error
 - Resume works across pipeline boundaries
-- `on_fail` strategies work the same as PGE/autoresearch stages
+- `on_fail` strategies work the same as PGE/autoresearch/loop stages
+
+## Stage Type: `loop`
+
+Configurable body stages + evaluator retry cycle. Generalizes the PGE/autoresearch pattern: run N body stages, evaluate, retry on FAIL.
+
+```yaml
+- name: qa-review
+  type: loop
+  task: "Fix all issues until QA review passes"
+  max_iterations: 5
+  inputs:
+    - "{artifact_dir}/feature-spec.md"
+  stages:
+    - name: fix
+      agent: implementer
+      task: "Fix the issues identified in the review"
+      skip_first: true                    # Optional. Skip this body stage on iteration 1.
+    - name: test
+      agent: qa-engineer
+      task: "Run the full test suite"
+      output: "{artifact_dir}/qa/test-results.md"
+  evaluator:
+    agent: reviewer
+    task: "Review implementation quality"
+    inputs:
+      - "{artifact_dir}/qa/test-results.md"
+  on_fail: human_gate
+  human_review: true
+```
+
+| Field | Type | Required | Constraints | Description |
+|-------|------|----------|-------------|-------------|
+| `stages` | LoopBodyStage[] | Yes | At least 1 | Body stages executed sequentially each iteration |
+| `evaluator` | PgeAgentConfig | Yes | - | Agent that evaluates after all body stages complete |
+| `max_iterations` | integer | Yes | 1-20 | Maximum retry iterations |
+| `inputs` | string[] | No | - | Shared inputs for all body stages and evaluator |
+| `on_fail` | string | No | stop/human_gate/skip | Behavior when max iterations exhausted with FAIL |
+| `human_review` | boolean | No | - | Fire a human review gate after successful completion |
+| `model` | string | No | - | Stage-level default model for body stages and evaluator |
+| `effort` | string | No | low/medium/high/max | Stage-level default effort |
+
+### LoopBodyStage Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Unique within the loop (must not match loop stage name) |
+| `agent` | string | Yes | Agent to dispatch |
+| `operation` | string | No | Directory agent operation |
+| `task` | string | No | Override task for this body stage (mutually exclusive with `task_file`) |
+| `task_file` | string | No | Path to task file (mutually exclusive with `task`) |
+| `output` | string | No | Expected output path (if set, agent must create this file) |
+| `skip_first` | boolean | No | Skip this body stage on iteration 1 (at least one body must NOT have skip_first) |
+| `inputs` | string[] | No | Agent-specific inputs (merged with stage-level inputs) |
+| `model` | string | No | Model override |
+| `effort` | string | No | Effort override |
+| `mcp_profile` | string | No | MCP profile override |
+| `allowed_tools` | string[] | No | Tool restrictions |
+
+### Loop Execution Flow
+
+1. For each iteration 1..max_iterations:
+   - For each body stage (skip if `skip_first` and iter == 1):
+     - Dispatch body agent (first active body gets `previousEvaluation` on iter > 1)
+   - Dispatch evaluator with `### Overall: PASS/FAIL` format
+   - Parse evaluation result
+2. **Route**: PASS → done. FAIL + iters left → retry. Max reached → apply `on_fail`.
 
 ## Parallel Execution Groups
 
@@ -286,6 +352,7 @@ The key question is: **does stage B need to read stage A's output?** If not, the
 
 - **No `human_gate` inside parallel groups** — gates block execution and cannot run alongside other stages
 - **No `pipeline` stages inside parallel groups** — sub-pipelines have complex state interactions
+- **No `loop` stages inside parallel groups** — loops have iterative state that requires sequential execution
 - **No conflicting outputs** — stages in the same group cannot write to the same `output` or `contract.deliverable` path
 - **Unique stage names** — all stage names must be unique across the entire pipeline (including inside groups)
 
@@ -699,7 +766,48 @@ stages:
     # No max_iterations — runs until PASS
 ```
 
-### Example 4: Pipeline Composition (Sub-Pipelines)
+### Example 4: Loop (QA Review Cycle)
+
+Iterative fix-test-review cycle until QA passes.
+
+```yaml
+name: qa-loop
+description: Fix issues, test, and review until passing.
+
+stages:
+  - name: implement
+    type: agent
+    agent: implementer
+    task: "Implement the feature described in the spec."
+    inputs:
+      - "{artifact_dir}/feature-spec.md"
+    output: "{artifact_dir}/implementation-report.md"
+
+  - name: qa-cycle
+    type: loop
+    task: "Fix issues and review until QA passes"
+    max_iterations: 5
+    inputs:
+      - "{artifact_dir}/feature-spec.md"
+      - "{artifact_dir}/implementation-report.md"
+    stages:
+      - name: fix
+        agent: implementer
+        task: "Fix the issues identified in the review"
+        skip_first: true
+      - name: test
+        agent: qa-engineer
+        task: "Run the full test suite"
+        output: "{artifact_dir}/qa-cycle/test-results.md"
+    evaluator:
+      agent: reviewer
+      task: "Review implementation quality and test results"
+      inputs:
+        - "{artifact_dir}/qa-cycle/test-results.md"
+    on_fail: human_gate
+```
+
+### Example 5: Pipeline Composition (Sub-Pipelines)
 
 Master pipeline that delegates to reusable sub-pipelines.
 

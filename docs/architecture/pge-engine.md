@@ -57,7 +57,7 @@ runPgeCycle(stage, ctx)
 
 3. **Previous evaluation is passed to generator on retry.** The generator's task context includes the path to the prior evaluation file so it can read the feedback and address specific issues.
 
-4. **State is updated at every sub-step.** Planner dispatched, contract dispatched, generator dispatched, evaluator dispatched, routed. This enables resume at any point within an iteration.
+4. **State is updated at every sub-step.** Planner dispatched, contract dispatched, generator dispatched, evaluator dispatched, routed. This enables resume at any point within an iteration. Each `_done` event includes a `summary` field — the last `task_progress` description from the agent's stream output — which the TUI detail log renders as a dimmed narrative line under the completion entry.
 
 5. **The planner runs once, before the generate-evaluate loop.** The planner produces a task plan that feeds into both the contract writer and the generator. The planner's user prompt explicitly frames the task as planning (not execution) with bookended instructions -- an opening framing that identifies the agent as a planner producing work for a separate generator, and a closing reminder to not produce the deliverable itself.
 

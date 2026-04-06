@@ -165,6 +165,7 @@ export async function runAutoresearchCycle(
       await onProgress?.("autoresearch_adjuster_done", {
         iteration: iter, maxIterations: maxIter ?? null,
         agent: stage.adjuster.agent, artifactPath,
+        summary: adjResult.summary,
       });
     }
 
@@ -214,6 +215,7 @@ export async function runAutoresearchCycle(
     await onProgress?.("autoresearch_executor_done", {
       iteration: iter, maxIterations: maxIter ?? null,
       agent: stage.executor.agent, outputPath,
+      summary: execResult.summary,
     });
 
     // --- Step 3: Dispatch evaluator ---
@@ -264,6 +266,7 @@ export async function runAutoresearchCycle(
     await onProgress?.("autoresearch_evaluator_done", {
       iteration: iter, maxIterations: maxIter ?? null,
       agent: stage.evaluator.agent, evaluationPath: evalPath,
+      summary: evalResult.summary,
     });
 
     // --- Step 4: Parse evaluation ---

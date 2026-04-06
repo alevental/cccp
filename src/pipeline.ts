@@ -104,6 +104,40 @@ const HumanGateStageSchema = z.object({
   when: WhenSchema,
 });
 
+const LoopBodyStageSchema = z.object({
+  name: z.string(),
+  agent: z.string(),
+  operation: z.string().optional(),
+  mcp_profile: z.string().optional(),
+  allowed_tools: z.array(z.string()).optional(),
+  inputs: z.array(z.string()).optional(),
+  task: z.string().optional(),
+  task_file: z.string().optional(),
+  output: z.string().optional(),
+  skip_first: z.boolean().optional(),
+  model: ModelSchema,
+  effort: EffortSchema,
+});
+
+const LoopStageSchema = z.object({
+  name: z.string(),
+  task: z.string().optional(),
+  task_file: z.string().optional(),
+  type: z.literal("loop"),
+  mcp_profile: z.string().optional(),
+  model: ModelSchema,
+  effort: EffortSchema,
+  inputs: z.array(z.string()).optional(),
+  stages: z.array(LoopBodyStageSchema).min(1),
+  evaluator: PgeAgentConfigSchema,
+  max_iterations: z.number().int().min(1).max(20),
+  on_fail: z.enum(["stop", "human_gate", "skip"]).optional(),
+  human_review: z.boolean().optional(),
+  variables: z.record(z.string()).optional(),
+  outputs: OutputsSchema,
+  when: WhenSchema,
+});
+
 const PipelineStageSchema = z.object({
   name: z.string(),
   task: z.string().optional(),
@@ -123,6 +157,7 @@ const StageSchema = z.discriminatedUnion("type", [
   HumanGateStageSchema,
   AutoresearchStageSchema,
   PipelineStageSchema,
+  LoopStageSchema,
 ]);
 
 const ParallelGroupSchema = z.object({
@@ -174,6 +209,10 @@ const PipelineSchema = z.object({
         // No pipeline stages inside parallel groups
         if (stage.type === "pipeline") {
           issues.push(`Stage '${stage.name}' is type pipeline and cannot be inside a parallel group`);
+        }
+        // No loop stages inside parallel groups
+        if (stage.type === "loop") {
+          issues.push(`Stage '${stage.name}' is type loop and cannot be inside a parallel group`);
         }
         // Duplicate name check
         if (allNames.has(stage.name)) {
@@ -265,6 +304,28 @@ const PipelineSchema = z.object({
         if (peers?.has(refStage)) {
           issues.push(`Stage '${stage.name}': when references stage '${refStage}' in the same parallel group`);
         }
+      }
+    }
+
+    // Validate loop-specific constraints.
+    if (stage.type === "loop") {
+      const bodyNames = new Set<string>();
+      let allSkipFirst = true;
+      for (const bodyStage of stage.stages) {
+        if (bodyNames.has(bodyStage.name)) {
+          issues.push(`Stage '${stage.name}': duplicate body stage name '${bodyStage.name}'`);
+        }
+        if (bodyStage.name === stage.name) {
+          issues.push(`Stage '${stage.name}': body stage name cannot match the loop stage name`);
+        }
+        if (bodyStage.task && bodyStage.task_file) {
+          issues.push(`Stage '${stage.name}': body stage '${bodyStage.name}' cannot specify both 'task' and 'task_file'`);
+        }
+        bodyNames.add(bodyStage.name);
+        if (!bodyStage.skip_first) allSkipFirst = false;
+      }
+      if (allSkipFirst) {
+        issues.push(`Stage '${stage.name}': at least one body stage must not have skip_first: true`);
       }
     }
   }
