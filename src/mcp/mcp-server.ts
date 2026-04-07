@@ -4,9 +4,9 @@ import { z } from "zod";
 import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { openDatabase } from "../db.js";
 import { writeFeedbackArtifact } from "../gate/feedback-artifact.js";
 import { GateNotifier } from "./gate-notifier.js";
+import { DbService } from "../db-service.js";
 import { loadState, saveState, setStageArtifact, discoverRuns } from "../state.js";
 import type { PipelineState, DiscoveredRun } from "../types.js";
 
@@ -14,13 +14,15 @@ import type { PipelineState, DiscoveredRun } from "../types.js";
 // Run resolution
 // ---------------------------------------------------------------------------
 
+/** Module-level DbService — initialised in startMcpServer(). */
+let dbService: DbService;
+
 async function resolveRun(
   runIdPrefix?: string,
 ): Promise<{ run: DiscoveredRun } | { error: string }> {
   const projectDir = process.cwd();
-  // Reload DB from disk — the runner (separate process) may have written new state.
-  const db = await openDatabase(projectDir);
-  db.reload();
+  // Reload DB from disk via the service — the runner (separate process) may have written new state.
+  await dbService.db();
   const runs = await discoverRuns(projectDir);
 
   if (runs.length === 0) {
@@ -170,6 +172,8 @@ export async function startMcpServer(): Promise<void> {
     "List all pipeline runs (active and completed). Shows run ID, pipeline name, project, status, and any pending gates.",
     {},
     async () => {
+      // Reload DB from disk via the service before reading runs.
+      await dbService.db();
       const runs = await discoverRuns(process.cwd());
 
       if (runs.length === 0) {
@@ -286,7 +290,7 @@ export async function startMcpServer(): Promise<void> {
         );
       }
 
-      const db = await openDatabase(process.cwd());
+      const db = await dbService.db();
       db.setPauseRequested(state.runId, true);
       db.flush();
 
@@ -511,7 +515,10 @@ export async function startMcpServer(): Promise<void> {
     },
   );
 
-  // --- Start server ---
+  // --- Start DB service and server ---
+  dbService = new DbService({ projectDir, mode: "reader" });
+  dbService.start();
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
@@ -520,6 +527,15 @@ export async function startMcpServer(): Promise<void> {
     server,
     projectDir,
     sessionId,
+    dbService,
   });
   notifier.start();
+
+  // --- Shutdown cleanup ---
+  const shutdown = () => {
+    notifier.stop();
+    dbService.stop();
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 }

@@ -63,12 +63,14 @@ constructor(
   private runId: string,
   private projectDir?: string,
   private quiet?: boolean,
+  private dbService?: DbService,
 )
 ```
 
 - `runId` -- run ID for the current pipeline execution (used to poll state via `loadState(runId)`)
 - `projectDir` -- project root directory (used to locate the SQLite database)
 - `quiet` -- when `true`, suppresses console output (set when the TUI dashboard is active)
+- `dbService` -- optional `DbService` instance. When provided, the gate-watcher delegates WASM reclaim to the service timer instead of managing it inline.
 
 The gate strategy is created lazily by the runner after `createState()` produces a `runId`, since the run ID doesn't exist at context-construction time.
 
@@ -82,7 +84,9 @@ The strategy polls the SQLite database via `loadState()` every 5 seconds (`POLL_
 
 The `reloadFromDisk` flag is critical: it causes the database layer to re-read the SQLite file from disk, which is necessary because the MCP server (running in a separate process) may have written a gate response.
 
-Every ~15 minutes (180 polls), the gate-watcher calls `reclaimWasmMemory()` to destroy the sql.js WASM module and allow V8 to GC its backing `ArrayBuffer`. See [TUI Dashboard — Memory Optimization](tui-dashboard.md#memory-optimization) for details.
+When no `DbService` is provided, the gate-watcher calls `reclaimWasmMemory()` every ~15 minutes (180 polls) to destroy the sql.js WASM module and allow V8 to GC its backing `ArrayBuffer`. When a `DbService` is provided, the service's timer handles reclaim automatically. See [TUI Dashboard — Memory Optimization](tui-dashboard.md#memory-optimization) for details.
+
+A safety timeout (`MAX_POLL_COUNT = 8640`, ~12 hours at 5s) prevents the polling interval from running indefinitely if the gate state is corrupted or never resolved.
 
 ### Gate notification
 

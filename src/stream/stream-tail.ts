@@ -46,7 +46,10 @@ export class StreamTailer extends EventEmitter {
     }
     for (const { parser } of this.parsers.values()) {
       parser.flush();
+      parser.removeAllListeners();
     }
+    this.parsers.clear();
+    this.removeAllListeners();
   }
 
   private async scanFiles(): Promise<void> {

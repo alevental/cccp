@@ -3,6 +3,7 @@ import { openDatabase } from "../db.js";
 import { writeFeedbackArtifact } from "../gate/feedback-artifact.js";
 import { discoverRuns, loadState, saveState, setStageArtifact } from "../state.js";
 import type { DiscoveredRun } from "../types.js";
+import type { DbService } from "../db-service.js";
 
 // ---------------------------------------------------------------------------
 // Gate notifier — polls for pending gates and notifies via MCP
@@ -21,6 +22,9 @@ export interface GateNotifierOptions {
   /** Session ID for this MCP server instance. Used to filter gate notifications. */
   sessionId?: string;
   pollIntervalMs?: number;
+  /** Centralized database service for reload + WASM reclaim.
+   *  When omitted, falls back to direct openDatabase() + reload() with no WASM reclaim. */
+  dbService?: DbService;
 }
 
 /**
@@ -53,6 +57,8 @@ export class GateNotifier {
       clearInterval(this.intervalId);
       this.intervalId = null;
     }
+    this.seenGates.clear();
+    this.lastRunStatus.clear();
   }
 
   // -------------------------------------------------------------------------
@@ -65,9 +71,20 @@ export class GateNotifier {
     if (this.pendingNotification) return; // one at a time
 
     try {
-      const db = await openDatabase(this.opts.projectDir);
-      db.reload();
+      // Reload DB from disk before reading runs.
+      if (this.opts.dbService) {
+        await this.opts.dbService.db();
+      } else {
+        const db = await openDatabase(this.opts.projectDir);
+        db.reload();
+      }
       const runs = await discoverRuns(this.opts.projectDir);
+
+      // Prune lastRunStatus for runs no longer returned by discoverRuns.
+      const currentRunIds = new Set(runs.map((r) => r.state.runId));
+      for (const runId of this.lastRunStatus.keys()) {
+        if (!currentRunIds.has(runId)) this.lastRunStatus.delete(runId);
+      }
 
       // Detect pipeline completion transitions and send channel notifications.
       for (const run of runs) {

@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 | `runner.ts` | `loadState` (resume) | `saveState`, `saveStateWithEvent` | Direct DB access via `state.ts` |
 | `pge.ts` | — | Mutates in-memory state via `updatePgeProgress`, `setStageArtifact` | State passed by reference; runner persists via `onProgress` callback |
 | `mcp-server.ts` | `listRuns`, `getRunByArtifactDir` | `saveState` (gate response), `setPauseRequested` (pause) | Direct DB access; calls `reload()` before reads for cross-process sync |
-| `gate-watcher.ts` | `loadState` (polling every 5s) | — | Read-only; passes `reloadFromDisk: true` for cross-process sync. Calls `reclaimWasmMemory()` every ~15 min. |
+| `gate-watcher.ts` | `loadState` (polling every 5s) | — | Read-only; passes `reloadFromDisk: true` for cross-process sync. When no `DbService` is provided, calls `reclaimWasmMemory()` every ~15 min; otherwise the service timer handles reclaim. Has 12h safety timeout. |
 | `dashboard.tsx` | `loadState` (adaptive: 500ms active, 5s gate-idle), `getEvents` | — | Read-only; uses setTimeout chain with overlap guard |
 | `cli.ts` | `loadState` (resume, dashboard commands) | `saveState` (initial state for TUI) | Direct DB access |
 
@@ -111,7 +111,7 @@ State is saved after every transition in the runner and PGE engine:
 The runner writes state; the MCP server, gate watcher, and dashboard read it. Synchronization uses:
 
 - **Atomic flush**: `db.flush()` writes to a `.tmp` file, then renames. This prevents partial reads.
-- **Reload**: `db.reload()` re-reads the database file from disk into the in-memory sql.js instance. Readers call this before querying to pick up the runner's latest writes.
+- **Reload**: `db.reload()` re-reads the database file from disk into the in-memory sql.js instance. Readers call this before querying to pick up the runner's latest writes. Cross-process readers (MCP server, gate-notifier, standalone dashboard) use `DbService` (`src/db-service.ts`) which centralises the reload + periodic `reclaimWasmMemory()` timer to prevent unbounded WASM heap growth.
 - **No locking**: There is no file-level or row-level locking. In practice, only one writer (the runner) writes state at any given time. The MCP server writes gate responses (`gate.status = "approved"/"rejected"`) and pause requests (`pause_requested` column). Pause uses a dedicated DB column (not the state JSON) to avoid write races with the runner.
 
 ### Gate response flow

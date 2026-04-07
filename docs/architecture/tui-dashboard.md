@@ -289,20 +289,26 @@ const recycleTimer = setInterval(() => {
 }, RECYCLE_INTERVAL_MS);
 ```
 
-### Periodic WASM reclaim (15 minutes, sql.js)
+### Centralized WASM reclaim (DbService, sql.js)
 
-The gate-watcher's `reload()` cycle creates a new `sql.Database` from disk every 5 seconds. Each allocation grows the sql.js WASM heap. Every ~15 minutes (180 polls), the gate-watcher calls `reclaimWasmMemory()` which closes all cached `CccpDatabase` instances, clears the singleton cache, and sets the sql.js WASM module reference to `null`. This drops all references to the old WASM module so V8 can GC its backing `ArrayBuffer`. The next `openDatabase()` call lazily re-initialises a fresh module with minimal memory.
+Cross-process readers (standalone dashboard, gate-notifier, MCP server) call `db.reload()` on every poll cycle, which creates a new `sql.Database` from disk. Each allocation grows the sql.js WASM heap. The `DbService` (`src/db-service.ts`) centralises this: in `"reader"` mode it reloads on every `.db()` call and runs a periodic `reclaimWasmMemory()` timer (default 15 minutes). This closes all cached `CccpDatabase` instances, clears the singleton cache, and sets the sql.js WASM module reference to `null`, dropping all references so V8 can GC the backing `ArrayBuffer`. The next `openDatabase()` call lazily re-initialises a fresh module with minimal memory.
 
 ```typescript
-// db.ts
-export function reclaimWasmMemory(): void {
-  for (const db of instances.values()) db.close();
-  instances.clear();
-  SQL = null;  // next openDatabase() re-initialises
+// db-service.ts
+export class DbService {
+  start(): void {
+    // reader mode: periodic reclaimWasmMemory() on unref'd timer
+  }
+  async db(): Promise<CccpDatabase> {
+    // reader mode: reload from disk before returning handle
+  }
+  stop(): void {
+    // clear timer + final reclaimWasmMemory()
+  }
 }
 ```
 
-This is safe because JavaScript is single-threaded: between `await` points, code runs atomically, so no other code is using the old DB when it's closed.
+The standalone dashboard creates a `DbService` at launch and stops it on completion. The MCP server creates one at startup and passes it to the `GateNotifier`. The inline dashboard (used by `cccp run` and `cccp resume`) does not need a `DbService` — it reads from the in-process singleton without reloading.
 
 ## cmux Integration
 

@@ -65,7 +65,7 @@ Variables are merged in this order (later overrides earlier):
 - Active agents panel shows only in-progress agents with elapsed timers
 - Sub-pipeline stages are shown inline with `├─` indentation; in cmux, depth-1 sub-pipelines also get their own split-pane dashboard
 - Stage/phase start events include model, effort, inputs, and output metadata
-- Dashboard remounts every 15 minutes and renders at 10 FPS to cap memory
+- Dashboard remounts every 15 minutes (yoga-layout WASM) and renders at 10 FPS to cap memory
 
 ### Examples
 
@@ -200,7 +200,7 @@ The standalone dashboard:
 - Tails `.cccp/*.stream.jsonl` files for live agent activity (via `StreamTailer`)
 - Polls the database every 500ms for state changes (5s when gate-idle)
 - Exits automatically when the pipeline completes
-- Reclaims sql.js WASM memory every ~15 minutes to prevent unbounded heap growth
+- Reclaims sql.js WASM memory every ~15 minutes via `DbService` to prevent unbounded heap growth
 
 When `--scope` is used, the dashboard loads the parent run's state but displays only the child pipeline's stages, activity, and events. The `child_*` event prefixes are stripped so the scoped dashboard looks like a standalone pipeline view.
 

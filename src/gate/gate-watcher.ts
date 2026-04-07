@@ -3,6 +3,7 @@ import { reclaimWasmMemory } from "../db.js";
 import type { GateInfo } from "../types.js";
 import type { GateResponse, GateStrategy } from "./gate-strategy.js";
 import { notifyGateRequired } from "../tui/cmux.js";
+import type { DbService } from "../db-service.js";
 
 // ---------------------------------------------------------------------------
 // Filesystem-polling gate strategy
@@ -12,6 +13,9 @@ const POLL_INTERVAL_MS = 5000;
 
 /** Reclaim sql.js WASM memory every ~15 minutes (180 polls × 5s). */
 const WASM_RECLAIM_EVERY = 180;
+
+/** Safety timeout: 12 hours at 5s per poll = 8640 polls. */
+const MAX_POLL_COUNT = 8640;
 
 /**
  * Gate strategy that writes `gate_pending` to state.json and polls for
@@ -24,6 +28,7 @@ export class FilesystemGateStrategy implements GateStrategy {
     private runId: string,
     private projectDir?: string,
     private quiet?: boolean,
+    private dbService?: DbService,
   ) {}
 
   async waitForGate(gate: GateInfo): Promise<GateResponse> {
@@ -34,15 +39,22 @@ export class FilesystemGateStrategy implements GateStrategy {
       if (gate.prompt) console.log(`      ${gate.prompt}`);
     }
 
-    return new Promise<GateResponse>((resolve) => {
+    return new Promise<GateResponse>((resolve, reject) => {
       let pollCount = 0;
       const interval = setInterval(async () => {
         try {
-          // Periodically reclaim sql.js WASM linear memory which can only
-          // grow, never shrink. Dropping the module lets V8 GC the backing
-          // ArrayBuffer; the next loadState() re-initialises transparently.
           pollCount++;
-          if (pollCount % WASM_RECLAIM_EVERY === 0) {
+
+          // Safety timeout — prevent infinite polling on corrupted state.
+          if (pollCount > MAX_POLL_COUNT) {
+            clearInterval(interval);
+            reject(new Error(`Gate "${gate.stageName}" timed out after ${MAX_POLL_COUNT} polls (~12 hours)`));
+            return;
+          }
+
+          // Periodically reclaim sql.js WASM linear memory (only when
+          // no DbService is provided — the service manages its own timer).
+          if (!this.dbService && pollCount % WASM_RECLAIM_EVERY === 0) {
             reclaimWasmMemory();
           }
 

@@ -96,13 +96,17 @@ program
 
       // Start dashboard, then run pipeline. Dashboard watches state.json.
       const dashboard = startDashboard(initialState.runId, projectDir, initialState);
-      const result = await runPipeline(ctx, { existingState: initialState });
+      let exitCode = 1;
+      try {
+        const result = await runPipeline(ctx, { existingState: initialState });
+        exitCode = result.status === "passed" ? 0 : 1;
+        // Brief pause for final render.
+        await new Promise((r) => setTimeout(r, 500));
+      } finally {
+        dashboard.unmount();
+      }
 
-      // Brief pause for final render, then unmount.
-      await new Promise((r) => setTimeout(r, 500));
-      dashboard.unmount();
-
-      process.exit(result.status === "passed" ? 0 : 1);
+      process.exit(exitCode);
     } else {
       const result = await runPipeline(ctx);
       process.exit(result.status === "passed" ? 0 : 1);
@@ -186,12 +190,16 @@ program
       const { startDashboard } = await import("./tui/dashboard.js");
 
       const dashboard = startDashboard(existingState.runId, projectDir, existingState);
-      const result = await runPipeline(ctx, { existingState });
+      let exitCode = 1;
+      try {
+        const result = await runPipeline(ctx, { existingState });
+        exitCode = result.status === "passed" ? 0 : 1;
+        await new Promise((r) => setTimeout(r, 500));
+      } finally {
+        dashboard.unmount();
+      }
 
-      await new Promise((r) => setTimeout(r, 500));
-      dashboard.unmount();
-
-      process.exit(result.status === "passed" ? 0 : 1);
+      process.exit(exitCode);
     } else {
       const result = await runPipeline(ctx, { existingState });
       process.exit(result.status === "passed" ? 0 : 1);

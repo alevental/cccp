@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { render, Box, Text, useStdout, useInput } from "ink";
 import { resolve } from "node:path";
 import { loadState } from "../state.js";
-import { openDatabase, reclaimWasmMemory } from "../db.js";
+import { openDatabase } from "../db.js";
 import { activityBus } from "../activity-bus.js";
+import { DbService } from "../db-service.js";
 import { StreamTailer } from "../stream/stream-tail.js";
 import type { PipelineState, StateEvent } from "../types.js";
 import type { AgentActivity } from "../stream/stream.js";
@@ -25,9 +26,11 @@ interface DashboardProps {
   startTime?: number;
   /** Scope display to a sub-pipeline stage's children. */
   scopeStage?: string;
+  /** Centralized DB service (standalone mode). Handles reload + WASM reclaim. */
+  dbService?: DbService;
 }
 
-function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, onComplete, startTime: startTimeProp, scopeStage }: DashboardProps) {
+function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, onComplete, startTime: startTimeProp, scopeStage, dbService }: DashboardProps) {
   const { stdout } = useStdout();
   const [state, setState] = useState<PipelineState>(initialState);
   const [activities, setActivities] = useState<Map<string, AgentActivity>>(new Map());
@@ -121,19 +124,13 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
     let timer: ReturnType<typeof setTimeout>;
     let polling = false;
     let cancelled = false;
-    let pollCount = 0;
-    // Standalone dashboards reload from disk and periodically reclaim WASM memory.
+    // Standalone dashboards reload from disk. When a DbService is provided,
+    // it handles reload + periodic WASM reclaim via its own timer.
     const isStandalone = !useEventBus;
 
     const poll = async () => {
       if (polling || cancelled) return;
       polling = true;
-      pollCount++;
-
-      // Reclaim sql.js WASM memory every ~15 min to prevent unbounded heap growth.
-      if (isStandalone && pollCount % 1800 === 0) {
-        reclaimWasmMemory();
-      }
 
       // Tick elapsed timer and current time (for agent elapsed).
       const currentTime = Date.now();
@@ -141,7 +138,10 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
       setNow(currentTime);
 
       try {
-        const parentState = await loadState(runId, projectDir, isStandalone);
+        // When a DbService is available, use it to reload (it owns WASM reclaim).
+        // Otherwise fall back to loadState's built-in reload for standalone mode.
+        if (dbService) await dbService.db();
+        const parentState = await loadState(runId, projectDir, isStandalone && !dbService);
         if (parentState) {
           // When scoped, extract the child pipeline state from the parent.
           const displayState = scopeStage
@@ -190,13 +190,15 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
                 displayState.status === "error" ||
                 displayState.status === "paused"
               ) {
+                // Stop polling — pipeline has reached a terminal state.
+                cancelled = true;
                 setTimeout(() => onComplete?.(), 500);
               }
             }
           }
 
           // Poll events incrementally. When scoped, filter to child events for this stage.
-          const db = await openDatabase(projectDir);
+          const db = dbService ? await dbService.db() : await openDatabase(projectDir);
           const newEvents = db.getEvents(parentState.runId, lastEventId.current);
           if (newEvents.length > 0) {
             lastEventId.current = newEvents[newEvents.length - 1].id;
@@ -232,7 +234,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [runId, projectDir, startTime, onComplete, useEventBus, scopeStage]);
+  }, [runId, projectDir, startTime, onComplete, useEventBus, scopeStage, dbService]);
 
   const isComplete =
     state.status === "passed" ||
@@ -311,6 +313,9 @@ export async function launchDashboard(
   initialState: PipelineState,
   scopeStage?: string,
 ): Promise<void> {
+  const svc = new DbService({ projectDir, mode: "reader" });
+  svc.start();
+
   return new Promise<void>((resolve) => {
     const { unmount, waitUntilExit } = render(
       <Dashboard
@@ -319,7 +324,9 @@ export async function launchDashboard(
         projectDir={projectDir}
         initialState={initialState}
         scopeStage={scopeStage}
+        dbService={svc}
         onComplete={() => {
+          svc.stop();
           unmount();
           resolve();
         }}
@@ -327,7 +334,10 @@ export async function launchDashboard(
       { maxFps: 10 },
     );
 
-    waitUntilExit().then(() => resolve());
+    waitUntilExit().then(() => {
+      svc.stop();
+      resolve();
+    });
   });
 }
 
