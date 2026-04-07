@@ -57,7 +57,7 @@ function buildArgs(opts: DispatchOptions): string[] {
   }
 
   if (opts.allowedTools?.length) {
-    args.push("--allowedTools", opts.allowedTools.join(","));
+    args.push("--tools", opts.allowedTools.join(","));
   }
 
   const mode = opts.permissionMode ?? "bypassPermissions";
@@ -84,7 +84,7 @@ function buildArgs(opts: DispatchOptions): string[] {
 | `--verbose` | (flag) | Includes additional detail in stream output |
 | `--mcp-config` | Temp JSON path | MCP server configuration for this agent |
 | `--strict-mcp-config` | (flag) | Agent ONLY gets servers in its MCP config |
-| `--allowedTools` | Comma-separated list | Restricts which tools the agent can use |
+| `--tools` | Comma-separated list | Restricts which built-in tools the agent can use (MCP tools are controlled by `--mcp-config`) |
 | `--permission-mode` | `bypassPermissions` | Agents run non-interactively (default) |
 | `--model` | Model alias or name | Override model for this dispatch (optional) |
 | `--effort` | `low`/`medium`/`high`/`max` | Override effort level for this dispatch (optional) |

@@ -424,9 +424,15 @@ interface HeaderProps {
   pipelineName: string;
   project: string;
   elapsed: number;
+  memUsage?: NodeJS.MemoryUsage;
 }
 
-export function Header({ pipelineName, project, elapsed }: HeaderProps) {
+/** Format bytes as compact MB string. */
+function fmtMB(bytes: number): string {
+  return `${Math.round(bytes / 1024 / 1024)}MB`;
+}
+
+export function Header({ pipelineName, project, elapsed, memUsage }: HeaderProps) {
   const mins = Math.floor(elapsed / 60000);
   const secs = Math.floor((elapsed % 60000) / 1000);
   const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
@@ -437,6 +443,9 @@ export function Header({ pipelineName, project, elapsed }: HeaderProps) {
         CCCP: {pipelineName} ({project})
       </Text>
       <Text dimColor>{"  "}Elapsed: {timeStr}</Text>
+      {memUsage && (
+        <Text dimColor>{"  "}Heap: {fmtMB(memUsage.heapUsed)} / RSS: {fmtMB(memUsage.rss)}</Text>
+      )}
     </Box>
   );
 }

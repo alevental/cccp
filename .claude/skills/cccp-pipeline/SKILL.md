@@ -68,7 +68,7 @@ Single agent dispatch. Simplest stage type.
   inputs:                              # Optional. Files agent should read.
     - "{artifact_dir}/brief.md"
   output: "{artifact_dir}/research.md" # Optional. Expected output path.
-  allowed_tools:                       # Optional. Restrict available tools.
+  allowed_tools:                       # Optional. Restrict built-in tools.
     - Read
     - Grep
     - Glob
@@ -80,7 +80,7 @@ Single agent dispatch. Simplest stage type.
 | `operation` | string | No | Operation file for directory-style agents |
 | `inputs` | string[] | No | File paths passed to agent (interpolated) |
 | `output` | string | No | Expected output path (stage fails if missing after execution) |
-| `allowed_tools` | string[] | No | Allowlist of tools the agent can use |
+| `allowed_tools` | string[] | No | Restrict which built-in tools the agent can use (does not affect MCP tools) |
 | `model` | string | No | Model override (`haiku`, `sonnet`, `opus`, or full model name) |
 | `effort` | string | No | Effort level override (`low`, `medium`, `high`, `max`) |
 
@@ -123,7 +123,7 @@ Plan-Generate-Evaluate cycle with retry loop.
 | `agent` | string | Yes | Agent name or path |
 | `operation` | string | No | Operation for directory agents |
 | `mcp_profile` | string | No | Agent-specific MCP profile (overrides stage-level) |
-| `allowed_tools` | string[] | No | Tool allowlist |
+| `allowed_tools` | string[] | No | Restrict which built-in tools the agent can use (does not affect MCP tools) |
 | `inputs` | string[] | No | Agent-specific inputs (merged with stage `inputs`) |
 | `model` | string | No | Model override for this agent (highest priority) |
 | `effort` | string | No | Effort override for this agent (highest priority) |
@@ -338,7 +338,7 @@ Configurable body stages + evaluator retry cycle. Generalizes the PGE/autoresear
 | `model` | string | No | Model override |
 | `effort` | string | No | Effort override |
 | `mcp_profile` | string | No | MCP profile override |
-| `allowed_tools` | string[] | No | Tool restrictions |
+| `allowed_tools` | string[] | No | Restrict which built-in tools the agent can use (does not affect MCP tools) |
 
 ### Loop Execution Flow
 
@@ -577,6 +577,63 @@ mcp_profiles:
       figma:
         command: npx
         args: [-y, figma-console-mcp]
+```
+
+### MCP Configuration
+
+MCP profiles control which MCP servers an agent can access. Agents are **fully isolated** — they only see servers from their assigned profile. They never inherit MCP servers from the project's `.mcp.json`.
+
+#### Server definition
+
+Each server entry takes:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `command` | string | Yes | The executable to run |
+| `args` | string[] | No | Command-line arguments |
+| `env` | map | No | Environment variables for the server process |
+
+#### Profile inheritance
+
+Profiles support single `extends` inheritance. Child profiles inherit all parent servers and can add or override by name:
+
+```yaml
+mcp_profiles:
+  base:
+    servers:
+      qmd:
+        command: qmd
+        args: [serve, --stdio]
+  research:
+    extends: base                    # inherits qmd
+    servers:
+      web:
+        command: npx
+        args: [-y, web-search-mcp]
+```
+
+#### Profile resolution order (highest priority wins)
+
+1. **Agent-level** `mcp_profile` (on planner/generator/evaluator/body stage config)
+2. **Stage-level** `mcp_profile`
+3. **`default_mcp_profile`** from `cccp.yaml`
+4. No MCP servers (no `--mcp-config` passed)
+
+#### `allowed_tools` vs `mcp_profile`
+
+These are **orthogonal controls** over agent capabilities:
+
+- **`allowed_tools`** restricts **built-in tools** (Read, Write, Bash, Grep, etc.)
+- **`mcp_profile`** controls **MCP server access** (which external tool servers the agent can reach)
+
+They compose independently. An agent can have restricted built-in tools but full MCP access, or vice versa:
+
+```yaml
+- name: research
+  type: agent
+  agent: researcher
+  mcp_profile: research              # full MCP access (qmd, web)
+  allowed_tools: [Read, Grep, Glob]  # read-only built-in tools
 ```
 
 ## Conditional Execution & Stage Outputs

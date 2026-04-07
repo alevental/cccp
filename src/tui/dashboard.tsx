@@ -38,6 +38,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
   const [startTime] = useState(startTimeProp ?? Date.now());
   const [elapsed, setElapsed] = useState(0);
   const [now, setNow] = useState(Date.now());
+  const [memUsage, setMemUsage] = useState(process.memoryUsage());
   const [dispatchStartTimes, setDispatchStartTimes] = useState<Map<string, number>>(new Map());
   const lastEventId = useRef(0);
   // Track last-seen state for change detection without stale closure issues.
@@ -132,10 +133,11 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
       if (polling || cancelled) return;
       polling = true;
 
-      // Tick elapsed timer and current time (for agent elapsed).
+      // Tick elapsed timer, current time (for agent elapsed), and memory usage.
       const currentTime = Date.now();
       setElapsed(currentTime - startTime);
       setNow(currentTime);
+      setMemUsage(process.memoryUsage());
 
       try {
         // When a DbService is available, use it to reload (it owns WASM reclaim).
@@ -263,6 +265,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
         pipelineName={state.pipeline}
         project={state.project}
         elapsed={elapsed}
+        memUsage={memUsage}
       />
 
       {/* Split pane: Stages (left) | Activity (right)

@@ -61,7 +61,7 @@ function buildArgs(opts: DispatchOptions): string[] {
   }
 
   if (opts.allowedTools?.length) {
-    args.push("--allowedTools", opts.allowedTools.join(","));
+    args.push("--tools", opts.allowedTools.join(","));
   }
 
   // Permission mode — default to bypassPermissions for pipeline agents.
