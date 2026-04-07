@@ -300,4 +300,20 @@ program
     });
   });
 
+program
+  .command("agent-monitor")
+  .description("Launch a live monitor TUI for a single agent stream log")
+  .requiredOption(
+    "--stream-log <path>",
+    "Path to the .stream.jsonl file to tail",
+  )
+  .option("--name <name>", "Agent name (derived from filename if omitted)")
+  .action(async (opts) => {
+    const streamLog = resolve(opts.streamLog);
+    const agentName =
+      opts.name ?? streamLog.split("/").pop()?.replace(/\.stream\.jsonl$/, "") ?? "agent";
+    const { launchAgentMonitor } = await import("./tui/agent-monitor.js");
+    await launchAgentMonitor(streamLog, agentName);
+  });
+
 program.parse();

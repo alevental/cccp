@@ -6,7 +6,9 @@ The CCCP dashboard is an Ink-based (React for the terminal) real-time UI that sh
 - [`src/tui/dashboard.tsx`](../../src/tui/dashboard.tsx) -- main Dashboard component and launch functions
 - [`src/tui/components.tsx`](../../src/tui/components.tsx) -- Header, StageList, AgentActivityPanel
 - [`src/tui/detail-log.tsx`](../../src/tui/detail-log.tsx) -- DetailLog with scrollable event visualization
-- [`src/tui/cmux.ts`](../../src/tui/cmux.ts) -- cmux CLI wrapper for sidebar status and notifications
+- [`src/tui/agent-monitor.tsx`](../../src/tui/agent-monitor.tsx) -- per-agent detail monitor (full-fidelity stream view)
+- [`src/tui/agent-panes.ts`](../../src/tui/agent-panes.ts) -- AgentPaneManager for cmux pane lifecycle
+- [`src/tui/cmux.ts`](../../src/tui/cmux.ts) -- cmux CLI wrapper for sidebar status, notifications, and pane management
 - [`src/logger.ts`](../../src/logger.ts) -- Logger interface (ConsoleLogger, QuietLogger, SilentLogger)
 
 ## Dashboard Modes
@@ -334,7 +336,8 @@ All cmux commands are no-ops when not in a cmux workspace.
 | `setProgress(fraction)` | `cmux set-progress <0.0-1.0>` | Progress bar |
 | `log(message, level)` | `cmux log --level <level> <msg>` | Structured log entry |
 | `notify(title, body?)` | `cmux notify --title <t> [--body <b>]` | Desktop notification |
-| `newSplit(direction)` | `cmux new-split <right\|below>` | Open a split pane (parses `OK surface:N workspace:M` → returns `surface:N`) |
+| `newSplit(direction, fromSurface?)` | `cmux new-split <right\|down> [--surface <ref>]` | Open a split pane (parses `OK surface:N workspace:M` → returns `surface:N`). Optional `fromSurface` splits from a specific pane instead of the current one. |
+| `closeSurface(surfaceRef)` | `cmux close-surface --surface <ref>` | Close a split pane |
 | `sendText(surfaceId, text)` | `cmux send --surface <id> <text>` | Send text to a split pane |
 | `sendKey(surfaceId, key)` | `cmux send-key --surface <id> <key>` | Send a keystroke to a split pane |
 
@@ -353,7 +356,7 @@ When a `type: pipeline` stage starts inside a cmux workspace, the runner automat
 
 **How it works:**
 
-1. `launchScopedDashboard()` calls `newSplit("below")` to create a pane, returns `surface:N`
+1. `launchScopedDashboard()` calls `newSplit("down")` to create a pane, returns `surface:N`
 2. Sends `cccp dashboard -r <prefix> --scope <stage> ; cmux close-surface --surface surface:N` to the pane
 3. The scoped dashboard loads the parent state, extracts `state.stages[scope].children` as the display state
 4. When the sub-pipeline completes, the dashboard exits and the chained `close-surface` auto-closes the pane
@@ -362,6 +365,51 @@ When a `type: pipeline` stage starts inside a cmux workspace, the runner automat
 - Only depth-1 sub-pipelines get splits (avoids pane explosion on deep nesting)
 - Skipped when `--headless` is set or cmux is not available
 - Fire-and-forget -- failures don't block pipeline execution
+
+### Per-agent monitor panes
+
+**Source files:**
+- [`src/tui/agent-panes.ts`](../../src/tui/agent-panes.ts) -- `AgentPaneManager`
+- [`src/tui/agent-monitor.tsx`](../../src/tui/agent-monitor.tsx) -- Ink TUI component
+- [`src/dispatcher.ts`](../../src/dispatcher.ts) -- `PaneAwareDispatcher`
+
+When running inside a cmux workspace (not `--headless`, not `--dry-run`), the runner wraps the default dispatcher with `PaneAwareDispatcher`. This decorator opens a cmux pane before each agent dispatch and closes it after the agent completes.
+
+**Layout:** Panes stack vertically in a column to the right of the primary TUI:
+
+```
+Primary TUI                           │  Agent 1 monitor
+                                      │─────────────────
+                                      │  Agent 2 monitor
+                                      │─────────────────
+                                      │  Agent 3 monitor
+```
+
+**How it works:**
+
+1. `AgentPaneManager` tracks active surface refs per agent and the most recently opened surface
+2. First active agent: `newSplit("right")` from the primary pane
+3. Subsequent agents: `newSplit("down", lastSurface)` to stack below the previous agent
+4. Each pane runs `cccp agent-monitor --stream-log <path> ; cmux close-surface --surface <ref>`
+5. When the agent completes, `PaneAwareDispatcher` also calls `closeSurface()` as a safety net
+6. When all panes close, the next agent creates a fresh split-right
+
+**PaneAwareDispatcher:**
+
+```typescript
+class PaneAwareDispatcher implements AgentDispatcher {
+  async dispatch(opts: DispatchOptions): Promise<AgentResult> {
+    await this.panes.openPane(agentName, logPath);
+    try {
+      return await this.inner.dispatch(opts);
+    } finally {
+      this.panes.closePane(agentName);
+    }
+  }
+}
+```
+
+Wired in `runPipeline()` — zero changes at individual dispatch call sites across runner.ts, pge.ts, ge.ts, loop.ts, and autoresearch.ts.
 
 ### Error handling
 

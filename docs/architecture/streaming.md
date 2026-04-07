@@ -266,6 +266,49 @@ claude subprocess stdout
          emit("activity")        -- to Dashboard component
 ```
 
+## Agent Monitor (per-agent detail view)
+
+**Source files:**
+- [`src/stream/stream-detail.ts`](../../src/stream/stream-detail.ts) -- `StreamDetailAccumulator` and `SingleFileTailer`
+- [`src/tui/agent-monitor.tsx`](../../src/tui/agent-monitor.tsx) -- Ink TUI component
+
+While `AgentActivity` provides a summarized snapshot (truncated text, capped tool history), the `StreamDetailAccumulator` builds a full-fidelity chronological list of `MonitorEntry` items with no truncation. This powers the `cccp agent-monitor` command and the automatic per-agent cmux panes.
+
+### MonitorEntry types
+
+```typescript
+export type MonitorEntry =
+  | TextEntry           // Full text block content
+  | ThinkingEntry       // Full thinking block content
+  | ToolCallEntry       // Tool name, ID, summary, full input object
+  | ToolResultEntry     // Tool name, ID (completion marker)
+  | TaskProgressEntry   // Sub-agent narrative description
+  | SystemInitEntry     // Model name, available tools
+  | ResultEntry         // Final tokens, cost, exit code
+```
+
+### SingleFileTailer
+
+Unlike `StreamTailer` (which watches a directory of `.stream.jsonl` files), `SingleFileTailer` watches a single file. It uses the same strategy: `fs.watch()` + 500ms poll fallback, incremental byte-offset reads. It creates a `StreamParser` internally and listens to `"event"` emissions (raw `StreamEvent`, not just `AgentActivity`), feeding each event to a `StreamDetailAccumulator`.
+
+Emits:
+- `"update"` -- after each event is processed (passes the accumulator)
+- `"done"` -- when a `result` event is received
+
+### Data flow
+
+```
+.stream.jsonl file
+       |
+  SingleFileTailer (fs.watch + poll)
+       |
+  StreamParser.feed() → emit("event")
+       |
+  StreamDetailAccumulator.processEvent()
+       |
+  emit("update") → AgentMonitor component
+```
+
 ## Related Documentation
 
 - [TUI Dashboard](tui-dashboard.md) -- how the dashboard consumes activity updates

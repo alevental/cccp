@@ -2,7 +2,7 @@ import { resolve, dirname, join } from "node:path";
 import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import { activityBus } from "./activity-bus.js";
 import { resolveAgent } from "./agent-resolver.js";
-import { DefaultAgentDispatcher, type AgentDispatcher } from "./dispatcher.js";
+import { DefaultAgentDispatcher, PaneAwareDispatcher, type AgentDispatcher } from "./dispatcher.js";
 import { AgentCrashError, MissingOutputError } from "./errors.js";
 import { FilesystemGateStrategy } from "./gate/gate-watcher.js";
 import { ConsoleLogger, type Logger } from "./logger.js";
@@ -15,6 +15,7 @@ import { loadPipeline } from "./pipeline.js";
 import { runPgeCycle, dispatchEvaluatorWithFeedback, type PgeCycleOptions } from "./pge.js";
 import { interpolate, resolveTaskBody, loadAgentMarkdown, buildTaskContext, writeSystemPromptFile } from "./prompt.js";
 import { updatePipelineStatus, notifyPipelineComplete, notifyPipelinePaused, launchScopedDashboard, isCmuxAvailable } from "./tui/cmux.js";
+import { AgentPaneManager } from "./tui/agent-panes.js";
 import {
   createState,
   flattenStageEntries,
@@ -1662,6 +1663,12 @@ export async function runPipeline(
       ctx.artifactDir, ctx.projectDir, ctx.sessionId,
     );
     ctx.gateStrategy = new FilesystemGateStrategy(tempState.runId, ctx.projectDir, ctx.quiet);
+  }
+
+  // Wrap dispatcher with pane manager when running inside cmux (non-headless, non-dry-run).
+  if (!ctx.dispatcher && !ctx.headless && !ctx.dryRun && isCmuxAvailable()) {
+    const panes = new AgentPaneManager(ctx.projectDir);
+    ctx.dispatcher = new PaneAwareDispatcher(new DefaultAgentDispatcher(), panes);
   }
 
   // Initialize visited pipelines for cycle detection.

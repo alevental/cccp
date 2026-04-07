@@ -319,6 +319,72 @@ npx @alevental/cccp examples [options]
 
 Files that already exist are skipped -- running `cccp examples` is safe to repeat without overwriting your customizations.
 
+## `cccp agent-monitor`
+
+Launch a live monitor TUI for a single agent's stream log. Shows full-detail event history with expandable/collapsible content.
+
+```
+npx @alevental/cccp agent-monitor --stream-log <path> [options]
+```
+
+### Required flags
+
+| Flag | Description |
+|------|-------------|
+| `--stream-log <path>` | Path to the `.stream.jsonl` file to tail |
+
+### Optional flags
+
+| Flag | Description |
+|------|-------------|
+| `--name <name>` | Agent name for the header (derived from filename if omitted) |
+
+### What it shows
+
+The monitor renders a full-fidelity view of a single agent's stream:
+
+- **Header:** agent name, model, elapsed time, token counts, cost, tool call count
+- **Text blocks:** agent's text output (collapsed to ~4 lines by default)
+- **Thinking blocks:** dimmed thinking content (collapsed to ~4 lines by default)
+- **Tool calls:** `▶ ToolName summary` with expandable full input JSON
+- **Tool results:** `✓ ToolName` completion markers
+- **Task progress:** sub-agent narrative lines
+- **Result:** final exit status, token totals, and cost
+
+### Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| `e` | Toggle expand/collapse all content (global toggle) |
+| `↑` / `↓` | Scroll |
+| `PgUp` / `PgDn` | Page scroll |
+| `Home` / `g` | Jump to top |
+| `End` / `G` | Jump to bottom (auto-scroll) |
+
+### Auto-exit
+
+The monitor exits automatically ~1.5 seconds after the agent completes (when a `result` event arrives in the stream).
+
+### Automatic cmux integration
+
+When running a pipeline inside a cmux workspace (not `--headless`, not `--dry-run`), the runner automatically opens an `agent-monitor` pane for each agent dispatch. Panes stack vertically in a column to the right of the primary TUI:
+
+```
+Primary TUI (stages, activity, log)  │  [planner] sonnet · 1m 23s
+                                      │  ▶ Read /src/runner.ts
+                                      │    ...
+                                      │─────────────────────────
+                                      │  [generator] opus · 45s
+                                      │  ▶ Write /out/plan.md
+                                      │    ...
+```
+
+The first active agent splits right from the primary pane. Subsequent agents split down from the last agent pane. Panes auto-close when the agent completes. When all agent panes close, the next agent creates a fresh split-right.
+
+This is implemented via `PaneAwareDispatcher` -- a decorator around the `DefaultAgentDispatcher` that wraps each dispatch with pane open/close. No changes are needed at individual dispatch call sites.
+
+---
+
 ## Related Documentation
 
 - [Configuration](configuration.md) -- `cccp.yaml` schema

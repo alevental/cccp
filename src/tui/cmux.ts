@@ -57,12 +57,20 @@ export async function notify(
 
 /** Open a new split pane and return the surface ref (e.g., "surface:10"). */
 export async function newSplit(
-  direction: "right" | "below" = "right",
+  direction: "right" | "down" = "right",
+  fromSurface?: string,
 ): Promise<string> {
-  const output = await cmux("new-split", direction);
+  const args = ["new-split", direction];
+  if (fromSurface) args.push("--surface", fromSurface);
+  const output = await cmux(...args);
   // Parse "OK surface:N workspace:M" → "surface:N"
   const match = output.match(/surface:\d+/);
   return match?.[0] ?? "";
+}
+
+/** Close a cmux surface. */
+export async function closeSurface(surfaceRef: string): Promise<void> {
+  await cmux("close-surface", "--surface", surfaceRef);
 }
 
 /** Send text to a surface (does NOT press Enter). */
@@ -113,7 +121,7 @@ export async function launchScopedDashboard(
   scopeStage: string,
 ): Promise<string> {
   if (!isCmuxAvailable()) return "";
-  const surfaceRef = await newSplit("below");
+  const surfaceRef = await newSplit("down");
   if (!surfaceRef) return "";
   const prefix = runId.slice(0, 12);
   const cmd = `npx @alevental/cccp dashboard -r "${prefix}" -d "${projectDir}" --scope "${scopeStage}" ; cmux close-surface --surface ${surfaceRef}`;

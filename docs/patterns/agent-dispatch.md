@@ -258,6 +258,25 @@ This enables the TUI dashboard to show real-time tool usage, token counts, and t
 | `MissingOutputError` | Expected output file missing | Runner/PGE after dispatch |
 | Spawn error | `claude` binary not found or not executable | `dispatchAgent()` |
 
+## Dispatcher Interface
+
+**File:** `src/dispatcher.ts`
+
+The `AgentDispatcher` interface is the injection point for dispatch behavior. The `DefaultAgentDispatcher` calls `dispatchAgent()` directly. The `PaneAwareDispatcher` is a decorator that wraps any inner dispatcher with cmux pane management — opening a per-agent monitor pane before dispatch and closing it after.
+
+```typescript
+export interface AgentDispatcher {
+  dispatch(opts: DispatchOptions): Promise<AgentResult>;
+}
+```
+
+| Dispatcher | Purpose |
+|-----------|---------|
+| `DefaultAgentDispatcher` | Calls `dispatchAgent()` directly |
+| `PaneAwareDispatcher` | Wraps inner dispatcher with cmux pane open/close lifecycle |
+
+The `PaneAwareDispatcher` is wired in `runPipeline()` when cmux is available, not headless, and not dry-run. It delegates to `AgentPaneManager` for layout logic (see [TUI Dashboard — Per-agent monitor panes](../architecture/tui-dashboard.md#per-agent-monitor-panes)).
+
 ## Related Documentation
 
 - [Agent Authoring](../guides/agent-authoring.md) -- writing agent markdown definitions
