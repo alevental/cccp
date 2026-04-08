@@ -275,7 +275,7 @@ export interface AgentDispatcher {
 | `DefaultAgentDispatcher` | Calls `dispatchAgent()` directly |
 | `PaneAwareDispatcher` | Wraps inner dispatcher with cmux pane open/close lifecycle |
 
-The `PaneAwareDispatcher` is wired in `runPipeline()` when cmux is available, not headless, and not dry-run. It delegates to `AgentPaneManager` for layout logic (see [TUI Dashboard — Per-agent monitor panes](../architecture/tui-dashboard.md#per-agent-monitor-panes)).
+The `PaneAwareDispatcher` is wired in `runPipeline()` when cmux is available, not headless, and not dry-run. It delegates to `AgentPaneManager` for layout logic. Pane creation is serialised via a promise queue so parallel dispatches stack vertically instead of all splitting right. The pane command is resolved via `getCccpCliPrefix()` to work in both dev mode and published package contexts (see [TUI Dashboard — Per-agent monitor panes](../architecture/tui-dashboard.md#per-agent-monitor-panes)).
 
 ## Related Documentation
 

@@ -90,6 +90,24 @@ export async function sendKey(
 }
 
 // ---------------------------------------------------------------------------
+// CLI command resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the CLI command prefix for spawning cccp subcommands in external
+ * shells (cmux panes). When running in dev mode via tsx, resolves to
+ * `npx --yes tsx <abs-path>/src/cli.ts`; otherwise `npx --yes @alevental/cccp@latest`.
+ */
+export function getCccpCliPrefix(): string {
+  const entry = process.argv[1] ?? "";
+  if (entry.endsWith("/src/cli.ts")) {
+    const projectRoot = entry.replace(/\/src\/cli\.ts$/, "");
+    return `npx --yes tsx "${projectRoot}/src/cli.ts"`;
+  }
+  return "npx --yes @alevental/cccp@latest";
+}
+
+// ---------------------------------------------------------------------------
 // High-level helpers for pipeline events
 // ---------------------------------------------------------------------------
 
@@ -124,7 +142,8 @@ export async function launchScopedDashboard(
   const surfaceRef = await newSplit("down");
   if (!surfaceRef) return "";
   const prefix = runId.slice(0, 12);
-  const cmd = `npx @alevental/cccp dashboard -r "${prefix}" -d "${projectDir}" --scope "${scopeStage}" ; cmux close-surface --surface ${surfaceRef}`;
+  const cli = getCccpCliPrefix();
+  const cmd = `${cli} dashboard -r "${prefix}" -d "${projectDir}" --scope "${scopeStage}" ; cmux close-surface --surface ${surfaceRef}`;
   await sendText(surfaceRef, cmd);
   await sendKey(surfaceRef, "Enter");
   return surfaceRef;

@@ -1,0 +1,26 @@
+name: parallel-test
+description: Simple parallel agent test for verifying agent monitor panes
+
+stages:
+  - parallel:
+      stages:
+        - name: research
+          type: agent
+          agent: researcher
+          task: "List 3 interesting facts about TypeScript. Write them to {project}/artifacts/research.md"
+          outputs:
+            facts_file: artifacts/research.md
+
+        - name: analyze
+          type: agent
+          agent: analyst
+          task: "List 3 pros and cons of YAML for configuration. Write them to {project}/artifacts/analysis.md"
+          outputs:
+            analysis_file: artifacts/analysis.md
+
+        - name: review
+          type: agent
+          agent: writer
+          task: "Write a short haiku about pipelines. Write it to {project}/artifacts/haiku.md"
+          outputs:
+            haiku_file: artifacts/haiku.md

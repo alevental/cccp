@@ -1,4 +1,4 @@
-import { isCmuxAvailable, newSplit, sendText, sendKey, closeSurface } from "./cmux.js";
+import { isCmuxAvailable, newSplit, sendText, sendKey, closeSurface, getCccpCliPrefix } from "./cmux.js";
 
 /**
  * Manages cmux panes for per-agent monitor views.
@@ -12,16 +12,23 @@ export class AgentPaneManager {
   private activeSurfaces = new Map<string, string>();
   /** The most recently opened surface (used as split target for stacking). */
   private lastSurface: string | null = null;
+  /** Serialises pane creation so parallel dispatches stack correctly. */
+  private openQueue: Promise<void> = Promise.resolve();
 
   constructor(private projectDir: string) {}
 
   /**
    * Open a cmux pane for an agent and launch the agent-monitor TUI inside it.
-   * No-op if cmux is unavailable.
+   * No-op if cmux is unavailable. Serialised via queue so concurrent calls
+   * from parallel dispatches stack vertically instead of all splitting right.
    */
   async openPane(agentName: string, streamLogPath: string): Promise<void> {
     if (!isCmuxAvailable()) return;
+    this.openQueue = this.openQueue.then(() => this._openPane(agentName, streamLogPath));
+    return this.openQueue;
+  }
 
+  private async _openPane(agentName: string, streamLogPath: string): Promise<void> {
     // First active agent → split right from primary pane.
     // Subsequent → split down from the last agent pane.
     const direction = this.activeSurfaces.size === 0 ? "right" : "down";
@@ -34,7 +41,8 @@ export class AgentPaneManager {
     this.lastSurface = surfaceRef;
 
     // Launch agent-monitor in the pane. Chain close-surface for auto-cleanup.
-    const cmd = `npx @alevental/cccp agent-monitor --stream-log "${streamLogPath}" ; cmux close-surface --surface ${surfaceRef}`;
+    const cli = getCccpCliPrefix();
+    const cmd = `${cli} agent-monitor --stream-log "${streamLogPath}" ; cmux close-surface --surface ${surfaceRef}`;
     await sendText(surfaceRef, cmd);
     await sendKey(surfaceRef, "Enter");
   }

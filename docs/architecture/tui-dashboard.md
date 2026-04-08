@@ -341,6 +341,12 @@ All cmux commands are no-ops when not in a cmux workspace.
 | `sendText(surfaceId, text)` | `cmux send --surface <id> <text>` | Send text to a split pane |
 | `sendKey(surfaceId, key)` | `cmux send-key --surface <id> <key>` | Send a keystroke to a split pane |
 
+### CLI command resolution
+
+The `getCccpCliPrefix()` helper (`src/tui/cmux.ts`) resolves the correct CLI command for spawning cccp subcommands in external shells (cmux panes). When running in dev mode (entry point is `src/cli.ts` via tsx), it returns `npx --yes tsx <project-root>/src/cli.ts`; otherwise `npx --yes @alevental/cccp@latest`. This ensures pane commands work both in development and when running the published package.
+
+Used by `launchScopedDashboard()` and `AgentPaneManager.openPane()`.
+
 ### Pipeline-level helpers
 
 | Function | When Called |
@@ -388,11 +394,12 @@ Primary TUI                           │  Agent 1 monitor
 **How it works:**
 
 1. `AgentPaneManager` tracks active surface refs per agent and the most recently opened surface
-2. First active agent: `newSplit("right")` from the primary pane
-3. Subsequent agents: `newSplit("down", lastSurface)` to stack below the previous agent
-4. Each pane runs `cccp agent-monitor --stream-log <path> ; cmux close-surface --surface <ref>`
-5. When the agent completes, `PaneAwareDispatcher` also calls `closeSurface()` as a safety net
-6. When all panes close, the next agent creates a fresh split-right
+2. Pane creation is serialised via a promise queue (`openQueue`) so parallel dispatches stack correctly instead of all splitting right
+3. First active agent: `newSplit("right")` from the primary pane
+4. Subsequent agents: `newSplit("down", lastSurface)` to stack below the previous agent
+5. Each pane runs the CLI via `getCccpCliPrefix()` (resolves to dev-mode tsx or published package) + `agent-monitor --stream-log <path> ; cmux close-surface --surface <ref>`
+6. When the agent completes, `PaneAwareDispatcher` also calls `closeSurface()` as a safety net
+7. When all panes close, the next agent creates a fresh split-right
 
 **PaneAwareDispatcher:**
 
