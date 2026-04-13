@@ -5,6 +5,7 @@ The CCCP dashboard is an Ink-based (React for the terminal) real-time UI that sh
 **Source files:**
 - [`src/tui/dashboard.tsx`](../../src/tui/dashboard.tsx) -- main Dashboard component and launch functions
 - [`src/tui/components.tsx`](../../src/tui/components.tsx) -- Header, StageList, AgentActivityPanel
+- [`src/git.ts`](../../src/git.ts) -- GitInfo type and one-shot git metadata query
 - [`src/tui/detail-log.tsx`](../../src/tui/detail-log.tsx) -- DetailLog with scrollable event visualization
 - [`src/tui/agent-monitor.tsx`](../../src/tui/agent-monitor.tsx) -- per-agent detail monitor (full-fidelity stream view)
 - [`src/tui/agent-panes.ts`](../../src/tui/agent-panes.ts) -- AgentPaneManager for cmux pane lifecycle
@@ -43,6 +44,7 @@ The dashboard uses a split-pane layout:
 ```
 +──────────────────────────────────────────────────────────+
 │ CCCP: pipeline-name (project)              Elapsed: 5m 3s│
+│   main  7a3e1f2  ✗ dirty  ↑2  [my-repo]                 │
 +──────────────────────────────────────────────────────────+
 │ Stages              │ Agent Activity (2 active)          │
 │  ✓ research  12.3s  │ [design-gen] sonnet · 2m  │ [eval]│
@@ -71,17 +73,36 @@ When the pipeline is complete, the right pane shows the final status and total c
 
 **File:** `src/tui/components.tsx`
 
-Displays the pipeline name, project name, and elapsed time.
+Two-line header. Line 1 displays the pipeline name, project name, elapsed time, and heap/RSS memory. Line 2 displays git repository details fetched once on dashboard mount from `projectDir`.
 
 ```typescript
 interface HeaderProps {
   pipelineName: string;
   project: string;
   elapsed: number;
+  memUsage?: NodeJS.MemoryUsage;
+  gitInfo?: GitInfo | null;
 }
 ```
 
 Elapsed time formats as `Xm Ys` or just `Ys` for durations under a minute.
+
+**Git info line** (`src/git.ts`):
+
+```
+  main  7a3e1f2  ✗ dirty  ↑2 ↓0  [worktree]  [my-repo]
+```
+
+| Field | Color | When shown |
+|-------|-------|------------|
+| Branch name | cyan | Always (`(detached)` for detached HEAD) |
+| Short commit hash (7 chars) | dim | Always |
+| Dirty/clean indicator | yellow (`✗ dirty`) / green (`✓ clean`) | Always |
+| Ahead/behind counts | dim | Only when non-zero and tracking branch exists |
+| `[worktree]` tag | dim | Only in a linked worktree |
+| `[repoName]` | dim | Always (basename of git root) |
+
+Git info is fetched once asynchronously via `getGitInfo(projectDir)` on Dashboard mount — no polling. Returns `null` gracefully for non-git directories, detached HEAD, or if `git` is not in PATH. When unavailable, the header renders as a single line (no git row).
 
 ### StageList (left pane)
 

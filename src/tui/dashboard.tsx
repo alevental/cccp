@@ -8,6 +8,7 @@ import { DbService } from "../db-service.js";
 import { StreamTailer } from "../stream/stream-tail.js";
 import type { PipelineState, StateEvent } from "../types.js";
 import type { AgentActivity } from "../stream/stream.js";
+import { getGitInfo, type GitInfo } from "../git.js";
 import { Header, StageList, AgentActivityPanel, isAgentActive } from "./components.js";
 import { DetailLog } from "./detail-log.js";
 
@@ -40,6 +41,11 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
   const [now, setNow] = useState(Date.now());
   const [memUsage, setMemUsage] = useState(process.memoryUsage());
   const [dispatchStartTimes, setDispatchStartTimes] = useState<Map<string, number>>(new Map());
+  // Git info: null = loading, undefined = unavailable (not a git repo).
+  const [gitInfo, setGitInfo] = useState<GitInfo | null | undefined>(null);
+  useEffect(() => {
+    getGitInfo(projectDir).then((info) => setGitInfo(info ?? undefined));
+  }, []);
   const lastEventId = useRef(0);
   // Track last-seen state for change detection without stale closure issues.
   const lastStagesJson = useRef<string>(JSON.stringify(initialState.stages));
@@ -266,6 +272,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
         project={state.project}
         elapsed={elapsed}
         memUsage={memUsage}
+        gitInfo={gitInfo}
       />
 
       {/* Split pane: Stages (left) | Activity (right)
@@ -301,7 +308,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
       </Box>
 
       {/* Event log (bottom) */}
-      <DetailLog events={events} chromeHeight={Math.max(stageListRows + 3, 8) + 3} />
+      <DetailLog events={events} chromeHeight={Math.max(stageListRows + 3, 8) + (gitInfo ? 4 : 3)} />
     </Box>
   );
 }

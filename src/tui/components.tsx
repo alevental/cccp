@@ -3,6 +3,7 @@ import { Box, Text } from "ink";
 import Spinner from "ink-spinner";
 import type { PipelineState, StageState, GateInfo, StateEvent } from "../types.js";
 import type { AgentActivity } from "../stream/stream.js";
+import type { GitInfo } from "../git.js";
 
 // ---------------------------------------------------------------------------
 // Stage list (left pane)
@@ -425,6 +426,8 @@ interface HeaderProps {
   project: string;
   elapsed: number;
   memUsage?: NodeJS.MemoryUsage;
+  /** Git repo info. null = loading, undefined = unavailable. */
+  gitInfo?: GitInfo | null;
 }
 
 /** Format bytes as compact MB string. */
@@ -432,19 +435,34 @@ function fmtMB(bytes: number): string {
   return `${Math.round(bytes / 1024 / 1024)}MB`;
 }
 
-export function Header({ pipelineName, project, elapsed, memUsage }: HeaderProps) {
+export function Header({ pipelineName, project, elapsed, memUsage, gitInfo }: HeaderProps) {
   const mins = Math.floor(elapsed / 60000);
   const secs = Math.floor((elapsed % 60000) / 1000);
   const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
 
   return (
-    <Box>
-      <Text bold>
-        CCCP: {pipelineName} ({project})
-      </Text>
-      <Text dimColor>{"  "}Elapsed: {timeStr}</Text>
-      {memUsage && (
-        <Text dimColor>{"  "}Heap: {fmtMB(memUsage.heapUsed)} / RSS: {fmtMB(memUsage.rss)}</Text>
+    <Box flexDirection="column">
+      <Box>
+        <Text bold>
+          CCCP: {pipelineName} ({project})
+        </Text>
+        <Text dimColor>{"  "}Elapsed: {timeStr}</Text>
+        {memUsage && (
+          <Text dimColor>{"  "}Heap: {fmtMB(memUsage.heapUsed)} / RSS: {fmtMB(memUsage.rss)}</Text>
+        )}
+      </Box>
+      {gitInfo && (
+        <Box>
+          <Text dimColor>{"  "}</Text>
+          <Text color="cyan">{gitInfo.branch}</Text>
+          <Text dimColor>{"  "}{gitInfo.hash}</Text>
+          <Text color={gitInfo.dirty ? "yellow" : "green"}>{"  "}{gitInfo.dirty ? "\u2717 dirty" : "\u2713 clean"}</Text>
+          {(gitInfo.ahead > 0 || gitInfo.behind > 0) && (
+            <Text dimColor>{"  "}{"\u2191"}{gitInfo.ahead} {"\u2193"}{gitInfo.behind}</Text>
+          )}
+          {gitInfo.isWorktree && <Text dimColor>{"  "}[worktree]</Text>}
+          <Text dimColor>{"  "}[{gitInfo.repoName}]</Text>
+        </Box>
       )}
     </Box>
   );
