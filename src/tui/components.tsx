@@ -151,10 +151,14 @@ export function StageList({ state }: StageListProps) {
 
         const stage = state.stages[row.name];
         const indent = stage.groupId ? " \u2551  " : " ";
+        const childRunId = stage.type === "pipeline" && stage.children?.runId
+          ? stage.children.runId.slice(0, 8)
+          : null;
         return (
           <Box key={row.name}>
             <Text dimColor>{indent}</Text>
             <StageRow name={row.name} stage={stage} />
+            {childRunId && <Text dimColor>{" "}{childRunId}</Text>}
           </Box>
         );
       })}
@@ -424,6 +428,7 @@ function formatEventData(data: unknown): string {
 interface HeaderProps {
   pipelineName: string;
   project: string;
+  runId: string;
   elapsed: number;
   memUsage?: NodeJS.MemoryUsage;
   /** Git repo info. null = loading, undefined = unavailable. */
@@ -435,7 +440,7 @@ function fmtMB(bytes: number): string {
   return `${Math.round(bytes / 1024 / 1024)}MB`;
 }
 
-export function Header({ pipelineName, project, elapsed, memUsage, gitInfo }: HeaderProps) {
+export function Header({ pipelineName, project, runId, elapsed, memUsage, gitInfo }: HeaderProps) {
   const mins = Math.floor(elapsed / 60000);
   const secs = Math.floor((elapsed % 60000) / 1000);
   const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
@@ -446,6 +451,7 @@ export function Header({ pipelineName, project, elapsed, memUsage, gitInfo }: He
         <Text bold>
           CCCP: {pipelineName} ({project})
         </Text>
+        <Text dimColor>{"  "}{runId.slice(0, 8)}</Text>
         <Text dimColor>{"  "}Elapsed: {timeStr}</Text>
         {memUsage && (
           <Text dimColor>{"  "}Heap: {fmtMB(memUsage.heapUsed)} / RSS: {fmtMB(memUsage.rss)}</Text>

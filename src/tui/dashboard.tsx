@@ -270,6 +270,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
       <Header
         pipelineName={state.pipeline}
         project={state.project}
+        runId={state.runId}
         elapsed={elapsed}
         memUsage={memUsage}
         gitInfo={gitInfo}

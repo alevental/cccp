@@ -43,12 +43,12 @@ The dashboard uses a split-pane layout:
 
 ```
 +──────────────────────────────────────────────────────────+
-│ CCCP: pipeline-name (project)              Elapsed: 5m 3s│
+│ CCCP: pipeline-name (project)  a1b2c3d4  Elapsed: 5m 3s │
 │   main  7a3e1f2  ✗ dirty  ↑2  [my-repo]                 │
 +──────────────────────────────────────────────────────────+
 │ Stages              │ Agent Activity (2 active)          │
 │  ✓ research  12.3s  │ [design-gen] sonnet · 2m  │ [eval]│
-│  ▸ build-pipeline   │   ▶ Write /out/doc.md     │  ▶ Rea│
+│  ▸ build-pipeline e5f6g7h8                       │  ▶ Rea│
 │    ├─ ✓ design      │   ✓ Read /src/foo.ts      │  2,100│
 │    ├─ ▸ implement   │   ✓ Grep "pattern"        │  $0.01│
 │    ├─ ○ review      │   12.4k/3.2k tok · $0.04  │       │
@@ -73,12 +73,13 @@ When the pipeline is complete, the right pane shows the final status and total c
 
 **File:** `src/tui/components.tsx`
 
-Two-line header. Line 1 displays the pipeline name, project name, elapsed time, and heap/RSS memory. Line 2 displays git repository details fetched once on dashboard mount from `projectDir`.
+Two-line header. Line 1 displays the pipeline name, project name, run ID (8-char prefix), elapsed time, and heap/RSS memory. Line 2 displays git repository details fetched once on dashboard mount from `projectDir`.
 
 ```typescript
 interface HeaderProps {
   pipelineName: string;
   project: string;
+  runId: string;
   elapsed: number;
   memUsage?: NodeJS.MemoryUsage;
   gitInfo?: GitInfo | null;
@@ -121,9 +122,9 @@ Additional indicators:
 - Human gate stages show a flag: `approval ⚑`
 - Completed stages show duration: `research 12.3s`
 - Pending gates display below the stage list: `⏸ Gate: approval`
-- Sub-pipeline stages show nested children inline with `├─` indent:
+- Sub-pipeline stages show nested children inline with `├─` indent, with the child run ID (8-char prefix, dimmed) next to the parent stage name:
   ```
-  ▸ build-pipeline
+  ▸ build-pipeline e5f6g7h8
       ├─ ✓ design 12.3s
       ├─ ▸ implement
       ├─ ○ review
