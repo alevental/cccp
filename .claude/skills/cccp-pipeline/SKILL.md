@@ -435,7 +435,12 @@ stages:
 
 ### Syntax
 
-Use `{variable_name}` in any string field. Unresolved placeholders are left as-is.
+Use `{variable_name}` in any string field. Unresolved placeholders are left as-is. Variable values can reference other variables — resolution is recursive:
+
+```yaml
+variables:
+  artifact_dir: "docs/projects/{project}"   # {project} resolves within the value
+```
 
 ### Built-in Variables
 

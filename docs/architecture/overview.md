@@ -64,7 +64,7 @@ General-purpose MCP server with 5 tools: `cccp_runs`, `cccp_status`, `cccp_gate_
 See `docs/api/mcp-tools.md` for tool reference.
 
 ### TUI dashboard (`src/tui/`)
-Ink/React split-pane dashboard: stages (left), agent activity (right), event log (bottom). Polls SQLite for state changes, subscribes to activity bus for real-time agent events.
+Ink/React split-pane dashboard: stages (left), agent activity (right), event log (bottom). Two-line header shows pipeline/project/run ID, elapsed time, heap/RSS, and git repo details (branch, commit, dirty status). Polls SQLite for state changes, subscribes to activity bus for real-time agent events.
 
 See `docs/architecture/tui-dashboard.md` for details.
 

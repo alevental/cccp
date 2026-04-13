@@ -8,7 +8,7 @@ A standalone TypeScript CLI that provides deterministic YAML-based pipeline orch
 
 ```bash
 npm install
-npm test              # vitest — 270 tests, ~5s
+npm test              # vitest — 329 tests, ~5s
 npm run typecheck     # tsc --noEmit
 npx tsx src/cli.ts    # run CLI in dev mode (use instead of `npm run dev`)
 ```

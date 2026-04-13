@@ -48,7 +48,7 @@ Variables use `{variable_name}` syntax and are available in string fields like `
 | `{artifact_dir}` | Resolved artifact directory |
 | `{pipeline_name}` | Pipeline `name` field |
 
-Pipeline-level `variables` are merged with built-ins, then CLI `--var` flags override everything. Stage-level `variables` override pipeline-level for that stage only.
+Pipeline-level `variables` are merged with built-ins, then CLI `--var` flags override everything. Stage-level `variables` override pipeline-level for that stage only. Variable values can reference other variables — resolution is recursive (e.g., `artifact_dir: "docs/{project}"` resolves `{project}` within the value).
 
 Stage outputs (from `outputs:`) are also available as variables using dot-notation: `{stage_name.output_key}`. See [Conditional Execution](#conditional-execution--stage-outputs) below.
 

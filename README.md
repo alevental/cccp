@@ -186,6 +186,13 @@ Built-in variables available in all string fields:
 | `{pipeline_name}` | Pipeline name |
 | `{iteration}` | Current PGE iteration (1-based) |
 
+Variable values can reference other variables — resolution is recursive:
+
+```yaml
+variables:
+  artifact_dir: "docs/projects/{project}"   # {project} resolves within the value
+```
+
 ## Agents
 
 CCCP ships 18 template agents as starting points. Run `npx @alevental/cccp examples` to scaffold all of them into your project. Agents are markdown files that become the `--system-prompt-file` for `claude -p`.
@@ -348,7 +355,7 @@ Without cmux, CCCP falls back to plain terminal output.
 ## Development
 
 ```bash
-npm test           # run all tests (206 tests)
+npm test           # run all tests (329 tests)
 npm run typecheck  # tsc --noEmit
 npm run test:watch # watch mode
 npm run build      # compile TypeScript to dist/
