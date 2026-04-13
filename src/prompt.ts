@@ -21,6 +21,28 @@ export function interpolate(
   });
 }
 
+/**
+ * Resolve variable values that reference other variables. Iterates until all
+ * values stabilize (fixed-point) or a max depth is reached to guard against
+ * circular references. Unresolvable placeholders are left as-is.
+ */
+export function resolveVariables(
+  variables: Record<string, string>,
+  maxPasses = 10,
+): Record<string, string> {
+  const resolved = { ...variables };
+  for (let pass = 0; pass < maxPasses; pass++) {
+    let changed = false;
+    for (const key of Object.keys(resolved)) {
+      const before = resolved[key];
+      resolved[key] = interpolate(before, resolved);
+      if (resolved[key] !== before) changed = true;
+    }
+    if (!changed) break;
+  }
+  return resolved;
+}
+
 // ---------------------------------------------------------------------------
 // Task body resolution
 // ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@ import { writeFile, mkdir, rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   interpolate,
+  resolveVariables,
   resolveTaskBody,
   loadAgentMarkdown,
   buildTaskContext,
@@ -40,6 +41,58 @@ describe("interpolate", () => {
 
   it("replaces multiple occurrences of the same variable", () => {
     expect(interpolate("{x}-{x}-{x}", { x: "1" })).toBe("1-1-1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveVariables
+// ---------------------------------------------------------------------------
+
+describe("resolveVariables", () => {
+  it("resolves variable values that reference other variables", () => {
+    const result = resolveVariables({
+      project: "my-app",
+      artifact_dir: "docs/projects/{project}",
+    });
+    expect(result.artifact_dir).toBe("docs/projects/my-app");
+    expect(result.project).toBe("my-app");
+  });
+
+  it("resolves transitive references across multiple passes", () => {
+    const result = resolveVariables({
+      a: "base",
+      b: "{a}/mid",
+      c: "{b}/end",
+    });
+    expect(result.c).toBe("base/mid/end");
+  });
+
+  it("leaves unresolvable placeholders as-is", () => {
+    const result = resolveVariables({
+      x: "{unknown}/foo",
+    });
+    expect(result.x).toBe("{unknown}/foo");
+  });
+
+  it("handles circular references without infinite loop", () => {
+    const result = resolveVariables({
+      a: "{b}",
+      b: "{a}",
+    });
+    // Should terminate — values won't fully resolve but shouldn't hang
+    expect(result.a).toBeDefined();
+    expect(result.b).toBeDefined();
+  });
+
+  it("reproduces the reported bug: pipeline-level artifact_dir override", () => {
+    // Simulates: built-ins + pipeline variables: { artifact_dir: "docs/projects/{project}" }
+    const result = resolveVariables({
+      project: "qa-feedback-2026-04-13",
+      project_dir: "/home/user/repo",
+      artifact_dir: "docs/projects/{project}",
+      pipeline_name: "one-shot",
+    });
+    expect(result.artifact_dir).toBe("docs/projects/qa-feedback-2026-04-13");
   });
 });
 

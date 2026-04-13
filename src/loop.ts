@@ -7,6 +7,7 @@ import { AgentCrashError, MissingOutputError } from "./errors.js";
 import { ConsoleLogger, type Logger } from "./logger.js";
 import {
   interpolate,
+  resolveVariables,
   resolveTaskBody,
   buildTaskContext,
   writeSystemPromptFile,
@@ -50,7 +51,7 @@ export async function runLoopCycle(
   options?: LoopCycleOptions,
 ): Promise<LoopResult> {
   const start = Date.now();
-  const vars = { ...ctx.variables, ...(stage.variables ?? {}) };
+  const vars = resolveVariables({ ...ctx.variables, ...(stage.variables ?? {}) });
   const maxIter = stage.max_iterations;
   const stageDir = resolve(ctx.artifactDir, stage.name);
 

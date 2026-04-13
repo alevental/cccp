@@ -7,6 +7,7 @@ import { AgentCrashError, MissingOutputError } from "./errors.js";
 import { ConsoleLogger, type Logger } from "./logger.js";
 import {
   interpolate,
+  resolveVariables,
   resolveTaskBody,
   buildTaskContext,
   writeSystemPromptFile,
@@ -55,7 +56,7 @@ export async function runGeCycle(
   options?: GeCycleOptions,
 ): Promise<GeResult> {
   const start = Date.now();
-  const vars = { ...ctx.variables, ...(stage.variables ?? {}) };
+  const vars = resolveVariables({ ...ctx.variables, ...(stage.variables ?? {}) });
   const maxIter = stage.contract.max_iterations;
 
   // Resolve paths for contract, deliverable, and evaluations
@@ -431,7 +432,7 @@ export async function dispatchGeEvaluatorWithFeedback(
   feedbackPath: string,
   onProgress?: (eventType?: string, eventData?: Record<string, unknown>) => Promise<void>,
 ): Promise<string> {
-  const vars = { ...ctx.variables, ...(stage.variables ?? {}) };
+  const vars = resolveVariables({ ...ctx.variables, ...(stage.variables ?? {}) });
   const deliverable = interpolate(stage.contract.deliverable, vars);
   const stageDir = resolve(ctx.artifactDir, stage.name);
   const evalAgent = await resolveAndLoad(stage.evaluator, ctx, stage.mcp_profile);

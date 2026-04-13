@@ -1,5 +1,5 @@
 import { resolve, dirname } from "node:path";
-import { interpolate } from "./prompt.js";
+import { interpolate, resolveVariables } from "./prompt.js";
 import { AutoApproveStrategy } from "./gate/auto-approve.js";
 import { ConsoleLogger, QuietLogger } from "./logger.js";
 import { TempFileTracker } from "./temp-tracker.js";
@@ -94,14 +94,14 @@ export function buildRunContext(opts: BuildRunContextOptions): RunContext {
     opts.projectConfig,
   );
 
-  const variables: Record<string, string> = {
+  const variables = resolveVariables({
     project: opts.project,
     project_dir: opts.projectDir,
     artifact_dir: opts.artifactDir,
     pipeline_name: opts.pipeline.name,
     ...(opts.pipeline.variables ?? {}),
     ...(opts.cliVars ?? {}),
-  };
+  });
 
   // Gate strategy: headless → auto-approve immediately.
   // Interactive → FilesystemGateStrategy, but it needs a runId which doesn't

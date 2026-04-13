@@ -13,7 +13,7 @@ import { runLoopCycle, type LoopCycleOptions } from "./loop.js";
 import { openDatabase } from "./db.js";
 import { loadPipeline } from "./pipeline.js";
 import { runPgeCycle, dispatchEvaluatorWithFeedback, type PgeCycleOptions } from "./pge.js";
-import { interpolate, resolveTaskBody, loadAgentMarkdown, buildTaskContext, writeSystemPromptFile } from "./prompt.js";
+import { interpolate, resolveVariables, resolveTaskBody, loadAgentMarkdown, buildTaskContext, writeSystemPromptFile } from "./prompt.js";
 import { updatePipelineStatus, notifyPipelineComplete, notifyPipelinePaused, launchScopedDashboard, isCmuxAvailable } from "./tui/cmux.js";
 import { AgentPaneManager } from "./tui/agent-panes.js";
 import {
@@ -180,7 +180,7 @@ async function runAgentStage(
   state: PipelineState,
 ): Promise<StageResult> {
   const start = Date.now();
-  const vars = { ...ctx.variables, ...(stage.variables ?? {}) };
+  const vars = resolveVariables({ ...ctx.variables, ...(stage.variables ?? {}) });
 
   const taskDescription = await resolveTaskBody(stage, vars, `Execute stage: ${stage.name}`);
   const output = stage.output ? interpolate(stage.output, vars) : undefined;
@@ -1047,7 +1047,7 @@ async function runPipelineStage(
   state: PipelineState,
 ): Promise<StageResult> {
   const start = Date.now();
-  const vars = { ...ctx.variables, ...(stage.variables ?? {}) };
+  const vars = resolveVariables({ ...ctx.variables, ...(stage.variables ?? {}) });
 
   // Resolve sub-pipeline file path relative to parent pipeline's directory.
   const filePath = resolve(dirname(ctx.pipelineFile), interpolate(stage.file, vars));
