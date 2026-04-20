@@ -14,7 +14,7 @@ The pipeline YAML is validated at load time using Zod schemas. Invalid files pro
 
 ```typescript
 const ModelSchema = z.string().optional();
-const EffortSchema = z.enum(["low", "medium", "high", "max"]).optional();
+const EffortSchema = z.enum(["low", "medium", "high", "xhigh", "max"]).optional();
 const WhenSchema = z.union([z.string(), z.array(z.string())]).optional();
 const OutputsSchema = z.record(z.string()).optional();
 
@@ -259,7 +259,7 @@ const LoopStageSchema = z.object({
 ### Pipeline
 
 ```typescript
-export type EffortLevel = "low" | "medium" | "high" | "max";
+export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface PhaseModelEffort {
   model?: string;
@@ -354,8 +354,8 @@ export interface AgentStage extends StageBase {
 | `output` | `string` | No | Expected output path (verified after execution) |
 | `allowed_tools` | `string[]` | No | Tool allowlist for the agent |
 | `human_review` | `boolean` | No | Fire a human review gate after completion |
-| `model` | `string` | No | Model override (`haiku`, `sonnet`, `opus`, or full model name) |
-| `effort` | `EffortLevel` | No | Effort level override (`low`, `medium`, `high`, `max`) |
+| `model` | `string` | No | Model override (`haiku`, `sonnet`, `opus`, or full model name such as `claude-opus-4-7` / `claude-sonnet-4-6` / `claude-haiku-4-5`) |
+| `effort` | `EffortLevel` | No | Effort level override (`low`, `medium`, `high`, `xhigh`, `max`) |
 
 ### PgeAgentConfig
 

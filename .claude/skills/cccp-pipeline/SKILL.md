@@ -16,23 +16,23 @@ description: string             # Optional. Human-readable description.
 variables:                      # Optional. Default variables for all stages.
   key: "value"
 model: string                   # Optional. Pipeline-level default model.
-effort: low|medium|high|max     # Optional. Pipeline-level default effort.
+effort: low|medium|high|xhigh|max     # Optional. Pipeline-level default effort.
 phase_defaults:                 # Optional. Per-phase model/effort defaults.
   planner:
     model: string
-    effort: low|medium|high|max
+    effort: low|medium|high|xhigh|max
   generator:
     model: string
-    effort: low|medium|high|max
+    effort: low|medium|high|xhigh|max
   evaluator:
     model: string
-    effort: low|medium|high|max
+    effort: low|medium|high|xhigh|max
   adjuster:
     model: string
-    effort: low|medium|high|max
+    effort: low|medium|high|xhigh|max
   executor:
     model: string
-    effort: low|medium|high|max
+    effort: low|medium|high|xhigh|max
 stages:                         # Required. At least one stage.
   - name: string                # Required. Unique stage identifier.
     type: agent | pge | autoresearch | pipeline | human_gate | loop
@@ -81,8 +81,8 @@ Single agent dispatch. Simplest stage type.
 | `inputs` | string[] | No | File paths passed to agent (interpolated) |
 | `output` | string | No | Expected output path (stage fails if missing after execution) |
 | `allowed_tools` | string[] | No | Restrict which built-in tools the agent can use (does not affect MCP tools) |
-| `model` | string | No | Model override (`haiku`, `sonnet`, `opus`, or full model name) |
-| `effort` | string | No | Effort level override (`low`, `medium`, `high`, `max`) |
+| `model` | string | No | Model override (`haiku`, `sonnet`, `opus`, or full model name such as `claude-opus-4-7` / `claude-sonnet-4-6` / `claude-haiku-4-5`) |
+| `effort` | string | No | Effort level override (`low`, `medium`, `high`, `xhigh`, `max`) |
 
 ## Stage Type: `pge`
 
@@ -321,7 +321,7 @@ Configurable body stages + evaluator retry cycle. Generalizes the PGE/autoresear
 | `on_fail` | string | No | stop/human_gate/skip | Behavior when max iterations exhausted with FAIL |
 | `human_review` | boolean | No | - | Fire a human review gate after successful completion |
 | `model` | string | No | - | Stage-level default model for body stages and evaluator |
-| `effort` | string | No | low/medium/high/max | Stage-level default effort |
+| `effort` | string | No | low/medium/high/xhigh/max | Stage-level default effort |
 
 ### LoopBodyStage Fields
 
@@ -488,8 +488,8 @@ Control which Claude model and effort level each agent dispatch uses. Both are o
 
 ### Valid Values
 
-- **`model`**: Any Claude CLI model alias (`haiku`, `sonnet`, `opus`) or full model name (`claude-sonnet-4-6`)
-- **`effort`**: `low`, `medium`, `high`, `max` (max is Opus only)
+- **`model`**: Any Claude CLI model alias (`haiku`, `sonnet`, `opus`) or full model name (`claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`). Aliases always resolve to the latest version in that family.
+- **`effort`**: `low`, `medium`, `high`, `xhigh`, `max` (higher levels allow more reasoning; availability depends on the model — `max` is Opus-only)
 
 ### Example
 

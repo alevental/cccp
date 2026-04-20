@@ -9,7 +9,7 @@ import { isParallelGroup } from "./types.js";
 // ---------------------------------------------------------------------------
 
 const ModelSchema = z.string().optional();
-const EffortSchema = z.enum(["low", "medium", "high", "max"]).optional();
+const EffortSchema = z.enum(["low", "medium", "high", "xhigh", "max"]).optional();
 const WhenSchema = z.union([z.string(), z.array(z.string())]).optional();
 const OutputsSchema = z.record(z.string()).optional();
 

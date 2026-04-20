@@ -87,7 +87,7 @@ function buildArgs(opts: DispatchOptions): string[] {
 | `--tools` | Comma-separated list | Restricts which built-in tools the agent can use (MCP tools are controlled by `--mcp-config`) |
 | `--permission-mode` | `bypassPermissions` | Agents run non-interactively (default) |
 | `--model` | Model alias or name | Override model for this dispatch (optional) |
-| `--effort` | `low`/`medium`/`high`/`max` | Override effort level for this dispatch (optional) |
+| `--effort` | `low`/`medium`/`high`/`xhigh`/`max` | Override effort level for this dispatch (optional) |
 
 ### Why `--append-system-prompt-file` (not `--system-prompt-file`)
 

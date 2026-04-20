@@ -6,7 +6,7 @@ import type { GateStrategy } from "./gate/gate-strategy.js";
 // ---------------------------------------------------------------------------
 
 /** Valid effort levels for agent dispatch. */
-export type EffortLevel = "low" | "medium" | "high" | "max";
+export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 /** Per-phase model/effort defaults (e.g., all planners use medium effort). */
 export interface PhaseModelEffort {

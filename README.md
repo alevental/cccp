@@ -172,7 +172,7 @@ phase_defaults:
   evaluator: { model: haiku, effort: low }
 ```
 
-Resolution: agent config > stage level > `phase_defaults` > pipeline level. Valid effort values: `low`, `medium`, `high`, `max`.
+Resolution: agent config > stage level > `phase_defaults` > pipeline level. Valid effort values: `low`, `medium`, `high`, `xhigh`, `max`.
 
 ### Variables
 
