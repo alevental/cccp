@@ -10,7 +10,7 @@ import { writeMcpConfigFile } from "./mcp/mcp-config.js";
 import { runAutoresearchCycle, type AutoresearchCycleOptions } from "./autoresearch.js";
 import { runGeCycle, dispatchGeEvaluatorWithFeedback, type GeCycleOptions } from "./ge.js";
 import { runLoopCycle, type LoopCycleOptions } from "./loop.js";
-import { openDatabase } from "./db.js";
+import { openDatabase, reclaimWasmMemory } from "./db.js";
 import { loadPipeline } from "./pipeline.js";
 import { runPgeCycle, dispatchEvaluatorWithFeedback, type PgeCycleOptions } from "./pge.js";
 import { interpolate, resolveVariables, resolveTaskBody, loadAgentMarkdown, buildTaskContext, writeSystemPromptFile } from "./prompt.js";
@@ -1646,6 +1646,23 @@ export interface RunOptions {
 }
 
 /**
+ * WASM reclaim interval for the main runner process.
+ *
+ * sql.js linear memory grows but never shrinks. Every `saveState` and
+ * `saveStateWithEvent` calls `db.export()`, which churns Uint8Array
+ * allocations inside the WASM heap. Over multi-hour runs this accumulates
+ * to gigabytes. Periodically dropping the sql.js module lets V8 GC the
+ * backing ArrayBuffer; the next `openDatabase()` lazily re-initialises.
+ *
+ * Safe to fire between await boundaries: every caller of `openDatabase`
+ * uses the returned handle synchronously (no awaits between fetch and use),
+ * so the singleton cache being cleared mid-timer can't cause use-after-free.
+ */
+const WASM_RECLAIM_INTERVAL_MS = Number(
+  process.env.CCCP_WASM_RECLAIM_MS ?? 10 * 60 * 1000, // 10 minutes
+);
+
+/**
  * Run all stages in a pipeline sequentially.
  * Handles top-level lifecycle: state creation, DB persistence, gate strategy,
  * cmux notifications, and temp file cleanup.
@@ -1654,6 +1671,9 @@ export async function runPipeline(
   ctx: RunContext,
   opts?: RunOptions,
 ): Promise<PipelineResult> {
+  // Detect top-level invocation (sub-pipelines pass an initialized visitedPipelines set).
+  const isTopLevel = !ctx.visitedPipelines;
+
   // Create gate strategy if not provided.
   if (!ctx.gateStrategy && !ctx.headless && !ctx.dryRun) {
     // Need a runId — use existing state or generate one via createState.
@@ -1676,6 +1696,16 @@ export async function runPipeline(
     ctx.visitedPipelines = new Set([resolve(ctx.pipelineFile)]);
   }
 
+  // Schedule periodic WASM reclaim at top level only (sub-pipelines share the process).
+  // Skip in dry-run (no DB writes) and when interval is 0/negative (disabled).
+  let wasmReclaimTimer: ReturnType<typeof setInterval> | null = null;
+  if (isTopLevel && !ctx.dryRun && WASM_RECLAIM_INTERVAL_MS > 0) {
+    wasmReclaimTimer = setInterval(() => {
+      reclaimWasmMemory();
+    }, WASM_RECLAIM_INTERVAL_MS);
+    wasmReclaimTimer.unref();
+  }
+
   if (opts?.existingState) {
     getLogger(ctx).log(`\nCCCP: Resuming pipeline "${ctx.pipeline.name}"\n`);
   } else {
@@ -1695,6 +1725,7 @@ export async function runPipeline(
 
     return pipelineResult;
   } finally {
+    if (wasmReclaimTimer) clearInterval(wasmReclaimTimer);
     await ctx.tempTracker?.cleanup();
   }
 }

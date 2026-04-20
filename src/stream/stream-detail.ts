@@ -81,6 +81,13 @@ export type MonitorEntry =
 // StreamDetailAccumulator — builds chronological entry list from raw events
 // ---------------------------------------------------------------------------
 
+/**
+ * Cap for in-memory entries kept by the agent-monitor TUI. Agents with
+ * verbose thinking / many tool calls can otherwise accumulate unbounded
+ * entries over long dispatches. When exceeded, oldest entries are dropped.
+ */
+const MAX_ENTRIES = 5000;
+
 export class StreamDetailAccumulator {
   readonly entries: MonitorEntry[] = [];
   /** Maps tool_use IDs to tool names. */
@@ -92,6 +99,13 @@ export class StreamDetailAccumulator {
   toolCallCount = 0;
   done = false;
 
+  private pushEntry(entry: MonitorEntry): void {
+    this.pushEntry(entry);
+    if (this.entries.length > MAX_ENTRIES) {
+      this.entries.splice(0, this.entries.length - MAX_ENTRIES);
+    }
+  }
+
   processEvent(event: StreamEvent): void {
     const ts = Date.now();
 
@@ -99,7 +113,7 @@ export class StreamDetailAccumulator {
       if (event.subtype === "init") {
         const e = event as SystemInitEvent;
         this.model = e.model ?? "";
-        this.entries.push({
+        this.pushEntry({
           type: "system_init",
           model: this.model,
           tools: e.tools,
@@ -108,7 +122,7 @@ export class StreamDetailAccumulator {
       } else if (event.subtype === "task_progress") {
         const e = event as SystemTaskProgressEvent;
         if (e.description) {
-          this.entries.push({
+          this.pushEntry({
             type: "task_progress",
             description: e.description,
             toolName: e.last_tool_name,
@@ -125,14 +139,14 @@ export class StreamDetailAccumulator {
       if (msg?.content && Array.isArray(msg.content)) {
         for (const block of msg.content) {
           if (block.type === "text" && block.text) {
-            this.entries.push({ type: "text", text: block.text, ts });
+            this.pushEntry({ type: "text", text: block.text, ts });
           } else if (block.type === "thinking" && block.thinking) {
-            this.entries.push({ type: "thinking", text: block.thinking, ts });
+            this.pushEntry({ type: "thinking", text: block.thinking, ts });
           } else if (block.type === "tool_use") {
             const tb = block as ToolUseBlock;
             this.toolIdToName.set(tb.id, tb.name);
             this.toolCallCount++;
-            this.entries.push({
+            this.pushEntry({
               type: "tool_call",
               name: tb.name,
               id: tb.id,
@@ -149,12 +163,12 @@ export class StreamDetailAccumulator {
       }
       // Legacy flat format
       if (e.subtype === "text" && typeof e.text === "string") {
-        this.entries.push({ type: "text", text: e.text, ts });
+        this.pushEntry({ type: "text", text: e.text, ts });
       } else if (e.subtype === "tool_use" && e.name) {
         const id = e.id ?? "";
         this.toolIdToName.set(id, e.name);
         this.toolCallCount++;
-        this.entries.push({
+        this.pushEntry({
           type: "tool_call",
           name: e.name,
           id,
@@ -174,12 +188,14 @@ export class StreamDetailAccumulator {
           if (block.type === "tool_result") {
             const tr = block as ToolResultBlock;
             const name = this.toolIdToName.get(tr.tool_use_id) ?? "?";
-            this.entries.push({
+            this.pushEntry({
               type: "tool_result",
               name,
               id: tr.tool_use_id,
               ts,
             });
+            // Free the lookup entry — no longer needed after result arrives.
+            this.toolIdToName.delete(tr.tool_use_id);
           }
         }
       }
@@ -193,7 +209,7 @@ export class StreamDetailAccumulator {
         this.outputTokens = e.usage.output_tokens ?? this.outputTokens;
       }
       this.totalCostUsd = e.total_cost_usd ?? this.totalCostUsd;
-      this.entries.push({
+      this.pushEntry({
         type: "result",
         inputTokens: this.inputTokens,
         outputTokens: this.outputTokens,

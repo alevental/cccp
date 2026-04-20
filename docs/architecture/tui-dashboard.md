@@ -369,6 +369,16 @@ export class DbService {
 
 The standalone dashboard creates a `DbService` at launch and stops it on completion. The MCP server creates one at startup and passes it to the `GateNotifier`. The inline dashboard (used by `cccp run` and `cccp resume`) does not need a `DbService` — it reads from the in-process singleton without reloading.
 
+### Runner-side WASM reclaim (src/runner.ts)
+
+The main pipeline runner drives `db.export()` on every `saveState` / `saveStateWithEvent`, each of which materialises a fresh `Uint8Array` inside the sql.js WASM heap. Without periodic reclamation, the WASM `arrayBuffers` counter grows monotonically over multi-hour runs and eventually hits V8's 4GB heap cap.
+
+`runPipeline()` starts a `setInterval(() => reclaimWasmMemory(), WASM_RECLAIM_INTERVAL_MS)` at top-level invocation (sub-pipelines share the process and skip the timer). The timer is `.unref()`'d and cleared in the `finally` block so tests and short CLI invocations don't hang. Firing is safe between `await` boundaries because every `openDatabase()` caller (in `state.ts`, `runner.ts`, `dashboard.tsx`, `gate-notifier.ts`) uses the returned handle synchronously — the singleton cache being cleared mid-timer cannot cause use-after-free.
+
+Default interval: 10 minutes, configurable via `CCCP_WASM_RECLAIM_MS` env var (set to `0` to disable).
+
+In addition, `src/db.ts` prunes the events table every 10 flushes (down from 50) so each `db.export()` buffer stays close to the 500-event cap during busy stages.
+
 ## cmux Integration
 
 **File:** `src/tui/cmux.ts`

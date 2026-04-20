@@ -522,8 +522,10 @@ export class CccpDatabase {
    */
   flush(): void {
     // Periodically prune old events to cap DB size for long-running pipelines.
+    // Pruned every 10 flushes: at typical 1-2 flushes/sec during active stages
+    // that is ~5-10s between prunes, keeping each db.export() buffer small.
     this.flushCount++;
-    if (this.flushCount % 50 === 0) {
+    if (this.flushCount % 10 === 0) {
       this.pruneAllEvents();
     }
 

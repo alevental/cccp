@@ -62,7 +62,6 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const updateActivity = useCallback((a: AgentActivity) => {
-    const ts = Date.now();
     const doUpdate = (act: AgentActivity) => {
       setActivities((prev) => {
         const next = new Map(prev);
@@ -78,8 +77,12 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
       });
     };
 
-    if (now - lastActivityTime.current >= 100) {
-      lastActivityTime.current = now;
+    // Compare against wall clock, not React state — the callback is memoised
+    // with empty deps, so a captured `now` would freeze at mount time and
+    // break the 100ms throttle after the first update.
+    const ts = Date.now();
+    if (ts - lastActivityTime.current >= 100) {
+      lastActivityTime.current = ts;
       doUpdate(a);
     } else {
       pendingActivity.current = a;
