@@ -7,6 +7,7 @@ The CCCP dashboard is an Ink-based (React for the terminal) real-time UI that sh
 - [`src/tui/components.tsx`](../../src/tui/components.tsx) -- Header, StageList, AgentActivityPanel
 - [`src/git.ts`](../../src/git.ts) -- GitInfo type and one-shot git metadata query
 - [`src/tui/detail-log.tsx`](../../src/tui/detail-log.tsx) -- DetailLog with scrollable event visualization
+- [`src/tui/memory-view.tsx`](../../src/tui/memory-view.tsx) -- MemoryView diagnostics panel + MemorySampleRing
 - [`src/tui/agent-monitor.tsx`](../../src/tui/agent-monitor.tsx) -- per-agent detail monitor (full-fidelity stream view)
 - [`src/tui/agent-panes.ts`](../../src/tui/agent-panes.ts) -- AgentPaneManager for cmux pane lifecycle
 - [`src/tui/cmux.ts`](../../src/tui/cmux.ts) -- cmux CLI wrapper for sidebar status, notifications, and pane management
@@ -229,6 +230,7 @@ Sub-pipeline child events render as `↳ [child-pipeline] stage: started/complet
 | `Home` / `g` | Jump to top |
 | `End` / `G` | Jump to bottom (auto-scroll) |
 | `p` | Request pipeline pause at next clean breakpoint |
+| `m` | Toggle between Detail Log and Memory Diagnostics view |
 
 ## Polling and Update Strategy
 
@@ -277,6 +279,39 @@ When the pipeline reaches a terminal status (`passed`, `failed`, or `error`), th
 ```typescript
 if (updated.status === "passed" || updated.status === "failed" || updated.status === "error") {
   setTimeout(() => onComplete?.(), 500);
+}
+```
+
+### MemoryView (bottom pane, toggled)
+
+**File:** `src/tui/memory-view.tsx`
+
+Pressing `m` replaces the DetailLog with a memory diagnostics view for debugging unbounded heap/RSS growth. Press `m` again to return to events.
+
+**MemorySampleRing:** A bounded ring buffer (600 samples) that records `process.memoryUsage()` and `v8.getHeapSpaceStatistics()` on every poll tick. Created once in `startDashboard` / `launchDashboard` (outside the Ink tree) so history survives the 15-minute yoga remount cycle.
+
+**Display sections:**
+
+| Section | Content |
+|---------|---------|
+| **Current** | RSS, heap used/total, external, arrayBuffers |
+| **Δ since mount** | Delta from baseline; yellow >20MB, red >100MB |
+| **Rate (1m)** | Bytes/min growth rate for RSS, heap, arrayBuffers |
+| **Sparklines** | ASCII block-char time series (RSS, heapUsed, arrayBuffers) with min→max range |
+| **V8 heap spaces** | Per-space used/committed breakdown, sorted by used size (via `v8.getHeapSpaceStatistics()`) |
+| **In-process state** | Event count, activity map size, dispatch times size, sample buffer fill |
+
+The `arrayBuffers` metric is the key WASM signal — both yoga-layout and sql.js grow this counter. Separating it from JS heap growth identifies whether leaks are in WASM or JS objects.
+
+```typescript
+interface MemorySample {
+  ts: number;
+  rss: number;
+  heapUsed: number;
+  heapTotal: number;
+  external: number;
+  arrayBuffers: number;
+  heapSpaces: Record<string, { used: number; committed: number }>;
 }
 ```
 

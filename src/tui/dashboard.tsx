@@ -11,6 +11,7 @@ import type { AgentActivity } from "../stream/stream.js";
 import { getGitInfo, type GitInfo } from "../git.js";
 import { Header, StageList, AgentActivityPanel, isAgentActive } from "./components.js";
 import { DetailLog } from "./detail-log.js";
+import { MemoryView, MemorySampleRing } from "./memory-view.js";
 
 // ---------------------------------------------------------------------------
 // Dashboard app component
@@ -29,9 +30,11 @@ interface DashboardProps {
   scopeStage?: string;
   /** Centralized DB service (standalone mode). Handles reload + WASM reclaim. */
   dbService?: DbService;
+  /** Shared memory sample ring — lives outside the Ink tree so history survives the 15-min remount. */
+  memSamples?: MemorySampleRing;
 }
 
-function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, onComplete, startTime: startTimeProp, scopeStage, dbService }: DashboardProps) {
+function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, onComplete, startTime: startTimeProp, scopeStage, dbService, memSamples }: DashboardProps) {
   const { stdout } = useStdout();
   const [state, setState] = useState<PipelineState>(initialState);
   const [activities, setActivities] = useState<Map<string, AgentActivity>>(new Map());
@@ -40,6 +43,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
   const [elapsed, setElapsed] = useState(0);
   const [now, setNow] = useState(Date.now());
   const [memUsage, setMemUsage] = useState(process.memoryUsage());
+  const [viewMode, setViewMode] = useState<"events" | "memory">("events");
   const [dispatchStartTimes, setDispatchStartTimes] = useState<Map<string, number>>(new Map());
   // Git info: null = loading, undefined = unavailable (not a git repo).
   const [gitInfo, setGitInfo] = useState<GitInfo | null | undefined>(null);
@@ -122,6 +126,8 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
         db.setPauseRequested(state.runId, true);
         db.flush();
       }).catch(() => {});
+    } else if (input === "m" || input === "M") {
+      setViewMode((v) => (v === "memory" ? "events" : "memory"));
     }
   });
 
@@ -144,6 +150,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
       setElapsed(currentTime - startTime);
       setNow(currentTime);
       setMemUsage(process.memoryUsage());
+      memSamples?.record();
 
       try {
         // When a DbService is available, use it to reload (it owns WASM reclaim).
@@ -242,7 +249,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [runId, projectDir, startTime, onComplete, useEventBus, scopeStage, dbService]);
+  }, [runId, projectDir, startTime, onComplete, useEventBus, scopeStage, dbService, memSamples]);
 
   const isComplete =
     state.status === "passed" ||
@@ -287,7 +294,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
               <Text color="blue"> {"\u23F8"} Pause requested {"\u2014"} will pause after current stage</Text>
             )}
             {!pauseRequested && (
-              <Text dimColor> [p] pause</Text>
+              <Text dimColor> [p] pause {"\u00B7"} [m] {viewMode === "memory" ? "events" : "memory"}</Text>
             )}
           </Box>
         ) : (
@@ -308,8 +315,18 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
         )}
       </Box>
 
-      {/* Event log (bottom) */}
-      <DetailLog events={events} chromeHeight={Math.max(stageListRows + 3, 8) + (gitInfo ? 4 : 3)} />
+      {/* Bottom pane: event log or memory diagnostics, toggled with `m`. */}
+      {viewMode === "memory" ? (
+        <MemoryView
+          samples={memSamples}
+          events={events.length}
+          activities={activities.size}
+          dispatches={dispatchStartTimes.size}
+          chromeHeight={Math.max(stageListRows + 3, 8) + (gitInfo ? 4 : 3)}
+        />
+      ) : (
+        <DetailLog events={events} chromeHeight={Math.max(stageListRows + 3, 8) + (gitInfo ? 4 : 3)} />
+      )}
     </Box>
   );
 }
@@ -326,6 +343,7 @@ export async function launchDashboard(
 ): Promise<void> {
   const svc = new DbService({ projectDir, mode: "reader" });
   svc.start();
+  const memSamples = new MemorySampleRing();
 
   return new Promise<void>((resolve) => {
     const { unmount, waitUntilExit } = render(
@@ -336,6 +354,7 @@ export async function launchDashboard(
         initialState={initialState}
         scopeStage={scopeStage}
         dbService={svc}
+        memSamples={memSamples}
         onComplete={() => {
           svc.stop();
           unmount();
@@ -373,6 +392,7 @@ export function startDashboard(
   initialState: PipelineState,
 ): InlineDashboardHandle {
   const dashboardStartTime = Date.now();
+  const memSamples = new MemorySampleRing();
   let shuttingDown = false;
 
   function mount() {
@@ -384,6 +404,7 @@ export function startDashboard(
         initialState={initialState}
         useEventBus={true}
         startTime={dashboardStartTime}
+        memSamples={memSamples}
       />,
       { maxFps: 10 },
     );
