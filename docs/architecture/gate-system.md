@@ -268,6 +268,91 @@ After the agent completes, the runner creates a review gate. On rejection with f
 
 On approval, the stage passes normally. On rejection without feedback or after max retries, the stage fails.
 
+## Agent Gate (`type: agent_gate`)
+
+The `agent_gate` stage type is delivery-identical to `human_gate` — same `GateInfo` lifecycle, same `GateStrategy`, same state transitions, same `cccp_gate_respond` response path, same feedback artifact format, same TUI rendering. The **only** difference is the message sent through the MCP channel: instead of asking a human to review, it instructs the receiving Claude Code session to decide the gate autonomously and respond on its own.
+
+The runner does **not** dispatch an evaluator. The Claude Code session that the MCP server is connected to acts as the decider by using the existing `cccp_gate_review` / `cccp_gate_respond` tools — just without prompting the user.
+
+### Lifecycle
+
+1. The runner publishes `GateInfo { status: "pending", kind: "agent_eval", prompt, ... }` to state — identical to `human_gate` except for the `kind` field.
+2. The `GateNotifier` sees `kind === "agent_eval"` and sends a channel notification via `sendAgentGateChannelNotification()` (`src/mcp/gate-notifier.ts`). The message explicitly tells the session: "This gate is addressed to you — decide it autonomously. Do NOT ask the user. Call `cccp_gate_review` to load context, then `cccp_gate_respond` with your decision."
+3. Elicitation (the user-facing fallback form) is **skipped** for `agent_eval` gates. If the channel is unavailable, the session can still discover the pending gate via `cccp_status` / `cccp_gate_review`. There is no user-prompt fallback because the gate is not addressed to the user.
+4. The session reads the artifacts, applies the `prompt` criteria, and calls `cccp_gate_respond` with approved=true/false and optional feedback.
+5. `waitForGate()` picks up the resolution and returns. The runner clears the gate and transitions the stage to passed or failed (per `on_reject`).
+
+### Schema
+
+```yaml
+- name: review-gate
+  type: agent_gate
+  artifacts: [deliverables/spec.md, deliverables/impl/]
+  prompt: "Verify the implementation matches the spec and has adequate test coverage."
+  on_reject: stop     # stop | retry (retry = treated as stop, mirrors human_gate)
+```
+
+The schema is deliberately a subset of `human_gate` — no new fields. `artifacts` and `prompt` drive the session's evaluation.
+
+### Why this design
+
+The alternative — dispatching a dedicated evaluator subprocess — would duplicate machinery that already exists (PGE/GE evaluators, human_review flows) and introduce a second code path for agent evaluation. Routing through the channel API makes `agent_gate` a one-line variant of `human_gate`: the only thing that changes is who is asked. The Claude Code session that already has access to `cccp_gate_review` / `cccp_gate_respond` is already capable of reading artifacts and making a decision; we simply tell it to do so without involving the user.
+
+### Headless behavior
+
+In `--headless` mode the `AutoApproveStrategy` resolves the gate immediately with `approved=true`. No channel notification is sent (headless CI has no MCP session attached anyway).
+
+### Parallel-group restriction
+
+Like `human_gate`, `agent_gate` cannot appear inside a `parallel` group — it blocks execution until resolved.
+
+## Pipeline Handoff (`type: pipeline_handoff`)
+
+The `pipeline_handoff` stage type is a terminal checkpoint that signals an **outer orchestrator** (a Claude Code session supervising multiple pipelines across cmux panes) to launch the next pipeline. CCCP itself does not spawn the next pipeline — it publishes a structured routing request through the same gate-notification channels and waits for the orchestrator to acknowledge.
+
+The intended workflow: an upstream pipeline-authoring agent writes pipeline A with a `pipeline_handoff` as its final stage, hard-coded to pipeline B's file path. When A completes, the orchestrator sees the handoff notification, launches B in the indicated cmux target, and acknowledges via `cccp_handoff_ack`. The orchestrator owns cmux surface/pane lifecycle; CCCP owns the contract.
+
+### Lifecycle
+
+1. The runner resolves cmux defaults from the current process env (`CMUX_WORKSPACE_ID`, `CMUX_SURFACE_ID`, `CMUX_PANE_ID` — see `getCurrentCmuxContext()` in `src/tui/cmux.ts`) for any fields the pipeline author left unset.
+2. The runner publishes `GateInfo { status: "pending", kind: "pipeline_handoff", handoff: HandoffPayload, ... }` to state. The notifier branches on `kind === "pipeline_handoff"` and sends a handoff-specific notification that includes the full payload (next file, project, variables, cmux target) so the orchestrator can act without a round-trip. The elicitation fallback collects `launched_run_id` and `target_pane` rather than a free-text approve/reject.
+3. The orchestrator launches the next pipeline (e.g., via `cccp run -f <next.file> -p <project>` in the indicated cmux target) and calls `cccp_handoff_ack` with the new run id. The tool writes `handoff.launchedRunId` / `handoff.targetPane` back onto `state.gate.handoff` and sets `status: "approved"`.
+4. `waitForGate()` returns. The runner records `handoff-launched-run` and `handoff-target-pane` stage artifacts from the resolved payload, clears the gate, and the stage passes.
+
+### Schema
+
+```yaml
+- name: handoff-to-next
+  type: pipeline_handoff
+  prompt: "Phase 1 complete — run phase-2.yaml in a split-right pane."
+  next:
+    file: pipelines/phase-2.yaml      # required
+    project: phase-2-project          # optional; defaults to current
+    variables:                        # optional; passed to the next pipeline
+      source_run_id: "{run.id}"
+    session_id: <uuid>                # optional; defaults to current MCP session
+  cmux:
+    target: split_right               # current | split_right | split_down | new_window | <pane-id>
+    workspace: <id>                   # optional; defaults to current env
+    surface: <id>                     # optional; defaults to current env
+    label: phase-2                    # optional pane label
+  on_timeout: stop                    # stop | skip (default: stop)
+  timeout_ms: 600000                  # optional; how long to wait for orchestrator ack
+```
+
+### Headless behavior
+
+In `--headless` mode the stage is a **no-op** — it logs a line saying no orchestrator is listening and passes. Nothing is written to `state.gate`. This is the only gate-like stage where auto-approve would be actively wrong (there's no next pipeline to launch), so we skip the gate entirely instead.
+
+### Validation constraints
+
+- `pipeline_handoff` **must be the final stage** in its pipeline (enforced at validation time). Anything after it would race the child pipeline's startup.
+- `pipeline_handoff` cannot appear inside a `parallel` group.
+
+### MCP tool: `cccp_handoff_ack`
+
+A dedicated tool records the orchestrator's response. Validates that the pending gate is a `pipeline_handoff` gate (returns an error if the caller used the wrong tool), writes `launched_run_id` / `target_pane` / optional `note` onto `state.gate.handoff`, transitions the gate to approved, and records the values as stage artifacts. See [MCP Tools](../api/mcp-tools.md#cccp_handoff_ack) for the full parameter reference.
+
 ## MCP Gate Notification
 
 **File:** `src/mcp/gate-notifier.ts`

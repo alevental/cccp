@@ -128,6 +128,50 @@ const HumanGateStageSchema = z.object({
   when: WhenSchema,
 });
 
+const AgentGateStageSchema = z.object({
+  name: z.string(),
+  task: z.string().optional(),
+  task_file: z.string().optional(),
+  type: z.literal("agent_gate"),
+  mcp_profile: z.string().optional(),
+  artifacts: z.array(z.string()).optional(),
+  prompt: z.string().optional(),
+  on_reject: z.enum(["retry", "stop"]).optional(),
+  variables: z.record(z.string()).optional(),
+  outputs: OutputsSchema,
+  when: WhenSchema,
+});
+
+const HandoffNextSchema = z.object({
+  file: z.string(),
+  project: z.string().optional(),
+  variables: z.record(z.string()).optional(),
+  session_id: z.string().optional(),
+});
+
+const HandoffCmuxSchema = z.object({
+  target: z.string().optional(),
+  workspace: z.string().optional(),
+  surface: z.string().optional(),
+  label: z.string().optional(),
+}).optional();
+
+const PipelineHandoffStageSchema = z.object({
+  name: z.string(),
+  task: z.string().optional(),
+  task_file: z.string().optional(),
+  type: z.literal("pipeline_handoff"),
+  mcp_profile: z.string().optional(),
+  prompt: z.string().optional(),
+  next: HandoffNextSchema,
+  cmux: HandoffCmuxSchema,
+  on_timeout: z.enum(["stop", "skip"]).optional(),
+  timeout_ms: z.number().int().positive().optional(),
+  variables: z.record(z.string()).optional(),
+  outputs: OutputsSchema,
+  when: WhenSchema,
+});
+
 const LoopBodyStageSchema = z.object({
   name: z.string(),
   agent: z.string(),
@@ -180,6 +224,8 @@ const StageSchema = z.discriminatedUnion("type", [
   PgeStageSchema,
   GeStageSchema,
   HumanGateStageSchema,
+  AgentGateStageSchema,
+  PipelineHandoffStageSchema,
   AutoresearchStageSchema,
   PipelineStageSchema,
   LoopStageSchema,
@@ -231,6 +277,14 @@ const PipelineSchema = z.object({
         if (stage.type === "human_gate") {
           issues.push(`Stage '${stage.name}' is type human_gate and cannot be inside a parallel group (gates block execution)`);
         }
+        // No agent_gate inside parallel groups (blocks like human_gate)
+        if (stage.type === "agent_gate") {
+          issues.push(`Stage '${stage.name}' is type agent_gate and cannot be inside a parallel group (gates block execution)`);
+        }
+        // No pipeline_handoff inside parallel groups (must be last stage)
+        if (stage.type === "pipeline_handoff") {
+          issues.push(`Stage '${stage.name}' is type pipeline_handoff and cannot be inside a parallel group (must be the final stage)`);
+        }
         // No pipeline stages inside parallel groups
         if (stage.type === "pipeline") {
           issues.push(`Stage '${stage.name}' is type pipeline and cannot be inside a parallel group`);
@@ -267,6 +321,17 @@ const PipelineSchema = z.object({
         issues.push(`Duplicate stage name '${stage.name}'`);
       }
       allNames.add(stage.name);
+    }
+  }
+
+  // pipeline_handoff must be the final top-level stage entry — it transfers
+  // control to the orchestrator and anything after it would race the child run.
+  for (let i = 0; i < pipeline.stages.length; i++) {
+    const entry = pipeline.stages[i];
+    if ("parallel" in entry && !("type" in entry)) continue;
+    const stage = entry as z.infer<typeof StageSchema>;
+    if (stage.type === "pipeline_handoff" && i !== pipeline.stages.length - 1) {
+      issues.push(`Stage '${stage.name}' is type pipeline_handoff and must be the final stage in the pipeline`);
     }
   }
 

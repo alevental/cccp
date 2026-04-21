@@ -46,6 +46,26 @@ interface StageListProps {
   state: PipelineState;
 }
 
+/** Visual tag suffix for gate-like stages (rendered after the name). */
+function gateTagFor(type: string): string {
+  switch (type) {
+    case "human_gate": return " \u2691";      // flag
+    case "agent_gate": return " \u2699";      // gear
+    case "pipeline_handoff": return " \u21AA"; // hooked arrow
+    default: return "";
+  }
+}
+
+/** Static in_progress icon for gate-like stages to avoid Spinner churn. */
+function staticGateIcon(type: string): string | null {
+  switch (type) {
+    case "human_gate": return "\u23F8";       // pause
+    case "agent_gate": return "\u2699";       // gear
+    case "pipeline_handoff": return "\u21AA"; // hooked arrow
+    default: return null;
+  }
+}
+
 function StageRow({ name, stage }: { name: string; stage: StageState }) {
   const icon = stageIcon(stage.status);
   const color = stageColor(stage.status);
@@ -57,15 +77,16 @@ function StageRow({ name, stage }: { name: string; stage: StageState }) {
     stage.durationMs != null
       ? ` ${(stage.durationMs / 1000).toFixed(1)}s`
       : "";
-  const gateTag = stage.type === "human_gate" ? " \u2691" : "";
+  const gateTag = gateTagFor(stage.type);
 
   if (stage.status === "in_progress") {
-    // Static icon for human_gate stages — avoids Spinner animation that drives
+    // Static icon for gate-like stages — avoids Spinner animation that drives
     // continuous Ink re-renders and yoga-layout WASM memory growth during long waits.
-    if (stage.type === "human_gate") {
+    const gateIcon = staticGateIcon(stage.type);
+    if (gateIcon) {
       return (
         <Text color="blue">
-          {"\u23F8"} {name}{gateTag}
+          {gateIcon} {name}{gateTag}
         </Text>
       );
     }
@@ -163,10 +184,17 @@ export function StageList({ state }: StageListProps) {
         );
       })}
       {state.gate?.status === "pending" && (
-        <Box marginTop={1}>
+        <Box marginTop={1} flexDirection="column">
           <Text color="blue" bold>
-            {" "}\u23F8 Gate: {state.gate.stageName}
+            {" "}{staticGateIcon(state.gate.kind === "agent_eval" ? "agent_gate" : state.gate.kind === "pipeline_handoff" ? "pipeline_handoff" : "human_gate") ?? "\u23F8"}{" "}
+            {state.gate.kind === "pipeline_handoff" ? "Handoff" : "Gate"}: {state.gate.stageName}
           </Text>
+          {state.gate.kind === "pipeline_handoff" && state.gate.handoff && (
+            <Text color="blue" dimColor>
+              {"  \u2192 "}{state.gate.handoff.next.file}
+              {state.gate.handoff.cmux.target ? ` @ ${state.gate.handoff.cmux.target}` : ""}
+            </Text>
+          )}
         </Box>
       )}
     </Box>

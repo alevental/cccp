@@ -12,6 +12,26 @@ export function isCmuxAvailable(): boolean {
   return !!process.env.CMUX_WORKSPACE_ID;
 }
 
+/** Cmux workspace/surface/pane identifiers read from the runtime env. */
+export interface CmuxContext {
+  workspace?: string;
+  surface?: string;
+  pane?: string;
+}
+
+/**
+ * Read the current cmux workspace/surface/pane from env vars. Any field can
+ * be absent (e.g., if the process isn't running inside cmux); callers should
+ * treat missing values as "use the orchestrator's default".
+ */
+export function getCurrentCmuxContext(): CmuxContext {
+  return {
+    workspace: process.env.CMUX_WORKSPACE_ID,
+    surface: process.env.CMUX_SURFACE_ID ?? process.env.CMUX_SURFACE,
+    pane: process.env.CMUX_PANE_ID ?? process.env.CMUX_PANE,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // cmux commands
 // ---------------------------------------------------------------------------

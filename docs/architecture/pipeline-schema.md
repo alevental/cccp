@@ -58,13 +58,15 @@ const StageSchema = z.discriminatedUnion("type", [
   PgeStageSchema,
   GeStageSchema,
   HumanGateStageSchema,
+  AgentGateStageSchema,
+  PipelineHandoffStageSchema,
   AutoresearchStageSchema,
   PipelineStageSchema,
   LoopStageSchema,
 ]);
 ```
 
-The `type` field is the discriminator. Valid values: `"agent"`, `"pge"`, `"ge"`, `"human_gate"`, `"autoresearch"`, `"pipeline"`, `"loop"`.
+The `type` field is the discriminator. Valid values: `"agent"`, `"pge"`, `"ge"`, `"human_gate"`, `"agent_gate"`, `"pipeline_handoff"`, `"autoresearch"`, `"pipeline"`, `"loop"`.
 
 ### ParallelGroupSchema
 
@@ -78,8 +80,9 @@ const ParallelGroupSchema = z.object({
 ```
 
 Validation rules (via `superRefine` on `PipelineSchema`):
-- No `human_gate` stages inside parallel groups (gates block execution)
-- No `pipeline` stages inside parallel groups (complex state interactions)
+- No `human_gate`, `agent_gate`, or `pipeline_handoff` stages inside parallel groups (all three block execution)
+- No `pipeline` or `loop` stages inside parallel groups (complex state interactions)
+- `pipeline_handoff` must be the final stage in its pipeline
 - Unique stage names across the entire pipeline (including inside groups)
 - No conflicting `output` or `contract.deliverable` paths within a group
 
@@ -193,6 +196,54 @@ const HumanGateStageSchema = z.object({
 });
 ```
 
+### AgentGateStageSchema
+
+```typescript
+const AgentGateStageSchema = z.object({
+  name: z.string(),
+  task: z.string().optional(),
+  task_file: z.string().optional(),
+  type: z.literal("agent_gate"),
+  mcp_profile: z.string().optional(),
+  artifacts: z.array(z.string()).optional(),
+  prompt: z.string().optional(),
+  on_reject: z.enum(["retry", "stop"]).optional(),
+  variables: z.record(z.string()).optional(),
+});
+```
+
+Delivery is identical to `human_gate` — same lifecycle, same `cccp_gate_respond` flow. The only difference: when `kind === "agent_eval"` the `GateNotifier` sends a channel message instructing the receiving Claude Code session to decide the gate autonomously (without prompting the user). No evaluator subprocess is dispatched; the session acts as the decider via the MCP tools it already uses for human gates.
+
+### PipelineHandoffStageSchema
+
+```typescript
+const PipelineHandoffStageSchema = z.object({
+  name: z.string(),
+  task: z.string().optional(),
+  task_file: z.string().optional(),
+  type: z.literal("pipeline_handoff"),
+  mcp_profile: z.string().optional(),
+  prompt: z.string().optional(),
+  next: z.object({
+    file: z.string(),
+    project: z.string().optional(),
+    variables: z.record(z.string()).optional(),
+    session_id: z.string().optional(),
+  }),
+  cmux: z.object({
+    target: z.string().optional(),        // current | split_right | split_down | new_window | <pane-id>
+    workspace: z.string().optional(),
+    surface: z.string().optional(),
+    label: z.string().optional(),
+  }).optional(),
+  on_timeout: z.enum(["stop", "skip"]).optional(),
+  timeout_ms: z.number().int().positive().optional(),
+  variables: z.record(z.string()).optional(),
+});
+```
+
+Terminal stage — must be the last stage in its pipeline. The runner publishes a gate with `kind: "pipeline_handoff"` and a `HandoffPayload` attached; the orchestrator launches the next pipeline in the specified cmux target and acknowledges via `cccp_handoff_ack`. In `--headless` mode this stage is a no-op.
+
 ### AutoresearchStageSchema
 
 _See existing definition in source._
@@ -303,7 +354,16 @@ export function isParallelGroup(entry: StageEntry): entry is ParallelGroup;
 ### Stage (discriminated union)
 
 ```typescript
-export type Stage = AgentStage | PgeStage | GeStage | HumanGateStage | AutoresearchStage | PipelineStage | LoopStage;
+export type Stage =
+  | AgentStage
+  | PgeStage
+  | GeStage
+  | HumanGateStage
+  | AgentGateStage
+  | PipelineHandoffStage
+  | AutoresearchStage
+  | PipelineStage
+  | LoopStage;
 ```
 
 ### StageBase (shared fields)
@@ -488,6 +548,85 @@ export interface HumanGateStage extends StageBase {
 | `artifacts` | `string[]` | No | File paths the reviewer should inspect |
 | `prompt` | `string` | No | Instructions for the reviewer |
 | `on_reject` | `"retry" \| "stop"` | No | Behavior on rejection (default: `"stop"`) |
+
+### AgentGateStage
+
+```typescript
+export interface AgentGateStage extends StageBase {
+  type: "agent_gate";
+  artifacts?: string[];
+  prompt?: string;
+  on_reject?: "retry" | "stop";
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"agent_gate"` | Yes | Stage type discriminator |
+| `artifacts` | `string[]` | No | File paths the deciding Claude Code session should inspect |
+| `prompt` | `string` | No | Decision criteria the session should apply |
+| `on_reject` | `"retry" \| "stop"` | No | Behavior on rejection (default: `"stop"`) |
+
+### PipelineHandoffStage
+
+```typescript
+export interface PipelineHandoffStage extends StageBase {
+  type: "pipeline_handoff";
+  prompt?: string;
+  next: {
+    file: string;
+    project?: string;
+    variables?: Record<string, string>;
+    session_id?: string;
+  };
+  cmux?: {
+    target?: "current" | "split_right" | "split_down" | "new_window" | string;
+    workspace?: string;
+    surface?: string;
+    label?: string;
+  };
+  on_timeout?: "stop" | "skip";
+  timeout_ms?: number;
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"pipeline_handoff"` | Yes | Stage type discriminator |
+| `prompt` | `string` | No | Human-readable description surfaced in the handoff notification |
+| `next.file` | `string` | Yes | Path to the next pipeline YAML |
+| `next.project` | `string` | No | Project for the next run (defaults to current) |
+| `next.variables` | `Record<string, string>` | No | Variables passed to the next pipeline |
+| `next.session_id` | `string` | No | MCP session ID for the next run (defaults to current) |
+| `cmux.target` | `string` | No | Where the orchestrator should place the next pipeline's pane |
+| `cmux.workspace` | `string` | No | Cmux workspace (defaults to current from env) |
+| `cmux.surface` | `string` | No | Cmux surface (defaults to current from env) |
+| `cmux.label` | `string` | No | Pane label |
+| `on_timeout` | `"stop" \| "skip"` | No | What to do if the orchestrator never acks (default: `"stop"`) |
+| `timeout_ms` | `number` | No | How long to wait for orchestrator ack |
+
+### HandoffPayload
+
+Attached to `GateInfo.handoff` while a `pipeline_handoff` gate is pending. The orchestrator updates `launchedRunId` / `targetPane` on ack.
+
+```typescript
+export interface HandoffPayload {
+  next: {
+    file: string;
+    project?: string;
+    variables?: Record<string, string>;
+    sessionId?: string;
+  };
+  cmux: {
+    target: string;
+    workspace?: string;
+    surface?: string;
+    label?: string;
+  };
+  launchedRunId?: string;
+  targetPane?: string;
+}
+```
 
 ### PipelineStage
 
@@ -769,7 +908,12 @@ export interface GateInfo {
   status: "pending" | "approved" | "rejected";
   prompt?: string;
   feedback?: string;
+  feedbackPath?: string;
   respondedAt?: string;
+  /** Who the gate is addressed to. Defaults to "human" when absent. */
+  kind?: "human" | "agent_eval" | "pipeline_handoff";
+  /** Structured routing payload — only set when kind === "pipeline_handoff". */
+  handoff?: HandoffPayload;
 }
 ```
 

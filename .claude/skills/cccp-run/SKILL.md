@@ -94,7 +94,7 @@ Launches a standalone TUI dashboard. Can run in a separate terminal or cmux pane
 npx @alevental/cccp@latest mcp-server
 ```
 
-Exposes tools over stdio: `cccp_session_id`, `cccp_runs`, `cccp_status`, `cccp_gate_respond`, `cccp_gate_review`, `cccp_pause`, `cccp_logs`, `cccp_artifacts`.
+Exposes tools over stdio: `cccp_session_id`, `cccp_runs`, `cccp_status`, `cccp_gate_respond`, `cccp_gate_review`, `cccp_handoff_ack`, `cccp_pause`, `cccp_logs`, `cccp_artifacts`.
 
 Register in `.mcp.json`:
 ```json
@@ -162,6 +162,26 @@ Human gates pause the pipeline until approved or rejected.
 **Via headless mode:** `--headless` auto-approves all gates immediately.
 
 **Checking gate status:** Use `cccp_status` MCP tool with the run ID to see pending gates.
+
+### Agent gates (`agent_gate`)
+
+Delivery-identical to human gates — same `cccp_gate_review` / `cccp_gate_respond` flow — but the channel message is addressed to **you** (the Claude Code session), not the user. The message will tell you explicitly: decide this gate autonomously, do not ask the user. Workflow:
+
+1. Read the pending gate via `cccp_gate_review` (or the payload in the channel notification).
+2. Read the listed `artifacts` and apply the `prompt` criteria yourself.
+3. Respond via `cccp_gate_respond` with `approved: true` (PASS) or `false` (FAIL) and, when rejecting, `feedback` explaining why.
+
+Do not fall through to asking the user for approval — the gate is routed to an agent precisely because the pipeline author wants an automated go/no-go without human involvement.
+
+### Pipeline handoffs (`pipeline_handoff`)
+
+A terminal handoff gate asks you, the orchestrator, to launch the next pipeline. Workflow:
+
+1. A channel notification (or `cccp_gate_review`) surfaces the handoff with `next.file`, `next.project`, `next.variables`, and a `cmux` target (`current | split_right | split_down | new_window | <pane-id>`).
+2. Launch the next pipeline in the indicated cmux target — typically open a new pane in the specified direction and run `cccp run -f <next.file> -p <project> --session-id <id>` there.
+3. Call `cccp_handoff_ack` with `launched_run_id` (the new run id) and optionally `target_pane`. This closes out the source pipeline.
+
+Use `cccp_handoff_ack` (not `cccp_gate_respond`) for handoff gates — the dedicated tool validates the gate kind and records the new run id structurally rather than as free-text feedback.
 
 ## cmux Integration
 

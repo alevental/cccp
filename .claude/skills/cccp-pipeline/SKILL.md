@@ -35,7 +35,7 @@ phase_defaults:                 # Optional. Per-phase model/effort defaults.
     effort: low|medium|high|xhigh|max
 stages:                         # Required. At least one stage.
   - name: string                # Required. Unique stage identifier.
-    type: agent | pge | autoresearch | pipeline | human_gate | loop
+    type: agent | pge | ge | autoresearch | pipeline | human_gate | agent_gate | pipeline_handoff | loop
     # ... stage-specific fields
 ```
 
@@ -252,6 +252,62 @@ Pause pipeline for human approval.
 | `on_reject` | string | No | `"stop"` (default) or `"retry"` |
 
 In `--headless` mode, all gates are auto-approved.
+
+## Stage Type: `agent_gate`
+
+Delivery-identical to `human_gate` (same channels, same state lifecycle, same `cccp_gate_respond` response flow). The only difference: the channel message instructs the receiving Claude Code session to decide the gate autonomously without prompting the user. No evaluator subprocess is dispatched.
+
+```yaml
+- name: review-gate
+  type: agent_gate
+  prompt: "Verify the draft matches the outline and covers all sections."
+  artifacts:                           # Optional. Files for the deciding session to inspect.
+    - "{artifact_dir}/draft.md"
+  on_reject: stop                      # Optional. Default: "stop".
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `prompt` | string | No | Decision criteria the session should apply |
+| `artifacts` | string[] | No | Files the session should inspect |
+| `on_reject` | string | No | `"stop"` (default) or `"retry"` |
+
+In `--headless` mode the gate auto-approves (matching `human_gate`). Cannot appear inside a `parallel` group.
+
+## Stage Type: `pipeline_handoff`
+
+Terminal stage that asks an outer orchestrator (a Claude Code session supervising multiple pipelines across cmux panes) to launch the next pipeline. CCCP does not spawn the next pipeline itself — it publishes a structured routing request through the gate channel and waits for `cccp_handoff_ack`.
+
+```yaml
+- name: handoff-to-next
+  type: pipeline_handoff
+  prompt: "Phase 1 complete — run phase-2.yaml in a split-right pane."
+  next:                                # Required.
+    file: pipelines/phase-2.yaml       # Required.
+    project: phase-2-project           # Optional.
+    variables:                         # Optional. Passed to the next pipeline.
+      source_run_id: "{run.id}"
+  cmux:                                # Optional. Defaults filled from current env.
+    target: split_right                # current | split_right | split_down | new_window | <pane-id>
+    label: phase-2
+  on_timeout: stop                     # Optional. Default: "stop". stop | skip
+  timeout_ms: 600000                   # Optional. How long to wait for ack.
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `prompt` | string | No | Human-readable description surfaced in the handoff notification |
+| `next.file` | string | Yes | Path to the next pipeline YAML |
+| `next.project` | string | No | Project for the next run (defaults to current) |
+| `next.variables` | map | No | Variables passed to the next pipeline |
+| `next.session_id` | string | No | MCP session ID for the next run |
+| `cmux.target` | string | No | Where to place the next pipeline's pane |
+| `cmux.workspace` / `cmux.surface` | string | No | Cmux context (defaults from env) |
+| `cmux.label` | string | No | Pane label |
+| `on_timeout` | string | No | `"stop"` (default) or `"skip"` |
+| `timeout_ms` | number | No | Ack timeout |
+
+**Constraints:** must be the final stage in the pipeline; cannot appear inside a `parallel` group. In `--headless` mode the stage is a no-op.
 
 ## Stage Type: `pipeline`
 

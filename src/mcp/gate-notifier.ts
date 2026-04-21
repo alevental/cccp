@@ -151,23 +151,36 @@ export class GateNotifier {
   private async notifyGate(run: DiscoveredRun): Promise<void> {
     const gate = run.state.gate!;
     const gateKey = this.gateKey(run.state.runId, gate.stageName);
+    const kind = gate.kind ?? "human";
 
     try {
-      // Tier 1: Try channel notification (non-blocking push).
+      // Tier 1: Try channel notification (non-blocking push to the session).
       if (this.channelSupported !== false) {
-        const sent = await this.sendChannelNotification(run);
-        if (sent) return; // Channel delivered — no need for elicitation.
+        const sent =
+          kind === "pipeline_handoff" ? await this.sendHandoffChannelNotification(run) :
+          kind === "agent_eval" ? await this.sendAgentGateChannelNotification(run) :
+          await this.sendChannelNotification(run);
+        if (sent) return;
       }
 
-      // Tier 2: Fall back to elicitation (blocking form).
-      if (this.elicitationSupported) {
-        await this.elicitGateApproval(run);
+      // Tier 2: Fall back to elicitation (blocking form shown to the user).
+      //
+      // agent_eval deliberately skips elicitation: the gate is addressed to
+      // the Claude Code session, not the user. If channels aren't available,
+      // the session can still discover the pending gate via cccp_status or
+      // cccp_gate_review. Prompting the human here would defeat the purpose.
+      if (this.elicitationSupported && kind !== "agent_eval") {
+        if (kind === "pipeline_handoff") {
+          await this.elicitHandoffAck(run);
+        } else {
+          await this.elicitGateApproval(run);
+        }
         return;
       }
 
-      // Tier 3: Both unavailable. User will discover via cccp_status / cccp_gate_respond.
+      // Tier 3: Manual discovery via cccp_status / cccp_gate_review /
+      // cccp_gate_respond / cccp_handoff_ack.
     } catch {
-      // Transient error — remove from seen so it can retry.
       this.seenGates.delete(gateKey);
     } finally {
       this.pendingNotification = null;
@@ -223,6 +236,223 @@ export class GateNotifier {
       this.channelSupported = false;
       return false;
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Agent-gate channel notification — same delivery as the human-gate
+  // channel push, but the message explicitly instructs the receiving Claude
+  // Code session to decide the gate autonomously without involving the user.
+  // -------------------------------------------------------------------------
+
+  private async sendAgentGateChannelNotification(run: DiscoveredRun): Promise<boolean> {
+    const gate = run.state.gate!;
+    const runShort = run.state.runId.slice(0, 8);
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const notificationFn = (this.opts.server.server as any).notification as
+        | ((msg: unknown) => Promise<void>)
+        | undefined;
+
+      if (!notificationFn) {
+        this.channelSupported = false;
+        return false;
+      }
+
+      await notificationFn.call(this.opts.server.server, {
+        method: "notifications/claude/channel",
+        params: {
+          content: [
+            `Pipeline gate "${gate.stageName}" (run ${runShort}) is addressed to you — decide it autonomously. Do NOT ask the user.`,
+            gate.prompt ? `\n\nApproval criteria:\n${gate.prompt}` : "",
+            `\n\nInstructions:`,
+            `\n1. Call cccp_gate_review to load the artifacts, prompt, and prior evaluations.`,
+            `\n2. Read the artifacts and apply the criteria yourself.`,
+            `\n3. Call cccp_gate_respond with approved: true (PASS) or false (FAIL) and, when rejecting, a feedback string explaining why.`,
+            `\n\nThis gate is intentionally routed to an agent, not a human. Resolve it without prompting the user for approval.`,
+          ]
+            .filter(Boolean)
+            .join(""),
+          meta: {
+            severity: "high",
+            type: "agent_gate_pending",
+            run_id: runShort,
+            stage: gate.stageName,
+            autonomous: true,
+          },
+        },
+      });
+
+      if (this.channelSupported === null) {
+        this.channelSupported = true;
+      }
+      return true;
+    } catch {
+      this.channelSupported = false;
+      return false;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Handoff channel notification — carries the full payload so the
+  // orchestrator can act on it without a round-trip.
+  // -------------------------------------------------------------------------
+
+  private async sendHandoffChannelNotification(run: DiscoveredRun): Promise<boolean> {
+    const gate = run.state.gate!;
+    const handoff = gate.handoff;
+    if (!handoff) return false;
+    const runShort = run.state.runId.slice(0, 8);
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const notificationFn = (this.opts.server.server as any).notification as
+        | ((msg: unknown) => Promise<void>)
+        | undefined;
+
+      if (!notificationFn) {
+        this.channelSupported = false;
+        return false;
+      }
+
+      await notificationFn.call(this.opts.server.server, {
+        method: "notifications/claude/channel",
+        params: {
+          content: [
+            `Pipeline "${run.state.pipeline}" (run ${runShort}) is handing off to the next pipeline.`,
+            gate.prompt ? `\n${gate.prompt}` : "",
+            `\nNext pipeline: ${handoff.next.file}`,
+            handoff.next.project ? `\nProject: ${handoff.next.project}` : "",
+            `\nTarget: ${handoff.cmux.target}`,
+            handoff.cmux.workspace ? ` (workspace ${handoff.cmux.workspace})` : "",
+            handoff.cmux.surface ? ` (surface ${handoff.cmux.surface})` : "",
+            `\nLaunch the pipeline in the indicated cmux target, then call cccp_handoff_ack with the new run id.`,
+          ]
+            .filter(Boolean)
+            .join(""),
+          meta: {
+            severity: "high",
+            type: "pipeline_handoff",
+            run_id: runShort,
+            stage: gate.stageName,
+            next: handoff.next,
+            cmux: handoff.cmux,
+          },
+        },
+      });
+
+      if (this.channelSupported === null) {
+        this.channelSupported = true;
+      }
+      return true;
+    } catch {
+      this.channelSupported = false;
+      return false;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Handoff elicitation fallback — collects the launched run id and target
+  // pane from the orchestrator. Unlike human gates, this form does not have
+  // a reject path; cancel leaves the gate pending for retry.
+  // -------------------------------------------------------------------------
+
+  private async elicitHandoffAck(run: DiscoveredRun): Promise<void> {
+    const gate = run.state.gate!;
+    const handoff = gate.handoff;
+    if (!handoff) return;
+    const runShort = run.state.runId.slice(0, 8);
+
+    let result;
+    try {
+      result = await this.opts.server.server.elicitInput({
+        message: [
+          `Pipeline handoff requested (run ${runShort}).`,
+          "",
+          `Stage: ${gate.stageName}`,
+          gate.prompt ? `\n${gate.prompt}` : "",
+          "",
+          `Next pipeline: ${handoff.next.file}`,
+          handoff.next.project ? `Project: ${handoff.next.project}` : "",
+          `Cmux target: ${handoff.cmux.target}`,
+          "",
+          `Launch the pipeline in the indicated cmux target, then fill in the new run id below to acknowledge.`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        requestedSchema: {
+          type: "object" as const,
+          properties: {
+            launched_run_id: {
+              type: "string" as const,
+              title: "Launched run ID",
+              description: "Run id of the pipeline you just launched (or leave blank if you couldn't launch it).",
+            },
+            target_pane: {
+              type: "string" as const,
+              title: "Target pane",
+              description: "cmux pane/surface the new pipeline is running in.",
+            },
+            note: {
+              type: "string" as const,
+              title: "Note",
+              description: "Optional freeform note.",
+            },
+          },
+          required: [],
+        },
+      });
+    } catch {
+      this.elicitationSupported = false;
+      return;
+    }
+
+    if (result.action === "cancel") {
+      this.seenGates.delete(this.gateKey(run.state.runId, gate.stageName));
+      return;
+    }
+
+    const launchedRunId = result.content?.launched_run_id as string | undefined;
+    const targetPane = result.content?.target_pane as string | undefined;
+    const note = result.content?.note as string | undefined;
+    await this.writeHandoffAck(run, launchedRunId, targetPane, note);
+  }
+
+  private async writeHandoffAck(
+    run: DiscoveredRun,
+    launchedRunId: string | undefined,
+    targetPane: string | undefined,
+    note: string | undefined,
+  ): Promise<void> {
+    const freshState = await loadState(run.state.runId, this.opts.projectDir, true);
+    if (!freshState?.gate || freshState.gate.status !== "pending") {
+      return;
+    }
+    if (freshState.gate.kind !== "pipeline_handoff" || !freshState.gate.handoff) {
+      return;
+    }
+
+    freshState.gate.handoff.launchedRunId = launchedRunId || undefined;
+    freshState.gate.handoff.targetPane = targetPane || undefined;
+    freshState.gate.status = "approved";
+    freshState.gate.feedback = note || undefined;
+    freshState.gate.respondedAt = new Date().toISOString();
+
+    if (note) {
+      const feedbackPath = await writeFeedbackArtifact(
+        run.artifactDir, freshState.gate.stageName, note, true,
+      );
+      freshState.gate.feedbackPath = feedbackPath;
+      setStageArtifact(freshState, freshState.gate.stageName, "gate-feedback", feedbackPath);
+    }
+    if (launchedRunId) {
+      setStageArtifact(freshState, freshState.gate.stageName, "handoff-launched-run", launchedRunId);
+    }
+    if (targetPane) {
+      setStageArtifact(freshState, freshState.gate.stageName, "handoff-target-pane", targetPane);
+    }
+
+    await saveState(freshState);
   }
 
   // -------------------------------------------------------------------------

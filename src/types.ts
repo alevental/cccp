@@ -39,7 +39,16 @@ export interface Pipeline {
 }
 
 /** A single stage in a pipeline. Discriminated on `type`. */
-export type Stage = AgentStage | PgeStage | GeStage | HumanGateStage | AutoresearchStage | PipelineStage | LoopStage;
+export type Stage =
+  | AgentStage
+  | PgeStage
+  | GeStage
+  | HumanGateStage
+  | AgentGateStage
+  | PipelineHandoffStage
+  | AutoresearchStage
+  | PipelineStage
+  | LoopStage;
 
 /** Base fields shared by every stage type. */
 export interface StageBase {
@@ -161,6 +170,84 @@ export interface HumanGateStage extends StageBase {
   prompt?: string;
   /** What to do if the gate is rejected. */
   on_reject?: "retry" | "stop";
+}
+
+/**
+ * Agent-decided gate — identical delivery to human_gate (same channels,
+ * same state lifecycle, same response mechanism via `cccp_gate_respond`),
+ * but the notification message instructs the receiving Claude Code session
+ * to autonomously evaluate the artifacts and respond without asking the user.
+ * No evaluator is dispatched by the runner.
+ */
+export interface AgentGateStage extends StageBase {
+  type: "agent_gate";
+  /** Artifact paths the deciding Claude Code session should inspect. */
+  artifacts?: string[];
+  /** What the session is being asked to approve (its decision criteria). */
+  prompt?: string;
+  /** What to do if the gate is rejected. */
+  on_reject?: "retry" | "stop";
+}
+
+/**
+ * Pipeline-handoff stage — terminal checkpoint that signals an outer
+ * orchestrator (Claude Code session) to launch the next pipeline. Uses the
+ * same gate notification channels as human_gate, but carries a structured
+ * payload naming the next pipeline file and cmux target pane/workspace.
+ * Must be the last stage in its pipeline (enforced at validation time).
+ */
+export interface PipelineHandoffStage extends StageBase {
+  type: "pipeline_handoff";
+  /** Description shown in the handoff notification. */
+  prompt?: string;
+  /** Next pipeline to launch. */
+  next: {
+    /** Path to the next pipeline YAML (supports variable interpolation). */
+    file: string;
+    /** Project name for the next run (defaults to current). */
+    project?: string;
+    /** Variables to pass into the next pipeline. */
+    variables?: Record<string, string>;
+    /** MCP session ID for the next run (defaults to current). */
+    session_id?: string;
+  };
+  /** cmux target for the next pipeline invocation. */
+  cmux?: {
+    /** How the orchestrator should place the next pipeline's pane. */
+    target?: "current" | "split_right" | "split_down" | "new_window" | string;
+    /** cmux workspace (defaults to current from env). */
+    workspace?: string;
+    /** cmux surface (defaults to current from env). */
+    surface?: string;
+    /** Pane label. */
+    label?: string;
+  };
+  /** What to do if the orchestrator never acks. */
+  on_timeout?: "stop" | "skip";
+  /** How long to wait for the orchestrator ack (ms). */
+  timeout_ms?: number;
+}
+
+/** Payload attached to `GateInfo.handoff` for pipeline_handoff gates. */
+export interface HandoffPayload {
+  /** Resolved next-pipeline metadata. */
+  next: {
+    file: string;
+    project?: string;
+    variables?: Record<string, string>;
+    sessionId?: string;
+  };
+  /** Resolved cmux target (defaults filled from current env at publish time). */
+  cmux: {
+    target: string;
+    workspace?: string;
+    surface?: string;
+    label?: string;
+  };
+  /** Run ID of the child pipeline the orchestrator launched (set on ack). */
+  launchedRunId?: string;
+  /** cmux surface/pane the orchestrator placed the child run in (set on ack). */
+  targetPane?: string;
 }
 
 /** Autoresearch stage: iterative artifact optimization against ground truth. */
@@ -319,6 +406,18 @@ export interface GateInfo {
   /** Path to structured feedback markdown artifact. */
   feedbackPath?: string;
   respondedAt?: string;
+  /**
+   * Who the gate is addressed to. Defaults to `"human"` when absent so older
+   * serialized state stays valid. `"agent_eval"` tells the notifier to
+   * instruct the receiving Claude Code session to decide the gate
+   * autonomously (reading artifacts, responding via `cccp_gate_respond`
+   * without prompting the user). `"pipeline_handoff"` means the gate is
+   * requesting orchestrator action rather than an approve/reject decision
+   * — the `handoff` payload carries the routing metadata.
+   */
+  kind?: "human" | "agent_eval" | "pipeline_handoff";
+  /** Structured routing payload. Only set when `kind === "pipeline_handoff"`. */
+  handoff?: HandoffPayload;
 }
 
 export interface PipelineState {

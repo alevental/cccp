@@ -413,6 +413,73 @@ export async function startMcpServer(): Promise<void> {
     },
   );
 
+  // --- cccp_handoff_ack ---
+  server.tool(
+    "cccp_handoff_ack",
+    "Acknowledge a pending pipeline_handoff gate after you've launched the next pipeline. Records the new run id and target pane on the handoff payload and transitions the gate to approved. Use cccp_gate_review or cccp_status first to see the handoff target.",
+    {
+      run_id: z
+        .string()
+        .optional()
+        .describe("Run ID prefix (8+ chars) of the pipeline with the pending handoff. Omit if only one run exists."),
+      launched_run_id: z
+        .string()
+        .optional()
+        .describe("Run id of the pipeline you just launched (if known)."),
+      target_pane: z
+        .string()
+        .optional()
+        .describe("cmux pane/surface where the new pipeline is running."),
+      note: z
+        .string()
+        .optional()
+        .describe("Optional note recorded as gate feedback artifact."),
+    },
+    async ({ run_id, launched_run_id, target_pane, note }) => {
+      const result = await resolveRun(run_id);
+      if ("error" in result) return textResult(result.error);
+
+      const { artifactDir, state } = result.run;
+
+      if (!state.gate || state.gate.status !== "pending") {
+        return textResult("No pending gate on this run.");
+      }
+      if (state.gate.kind !== "pipeline_handoff" || !state.gate.handoff) {
+        return textResult(
+          `Gate "${state.gate.stageName}" is not a pipeline_handoff gate. Use cccp_gate_respond instead.`,
+        );
+      }
+
+      state.gate.handoff.launchedRunId = launched_run_id || undefined;
+      state.gate.handoff.targetPane = target_pane || undefined;
+      state.gate.status = "approved";
+      state.gate.feedback = note || undefined;
+      state.gate.respondedAt = new Date().toISOString();
+
+      if (note) {
+        const feedbackPath = await writeFeedbackArtifact(
+          artifactDir, state.gate.stageName, note, true,
+        );
+        state.gate.feedbackPath = feedbackPath;
+        setStageArtifact(state, state.gate.stageName, "gate-feedback", feedbackPath);
+      }
+      if (launched_run_id) {
+        setStageArtifact(state, state.gate.stageName, "handoff-launched-run", launched_run_id);
+      }
+      if (target_pane) {
+        setStageArtifact(state, state.gate.stageName, "handoff-target-pane", target_pane);
+      }
+
+      await saveState(state);
+
+      const lines = [`Handoff "${state.gate.stageName}" acknowledged.`];
+      if (launched_run_id) lines.push(`  launched_run_id: ${launched_run_id}`);
+      if (target_pane) lines.push(`  target_pane: ${target_pane}`);
+      if (state.gate.feedbackPath) lines.push(`  note artifact: ${state.gate.feedbackPath}`);
+      return textResult(lines.join("\n"));
+    },
+  );
+
   // --- cccp_gate_review ---
   server.tool(
     "cccp_gate_review",
@@ -437,14 +504,41 @@ export async function startMcpServer(): Promise<void> {
       const stageName = gate.stageName;
       const stageState = state.stages[stageName];
 
+      const kindLabel =
+        gate.kind === "pipeline_handoff" ? "pipeline_handoff" :
+        gate.kind === "agent_eval" ? "agent_eval (addressed to the Claude Code session — decide autonomously, do not ask the user)" :
+        "human";
+
       const lines: string[] = [
         `# Gate Review: ${stageName}`,
         "",
         `**Run**: ${state.runId.slice(0, 8)} (${state.pipeline})`,
         `**Stage**: ${stageName} (type: ${stageState?.type ?? "unknown"})`,
+        `**Kind**: ${kindLabel}`,
         `**Prompt**: ${gate.prompt ?? "(none)"}`,
         "",
       ];
+
+      // Surface the handoff payload prominently — this is what the
+      // orchestrator needs to act on.
+      if (gate.kind === "pipeline_handoff" && gate.handoff) {
+        const h = gate.handoff;
+        lines.push("## Handoff", "");
+        lines.push(`- **Next file**: ${h.next.file}`);
+        if (h.next.project) lines.push(`- **Project**: ${h.next.project}`);
+        if (h.next.sessionId) lines.push(`- **Session ID**: ${h.next.sessionId}`);
+        if (h.next.variables && Object.keys(h.next.variables).length > 0) {
+          lines.push(`- **Variables**:`);
+          for (const [k, v] of Object.entries(h.next.variables)) {
+            lines.push(`  - ${k}: ${v}`);
+          }
+        }
+        lines.push(`- **cmux target**: ${h.cmux.target}`);
+        if (h.cmux.workspace) lines.push(`- **cmux workspace**: ${h.cmux.workspace}`);
+        if (h.cmux.surface) lines.push(`- **cmux surface**: ${h.cmux.surface}`);
+        if (h.cmux.label) lines.push(`- **cmux label**: ${h.cmux.label}`);
+        lines.push("", "Launch the next pipeline in the indicated target, then call `cccp_handoff_ack` with the new run id.", "");
+      }
 
       // Stage artifacts
       if (stageState?.artifacts && Object.keys(stageState.artifacts).length > 0) {

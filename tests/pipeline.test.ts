@@ -716,4 +716,131 @@ stages:
 
     await expect(loadPipeline(file)).rejects.toThrow("Pipeline validation failed");
   });
+
+  // ---------------------------------------------------------------------
+  // agent_gate
+  // ---------------------------------------------------------------------
+
+  it("loads a valid agent_gate stage", async () => {
+    const file = await writeTmpYaml(`
+name: agent-gate-test
+stages:
+  - name: draft
+    type: agent
+    agent: agents/writer.md
+    output: draft.md
+  - name: review-gate
+    type: agent_gate
+    prompt: "Is the draft fit for publication?"
+    artifacts: [draft.md]
+    on_reject: stop
+`);
+    const pipeline = await loadPipeline(file);
+    expect(pipeline.stages).toHaveLength(2);
+    const gate = pipeline.stages[1];
+    expect(gate.type).toBe("agent_gate");
+    if (gate.type === "agent_gate") {
+      expect(gate.prompt).toBe("Is the draft fit for publication?");
+      expect(gate.artifacts).toEqual(["draft.md"]);
+      expect(gate.on_reject).toBe("stop");
+    }
+  });
+
+  it("rejects agent_gate inside parallel group", async () => {
+    const file = await writeTmpYaml(`
+name: bad-parallel-agent-gate
+stages:
+  - parallel:
+      stages:
+        - name: work
+          type: agent
+          agent: agents/a.md
+        - name: review-gate
+          type: agent_gate
+`);
+    await expect(loadPipeline(file)).rejects.toThrow(/agent_gate.*cannot be inside a parallel group/);
+  });
+
+  // ---------------------------------------------------------------------
+  // pipeline_handoff
+  // ---------------------------------------------------------------------
+
+  it("loads a valid pipeline_handoff stage", async () => {
+    const file = await writeTmpYaml(`
+name: handoff-test
+stages:
+  - name: prep
+    type: agent
+    agent: agents/a.md
+  - name: chain
+    type: pipeline_handoff
+    prompt: "Phase 1 complete — run phase 2 in a split-right pane."
+    next:
+      file: pipelines/phase-2.yaml
+      project: phase-2-project
+      variables:
+        source_run_id: "{run.id}"
+    cmux:
+      target: split_right
+      label: phase-2
+    on_timeout: stop
+    timeout_ms: 600000
+`);
+    const pipeline = await loadPipeline(file);
+    const handoff = pipeline.stages[1];
+    expect(handoff.type).toBe("pipeline_handoff");
+    if (handoff.type === "pipeline_handoff") {
+      expect(handoff.next.file).toBe("pipelines/phase-2.yaml");
+      expect(handoff.next.project).toBe("phase-2-project");
+      expect(handoff.next.variables).toEqual({ source_run_id: "{run.id}" });
+      expect(handoff.cmux?.target).toBe("split_right");
+      expect(handoff.cmux?.label).toBe("phase-2");
+      expect(handoff.on_timeout).toBe("stop");
+      expect(handoff.timeout_ms).toBe(600000);
+    }
+  });
+
+  it("rejects pipeline_handoff missing next.file", async () => {
+    const file = await writeTmpYaml(`
+name: bad-handoff
+stages:
+  - name: chain
+    type: pipeline_handoff
+    next:
+      project: phase-2
+`);
+    await expect(loadPipeline(file)).rejects.toThrow(/Pipeline validation failed/);
+  });
+
+  it("rejects pipeline_handoff anywhere except last stage", async () => {
+    const file = await writeTmpYaml(`
+name: handoff-not-last
+stages:
+  - name: chain
+    type: pipeline_handoff
+    next:
+      file: pipelines/next.yaml
+  - name: trailing
+    type: agent
+    agent: agents/a.md
+`);
+    await expect(loadPipeline(file)).rejects.toThrow(/pipeline_handoff.*must be the final stage/);
+  });
+
+  it("rejects pipeline_handoff inside parallel group", async () => {
+    const file = await writeTmpYaml(`
+name: bad-parallel-handoff
+stages:
+  - parallel:
+      stages:
+        - name: work
+          type: agent
+          agent: agents/a.md
+        - name: chain
+          type: pipeline_handoff
+          next:
+            file: pipelines/next.yaml
+`);
+    await expect(loadPipeline(file)).rejects.toThrow(/pipeline_handoff.*cannot be inside a parallel group/);
+  });
 });

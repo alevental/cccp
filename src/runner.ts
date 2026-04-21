@@ -14,7 +14,7 @@ import { openDatabase, reclaimWasmMemory } from "./db.js";
 import { loadPipeline } from "./pipeline.js";
 import { runPgeCycle, dispatchEvaluatorWithFeedback, type PgeCycleOptions } from "./pge.js";
 import { interpolate, resolveVariables, resolveTaskBody, loadAgentMarkdown, buildTaskContext, writeSystemPromptFile } from "./prompt.js";
-import { updatePipelineStatus, notifyPipelineComplete, notifyPipelinePaused, launchScopedDashboard, isCmuxAvailable } from "./tui/cmux.js";
+import { updatePipelineStatus, notifyPipelineComplete, notifyPipelinePaused, launchScopedDashboard, isCmuxAvailable, getCurrentCmuxContext } from "./tui/cmux.js";
 import { AgentPaneManager } from "./tui/agent-panes.js";
 import {
   createState,
@@ -22,17 +22,21 @@ import {
   loadState,
   saveState,
   saveStateWithEvent,
+  setStageArtifact,
   updateStageStatus,
   finishPipeline,
   findResumePoint,
 } from "./state.js";
 import type {
   AgentStage,
+  AgentGateStage,
   AutoresearchStage,
   GeStage,
+  HandoffPayload,
   HumanGateStage,
   LoopStage,
   PgeStage,
+  PipelineHandoffStage,
   PipelineStage,
   RunContext,
   StageResult,
@@ -1036,6 +1040,235 @@ async function runHumanGateStage(
 }
 
 // ---------------------------------------------------------------------------
+// Stage dispatch — type: agent_gate
+//
+// Delivery is identical to human_gate: publish a pending GateInfo, wait for
+// the configured GateStrategy to resolve. The only difference is
+// `kind: "agent_eval"`, which tells the GateNotifier to send a message
+// instructing the receiving Claude Code session to decide the gate
+// autonomously (read artifacts, respond via cccp_gate_respond without
+// prompting the user). No evaluator agent is dispatched here.
+// ---------------------------------------------------------------------------
+
+async function runAgentGateStage(
+  stage: AgentGateStage,
+  ctx: RunContext,
+  state: PipelineState,
+): Promise<StageResult> {
+  const start = Date.now();
+
+  if (ctx.dryRun) {
+    const logger = getLogger(ctx);
+    logger.log("\n[dry-run] Agent Gate:", stage.name);
+    if (stage.prompt) logger.log("  prompt:    ", stage.prompt);
+    if (stage.artifacts?.length) logger.log("  artifacts: ", stage.artifacts.join(", "));
+    logger.log("  on_reject: ", stage.on_reject ?? "stop");
+    return { stageName: stage.name, status: "passed", durationMs: 0 };
+  }
+
+  if (!ctx.gateStrategy) {
+    getLogger(ctx).log(`  [skip] No gate strategy configured (stage: ${stage.name})`);
+    return { stageName: stage.name, status: "skipped", durationMs: 0 };
+  }
+
+  const vars = resolveVariables({ ...ctx.variables, ...(stage.variables ?? {}) });
+  const prompt = stage.prompt ? interpolate(stage.prompt, vars) : undefined;
+
+  const gateInfo: GateInfo = {
+    stageName: stage.name,
+    status: "pending",
+    prompt,
+    kind: "agent_eval",
+  };
+  state.gate = gateInfo;
+  await saveState(state);
+
+  const response = await ctx.gateStrategy.waitForGate(gateInfo);
+
+  state.gate = undefined;
+  await saveState(state);
+
+  if (response.approved) {
+    return { stageName: stage.name, status: "passed", durationMs: Date.now() - start };
+  }
+
+  const onReject = stage.on_reject ?? "stop";
+  if (onReject === "stop") {
+    return {
+      stageName: stage.name,
+      status: "failed",
+      error: `Agent gate rejected${response.feedback ? `: ${response.feedback}` : ""}`,
+      durationMs: Date.now() - start,
+    };
+  }
+
+  // on_reject: retry — parallels human_gate; treated as stop until a
+  // retry-source is defined.
+  return {
+    stageName: stage.name,
+    status: "failed",
+    error: `Agent gate rejected (retry not yet supported)${response.feedback ? `: ${response.feedback}` : ""}`,
+    durationMs: Date.now() - start,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Stage dispatch — type: pipeline_handoff
+// ---------------------------------------------------------------------------
+
+async function runPipelineHandoffStage(
+  stage: PipelineHandoffStage,
+  ctx: RunContext,
+  state: PipelineState,
+): Promise<StageResult> {
+  const start = Date.now();
+
+  const vars = resolveVariables({ ...ctx.variables, ...(stage.variables ?? {}) });
+  const nextFile = interpolate(stage.next.file, vars);
+  const nextProject = stage.next.project ? interpolate(stage.next.project, vars) : undefined;
+  const nextSessionId = stage.next.session_id ? interpolate(stage.next.session_id, vars) : undefined;
+  const interpolatedVariables = stage.next.variables
+    ? Object.fromEntries(
+        Object.entries(stage.next.variables).map(([k, v]) => [k, interpolate(v, vars)]),
+      )
+    : undefined;
+
+  if (ctx.dryRun) {
+    const logger = getLogger(ctx);
+    logger.log("\n[dry-run] Pipeline Handoff:", stage.name);
+    logger.log("  next file: ", nextFile);
+    if (nextProject) logger.log("  next project:", nextProject);
+    if (stage.cmux?.target) logger.log("  cmux target:", stage.cmux.target);
+    logger.log("  on_timeout:", stage.on_timeout ?? "stop");
+    return { stageName: stage.name, status: "passed", durationMs: 0 };
+  }
+
+  // Headless no-op: no orchestrator is listening in CI. Record a log line so
+  // the audit trail shows why the handoff was skipped, then pass.
+  if (ctx.headless) {
+    getLogger(ctx).log(
+      `  [handoff] headless mode — no orchestrator, skipping handoff to ${nextFile}`,
+    );
+    return { stageName: stage.name, status: "passed", durationMs: Date.now() - start };
+  }
+
+  if (!ctx.gateStrategy) {
+    getLogger(ctx).log(`  [skip] No gate strategy configured (stage: ${stage.name})`);
+    return { stageName: stage.name, status: "skipped", durationMs: 0 };
+  }
+
+  // Fill cmux defaults from the current process env so the orchestrator knows
+  // where we're running without the pipeline author having to hard-code it.
+  const cmuxCtx = getCurrentCmuxContext();
+  const handoff: HandoffPayload = {
+    next: {
+      file: nextFile,
+      project: nextProject ?? ctx.project,
+      variables: interpolatedVariables,
+      sessionId: nextSessionId ?? ctx.sessionId,
+    },
+    cmux: {
+      target: stage.cmux?.target ?? "current",
+      workspace: stage.cmux?.workspace
+        ? interpolate(stage.cmux.workspace, vars)
+        : cmuxCtx.workspace,
+      surface: stage.cmux?.surface
+        ? interpolate(stage.cmux.surface, vars)
+        : cmuxCtx.surface,
+      label: stage.cmux?.label ? interpolate(stage.cmux.label, vars) : undefined,
+    },
+  };
+
+  const promptText = stage.prompt
+    ? interpolate(stage.prompt, vars)
+    : `Pipeline "${ctx.pipeline.name}" is complete. Launch the next pipeline: ${nextFile} (target: ${handoff.cmux.target}).`;
+
+  const gateInfo: GateInfo = {
+    stageName: stage.name,
+    status: "pending",
+    prompt: promptText,
+    kind: "pipeline_handoff",
+    handoff,
+  };
+  state.gate = gateInfo;
+  await saveState(state);
+
+  // Apply the optional timeout by racing waitForGate against a timer. On
+  // timeout we reload state to check if the gate resolved at the last moment;
+  // otherwise we fall back to the configured on_timeout behavior.
+  const gatePromise = ctx.gateStrategy.waitForGate(gateInfo);
+  let timedOut = false;
+  let response: Awaited<typeof gatePromise> | null = null;
+
+  if (stage.timeout_ms && stage.timeout_ms > 0) {
+    const raced = await Promise.race([
+      gatePromise.then((r) => ({ kind: "gate" as const, r })),
+      new Promise<{ kind: "timeout" }>((res) =>
+        setTimeout(() => res({ kind: "timeout" }), stage.timeout_ms),
+      ),
+    ]);
+    if (raced.kind === "timeout") {
+      timedOut = true;
+      // Last-chance reload — in case the ack landed between our last poll
+      // and the timeout firing.
+      const fresh = await loadState(state.runId, ctx.projectDir, true);
+      if (fresh?.gate?.status && fresh.gate.status !== "pending") {
+        response = {
+          approved: fresh.gate.status === "approved",
+          feedback: fresh.gate.feedback,
+          feedbackPath: fresh.gate.feedbackPath,
+        };
+        timedOut = false;
+      }
+    } else {
+      response = raced.r;
+    }
+  } else {
+    response = await gatePromise;
+  }
+
+  // Persist the resolved handoff payload (including launchedRunId/targetPane
+  // if the orchestrator set them) before clearing. Reload once more to pick
+  // up the orchestrator's writes.
+  const freshFinal = await loadState(state.runId, ctx.projectDir, true);
+  const resolvedHandoff = freshFinal?.gate?.handoff ?? handoff;
+  if (resolvedHandoff.launchedRunId) {
+    setStageArtifact(state, stage.name, "handoff-launched-run", resolvedHandoff.launchedRunId);
+  }
+  if (resolvedHandoff.targetPane) {
+    setStageArtifact(state, stage.name, "handoff-target-pane", resolvedHandoff.targetPane);
+  }
+
+  state.gate = undefined;
+  await saveState(state);
+
+  if (timedOut) {
+    const onTimeout = stage.on_timeout ?? "stop";
+    if (onTimeout === "skip") {
+      getLogger(ctx).log(`    handoff timed out — skipping per on_timeout: skip`);
+      return { stageName: stage.name, status: "skipped", durationMs: Date.now() - start };
+    }
+    return {
+      stageName: stage.name,
+      status: "failed",
+      error: `Handoff timed out after ${stage.timeout_ms}ms waiting for orchestrator ack`,
+      durationMs: Date.now() - start,
+    };
+  }
+
+  if (response?.approved) {
+    return { stageName: stage.name, status: "passed", durationMs: Date.now() - start };
+  }
+
+  return {
+    stageName: stage.name,
+    status: "failed",
+    error: `Handoff rejected${response?.feedback ? `: ${response.feedback}` : ""}`,
+    durationMs: Date.now() - start,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Stage dispatch — type: pipeline (sub-pipeline)
 // ---------------------------------------------------------------------------
 
@@ -1233,6 +1466,12 @@ async function runStage(
 
     case "human_gate":
       return runHumanGateStage(stage, ctx, state);
+
+    case "agent_gate":
+      return runAgentGateStage(stage, ctx, state);
+
+    case "pipeline_handoff":
+      return runPipelineHandoffStage(stage, ctx, state);
 
     case "autoresearch":
       return runAutoresearchStage(stage, ctx, state);

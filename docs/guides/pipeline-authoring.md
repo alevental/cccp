@@ -61,7 +61,7 @@ All stages share these base fields:
 | `name` | `string` | Yes | Unique stage identifier |
 | `task` | `string` | No | Task instruction for the agent (supports `{variable}` interpolation) |
 | `task_file` | `string` | No | Path to file containing task (mutually exclusive with `task`) |
-| `type` | `"agent" \| "pge" \| "ge" \| "autoresearch" \| "pipeline" \| "human_gate"` | Yes | Stage discriminator |
+| `type` | `"agent" \| "pge" \| "ge" \| "autoresearch" \| "pipeline" \| "human_gate" \| "agent_gate" \| "pipeline_handoff" \| "loop"` | Yes | Stage discriminator |
 | `mcp_profile` | `string` | No | Named MCP profile from `cccp.yaml` |
 | `variables` | `Record<string, string>` | No | Stage-level variable overrides |
 | `outputs` | `Record<string, string>` | No | Structured outputs the agent should produce (key → description) |
@@ -280,6 +280,69 @@ Blocks the pipeline until a human approves or rejects.
 | `on_reject` | `"stop" \| "retry"` | No | Behavior on rejection (default: `stop`) |
 
 Gate responses come through the MCP server (`cccp_gate_respond` tool) or direct database update. See [Gate System](../architecture/gate-system.md).
+
+---
+
+### `agent_gate` -- Autonomous-Agent Approval Gate
+
+Delivery-identical to `human_gate` (same channels, same TUI display, same `cccp_gate_respond` response flow) — but the MCP channel message tells the receiving Claude Code session to decide the gate autonomously, without prompting the user. The session reads the `artifacts`, applies the `prompt` criteria, and responds via `cccp_gate_respond`. No evaluator subprocess is dispatched by the runner.
+
+```yaml
+- name: review-gate
+  type: agent_gate
+  prompt: "Verify the draft matches the outline and covers all sections."
+  artifacts:
+    - "{artifact_dir}/draft.md"
+    - "{artifact_dir}/outline.md"
+  on_reject: stop                  # Optional: stop | retry
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `prompt` | `string` | No | Decision criteria for the deciding session |
+| `artifacts` | `string[]` | No | Files the session should inspect |
+| `on_reject` | `"stop" \| "retry"` | No | Behavior on rejection (default: `stop`) |
+
+Use this when you want an automated go/no-go between stages without blocking on a human — e.g., "did the previous stage produce a deliverable that meets its stated criteria?". In `--headless` mode the gate auto-approves, matching `human_gate` semantics.
+
+---
+
+### `pipeline_handoff` -- Chain to the Next Pipeline
+
+A terminal stage that signals an outer orchestrator (a Claude Code session supervising multiple pipelines across cmux panes) to launch the next pipeline. CCCP itself does not spawn the next pipeline — it publishes a structured routing request through the same gate-notification channels and waits for the orchestrator to acknowledge via `cccp_handoff_ack`.
+
+```yaml
+- name: handoff-to-next
+  type: pipeline_handoff
+  prompt: "Phase 1 complete — run phase-2.yaml in a split-right pane."
+  next:
+    file: pipelines/phase-2.yaml
+    project: phase-2-project
+    variables:
+      source_run_id: "{run.id}"
+  cmux:
+    target: split_right             # current | split_right | split_down | new_window | <pane-id>
+    label: phase-2
+  on_timeout: stop                  # Optional: stop | skip
+  timeout_ms: 600000                # Optional: ms to wait for ack
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `prompt` | `string` | No | Human-readable description surfaced in the handoff notification |
+| `next.file` | `string` | Yes | Path to the next pipeline YAML |
+| `next.project` | `string` | No | Project for the next run (defaults to current) |
+| `next.variables` | `Record<string, string>` | No | Variables passed to the next pipeline |
+| `next.session_id` | `string` | No | MCP session ID for the next run (defaults to current) |
+| `cmux.target` | `string` | No | Where the orchestrator should place the next pipeline's pane |
+| `cmux.workspace` / `cmux.surface` | `string` | No | Cmux context (defaults to current env) |
+| `cmux.label` | `string` | No | Pane label |
+| `on_timeout` | `"stop" \| "skip"` | No | Behavior if orchestrator never acks (default: `stop`) |
+| `timeout_ms` | `number` | No | How long to wait for orchestrator ack |
+
+**Constraints:** `pipeline_handoff` must be the final stage in its pipeline (enforced at validation time) and cannot appear inside a `parallel` group. In `--headless` mode the stage is a no-op (no orchestrator is listening in CI).
+
+See [Gate System — Pipeline Handoff](../architecture/gate-system.md#pipeline-handoff-type-pipeline_handoff) and [MCP Tools — `cccp_handoff_ack`](../api/mcp-tools.md#cccp_handoff_ack) for the full orchestrator-side workflow.
 
 ---
 

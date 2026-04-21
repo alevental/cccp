@@ -227,6 +227,43 @@ No pending gate on this run.
 
 ---
 
+## `cccp_handoff_ack`
+
+Acknowledge a pending `pipeline_handoff` gate after launching the next pipeline. Use this instead of `cccp_gate_respond` for handoff gates — it validates the gate kind and records the new run id / target pane structurally on the handoff payload (rather than as free-text feedback).
+
+### Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `run_id` | `string` | No | Run ID prefix (8+ chars) of the pipeline with the pending handoff. Omit if only one run exists. |
+| `launched_run_id` | `string` | No | Run id of the pipeline you just launched (if known). |
+| `target_pane` | `string` | No | cmux pane/surface where the new pipeline is running. |
+| `note` | `string` | No | Optional note — recorded as a gate feedback artifact. |
+
+### Behavior
+
+1. Resolves the run and validates that `state.gate` exists with `status === "pending"`
+2. Validates that `state.gate.kind === "pipeline_handoff"` — returns an error otherwise pointing callers to `cccp_gate_respond`
+3. Writes `launched_run_id` and `target_pane` onto `state.gate.handoff`, transitions the gate to `"approved"`, and sets `respondedAt`
+4. Records `handoff-launched-run` and `handoff-target-pane` as stage artifacts
+5. If `note` was provided, writes it as a numbered feedback artifact
+
+### Typical workflow
+
+1. Discover the handoff via a channel notification (or `cccp_gate_review`)
+2. Launch the next pipeline in the indicated cmux target (e.g., `cccp run -f <next.file> -p <project>` in the target pane/workspace)
+3. Call `cccp_handoff_ack` with the new run id
+
+### Response
+
+```
+Handoff "handoff-to-next" acknowledged.
+  launched_run_id: 7c9f1b2a
+  target_pane: surface:42
+```
+
+---
+
 ## `cccp_pause`
 
 Request a running pipeline to pause at the next clean breakpoint (between stages). The pipeline finishes its current stage and stops with `status: "paused"`. Resume later with `cccp resume`.
