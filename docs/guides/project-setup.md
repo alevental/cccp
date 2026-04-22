@@ -126,6 +126,8 @@ stages:
     mcp_profile: design        # Gets QMD + Figma access
 ```
 
+> **Isolation:** pipeline agents do **not** inherit MCP servers from the project's `.mcp.json` (including the `cccp` server you register in Step 4 below). Each agent sees only the servers defined in its resolved `mcp_profile`. If an agent needs a server, add it to a profile. To opt a specific agent out of `default_mcp_profile`, reference an empty profile (`mcp_profile: none` where `none: { servers: {} }`).
+
 ## Step 4: Register the MCP Server (Optional)
 
 To interact with running pipelines from Claude Code (approve gates, check status), register the CCCP MCP server in your project's `.mcp.json`:

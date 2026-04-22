@@ -226,6 +226,8 @@ Iterative artifact optimization. Adjust-Execute-Evaluate loop.
 | `max_iterations` | integer | No | 1+ or omit | Omit for unlimited iterations |
 | `on_fail` | string | No | stop/human_gate/skip | Behavior on max iterations reached |
 
+Each of `adjuster`, `executor`, and `evaluator` is a `PgeAgentConfig` and accepts the same per-agent overrides as a PGE stage: `agent`, `operation`, `mcp_profile`, `allowed_tools`, `inputs`, `model`, `effort`.
+
 ### Autoresearch Execution Flow
 
 1. **Iteration 1**: Skip adjuster. Executor runs task using initial artifact. Evaluator compares.
@@ -642,7 +644,7 @@ mcp_profiles:
 
 ### MCP Configuration
 
-MCP profiles control which MCP servers an agent can access. Agents are **fully isolated** — they only see servers from their assigned profile. They never inherit MCP servers from the project's `.mcp.json`.
+MCP profiles control which MCP servers an agent can access. Agents are **fully isolated** — they only see servers from their assigned profile. They never inherit MCP servers from the project's `.mcp.json` (including the `cccp` server registered there for gate interaction). If a pipeline agent needs a server, it must be added to a profile.
 
 #### Server definition
 
@@ -679,6 +681,28 @@ mcp_profiles:
 2. **Stage-level** `mcp_profile`
 3. **`default_mcp_profile`** from `cccp.yaml`
 4. No MCP servers (no `--mcp-config` passed)
+
+#### Opting out of the default
+
+There is no `mcp_profile: none` keyword. If `default_mcp_profile` is set and you want a specific stage or agent to run with zero MCP servers, define an empty profile and reference it:
+
+```yaml
+mcp_profiles:
+  none:
+    servers: {}          # resolves to zero servers → no --mcp-config passed
+  base:
+    servers:
+      qmd: { command: qmd, args: [serve, --stdio] }
+
+default_mcp_profile: base
+```
+
+```yaml
+- name: sandboxed-step
+  type: agent
+  agent: researcher
+  mcp_profile: none      # overrides the default, runs with no MCP servers
+```
 
 #### `allowed_tools` vs `mcp_profile`
 

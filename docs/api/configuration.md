@@ -81,6 +81,8 @@ const McpProfileSchema = z.object({
 
 When a stage specifies `mcp_profile: design`, the resolved profile's servers are written to a temporary JSON file and passed to Claude via `--mcp-config <path> --strict-mcp-config`. The `--strict-mcp-config` flag ensures the agent only has access to the servers in its profile.
 
+**Agents are fully isolated from the project's `.mcp.json`.** MCP servers registered in `.mcp.json` (for example, the `cccp` server you register so Claude Code can approve gates) are **not** inherited by pipeline agents. Pipeline agents see only the servers defined in their resolved `mcp_profile` — nothing else. If an agent needs a server, add it to a profile.
+
 ### `artifact_dir`
 
 **Type:** `string` (optional)
@@ -96,6 +98,26 @@ This is overridden by the `--artifact-dir` CLI flag.
 **Type:** `string` (optional)
 
 Default MCP profile name applied when a stage does not specify its own `mcp_profile`. If a stage has no `mcp_profile` and no default is set, agents run without any MCP servers.
+
+**Opting a single agent out of the default:** there is no `mcp_profile: none` keyword. If you set `default_mcp_profile` but want one stage or agent to run with zero MCP servers, define an empty profile and reference it:
+
+```yaml
+mcp_profiles:
+  none:
+    servers: {}          # resolves to zero servers → no --mcp-config passed
+  base:
+    servers:
+      qmd: { command: qmd, args: [serve, --stdio] }
+
+default_mcp_profile: base
+```
+
+```yaml
+- name: sandboxed-step
+  type: agent
+  agent: researcher
+  mcp_profile: none       # overrides the default, runs with no MCP servers
+```
 
 ### `claude_config_dir`
 
@@ -240,10 +262,11 @@ stages:
       max_iterations: 3
 ```
 
-Resolution order for PGE stages:
+Resolution order for PGE stages (highest priority wins):
 1. Planner/generator/evaluator-specific `mcp_profile`
 2. Stage-level `mcp_profile`
 3. `default_mcp_profile` from `cccp.yaml`
+4. None — no `--mcp-config` flag is passed and the agent has access to no MCP servers
 
 ## Related Documentation
 
