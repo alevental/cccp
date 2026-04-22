@@ -1,6 +1,8 @@
-import React from "react";
+import React, { useRef } from "react";
 import { Box, Text, useStdout } from "ink";
 import { getHeapSpaceStatistics } from "node:v8";
+import { snapshotRegistry, type RegistrySnapshot } from "../diagnostics/runtime-registry.js";
+import { getDbDiagnostics } from "../db.js";
 
 // ---------------------------------------------------------------------------
 // Sample types + bounded ring buffer
@@ -308,6 +310,68 @@ export function MemoryView({ samples, events, activities, dispatches, chromeHeig
         <Text>{dispatches}</Text>
         <Text dimColor>   samples {all.length}/{samples.capacity()}</Text>
       </Box>
+
+      <LeakSuspectsPanel />
     </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tracked leak suspects — live counters from the diagnostics registry +
+// sql.js singleton cache. Captures a baseline on first render and renders
+// deltas in red when a counter grew > 2x or > 500 absolute.
+// ---------------------------------------------------------------------------
+
+function LeakSuspectsPanel() {
+  const baselineRef = useRef<{
+    reg: RegistrySnapshot;
+    sqlJs: { instances: number; initialized: boolean };
+  } | null>(null);
+
+  const reg = snapshotRegistry();
+  const sqlJs = getDbDiagnostics();
+
+  if (!baselineRef.current) {
+    baselineRef.current = { reg, sqlJs };
+  }
+  const base = baselineRef.current;
+
+  type Row = { label: string; curr: number; base: number };
+  const rows: Row[] = [
+    { label: "activityMap", curr: reg.activityMapSize, base: base.reg.activityMapSize },
+    { label: "dispatchMap", curr: reg.dispatchMapSize, base: base.reg.dispatchMapSize },
+    { label: "busListeners", curr: reg.activityBusListeners, base: base.reg.activityBusListeners },
+    { label: "streamTailers", curr: reg.streamTailerCount, base: base.reg.streamTailerCount },
+    { label: "sqlJsInstances", curr: sqlJs.instances, base: base.sqlJs.instances },
+  ];
+  const accumTotal = Object.values(reg.accumulatorEntryCounts).reduce((a, b) => a + b, 0);
+  const accumBase = Object.values(base.reg.accumulatorEntryCounts).reduce((a, b) => a + b, 0);
+  rows.push({ label: "accumulatorEntries", curr: accumTotal, base: accumBase });
+
+  function color(r: Row): "red" | "yellow" | undefined {
+    const delta = r.curr - r.base;
+    if (delta > 500 || (r.base > 0 && r.curr / r.base > 2)) return "red";
+    if (delta > 50 || (r.base > 0 && r.curr / r.base > 1.5)) return "yellow";
+    return undefined;
+  }
+
+  return (
+    <>
+      <Box marginTop={1}>
+        <Text bold>Tracked leak suspects</Text>
+        <Text dimColor>  (baseline \u2192 current; red = grew &gt;2x or &gt;500)</Text>
+      </Box>
+      {rows.map((r) => {
+        const delta = r.curr - r.base;
+        const sign = delta >= 0 ? "+" : "";
+        return (
+          <Box key={r.label}>
+            <Text dimColor>  {r.label.padEnd(20)}</Text>
+            <Text color={color(r)}>{r.curr}</Text>
+            <Text dimColor>{"  ("}{sign}{delta}{" from "}{r.base}{")"}</Text>
+          </Box>
+        );
+      })}
+    </>
   );
 }

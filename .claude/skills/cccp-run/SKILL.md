@@ -134,6 +134,24 @@ Updates `/cccp-run` and `/cccp-pipeline` skills to the version shipped with the 
 npx @alevental/cccp@latest examples [-d <dir>] [--agents-only] [--pipelines-only]
 ```
 
+### `diag memory` — Post-mortem analyze a memory log
+
+```bash
+npx @alevental/cccp@latest diag memory [-f <path>] [-r <run-prefix>] [--since 30m] [--field rss] [--top 10]
+```
+
+Reads `{artifactDir}/.cccp/memory.jsonl` (written automatically by every run) and prints an ASCII sparkline plus a top-N table of counters ranked by growth — activity map size, dispatch map size, `activityBus` listeners, sql.js instances, stream tailers, state.json bytes, event count, RSS/heap/arrayBuffers. Run this after an OOM to see *which* counter grew monotonically and therefore which code path leaked.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-f, --file <path>` | `./.cccp/memory.jsonl` | Override the JSONL path |
+| `-p, --project <name>` + `--pipeline <name>` | — | Alternative to `-f`: resolve the path from project + pipeline names |
+| `-r, --run <id-prefix>` | — | Filter to one run (prefix match) |
+| `--since <dur>` | all | `10m`, `2h`, `1d` — only samples within the window ending at the latest sample |
+| `--field <name>` | `rss` | Sparkline field: `rss | heapUsed | arrayBuffers | external` |
+| `--top <n>` | `10` | Top-N counters by delta |
+| `--width <cols>` | `60` | Sparkline width |
+
 ## Pausing a Pipeline
 
 To pause a running pipeline at the next clean breakpoint:
@@ -205,3 +223,51 @@ cmux set-progress 0.6
 ```
 
 All cmux commands are no-ops when not in a cmux workspace.
+
+## Debugging memory / investigating OOM crashes
+
+Long runs can OOM. Three layered tools, each with zero cost when disabled.
+
+### 1. Memory JSONL (always on)
+
+Every run writes `{artifactDir}/.cccp/memory.jsonl` — one sample per poll tick (500ms in TUI, 5s headless) with memory, V8 heap spaces, growth rates, and runtime counters (activity map, dispatch map, activityBus listeners, sql.js instances, stream tailers, `state.json` size, event count, accumulator entries). Uses `appendFileSync` so samples land on disk even if the process OOM-crashes.
+
+After a crash, analyse with `cccp diag memory` (see CLI section). Whichever counter grew monotonically identifies the leaking code path.
+
+Disable with `CCCP_MEM_LOG=0`. Sample frequency for headless runs: `CCCP_MEM_SAMPLE_MS=5000`.
+
+### 2. Heap snapshots (opt-in)
+
+All triggers default OFF — set any env var to enable:
+
+| Env var | Effect |
+|---------|--------|
+| `CCCP_HEAP_SNAPSHOT_ON_RSS_MB=1800` | Auto-snapshot when RSS crosses 1.8GB (5-min rate limit) |
+| `CCCP_HEAP_SNAPSHOT_ON_HEAP_MB=1200` | Same, for `heapUsed` |
+| `CCCP_HEAP_SNAPSHOT_EVERY_MIN=60` | Periodic baseline for diff comparison |
+| `CCCP_HEAP_SNAPSHOT_ON_CRASH=1` | Snapshot on `uncaughtException` / `unhandledRejection` |
+
+When any of the above are set, `kill -USR2 <pid>` also writes an on-demand snapshot. Output: `.cccp/heap-<runId>-<timestamp>-<reason>.heapsnapshot`. Load in Chrome DevTools → Memory panel. Use "Comparison" between two snapshots (early + pre-crash) to find retainers.
+
+### 3. Tag-gated debug logger (opt-in)
+
+`CCCP_DEBUG=wasm,leak,stream` enables structured debug lines to `.cccp/debug.log` (10 MB rotation; `*` = all tags). Zero overhead when unset (single `Set.has()` check). Existing tags:
+
+| Tag | Logs |
+|-----|------|
+| `wasm` | sql.js reclaim cycles — RSS and arrayBuffers before/after |
+| `leak` | Dashboard activity-map / dispatch-map cleanup — lists orphaned keys when prefix-match fails |
+| `stream` | StreamTailer open/close |
+
+Override rotation size with `CCCP_DEBUG_MAX_MB=10`.
+
+### TUI memory view
+
+Press `m` in a running dashboard for the live memory view: current + delta memory, heap-space breakdown, sparklines, and a **Tracked leak suspects** panel (activity map / dispatch map / busListeners / streamTailers / sqlJsInstances / accumulatorEntries) with red highlights when a counter grew >2× or >500 since baseline.
+
+### Leak hunt workflow
+
+1. Let the pipeline run until it OOMs (or hit a threshold with `CCCP_HEAP_SNAPSHOT_ON_RSS_MB`).
+2. `cccp diag memory --since 30m` → see which counter grew. That's the leaking code path.
+3. If needed, open the `.heapsnapshot` in Chrome DevTools and compare two snapshots to find retainers.
+4. For live tracing of the same run or the next one: `CCCP_DEBUG=leak,wasm npx @alevental/cccp@latest run ...` → watch `.cccp/debug.log`.

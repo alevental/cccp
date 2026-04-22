@@ -12,6 +12,21 @@ import { getGitInfo, type GitInfo } from "../git.js";
 import { Header, StageList, AgentActivityPanel, isAgentActive } from "./components.js";
 import { DetailLog } from "./detail-log.js";
 import { MemoryView, MemorySampleRing } from "./memory-view.js";
+import {
+  MemoryLogger,
+  isMemoryLogEnabled,
+  memoryLogPath,
+  stateJsonPath as stateJsonPathFor,
+} from "../diagnostics/memory-log.js";
+import {
+  installHeapSnapshotHandlers,
+  ThresholdSnapshotter,
+} from "../diagnostics/heap-snapshot.js";
+import {
+  registerActivityMap,
+  registerDispatchMap,
+} from "../diagnostics/runtime-registry.js";
+import { debug as logDebug } from "../logger.js";
 
 // ---------------------------------------------------------------------------
 // Dashboard app component
@@ -32,9 +47,13 @@ interface DashboardProps {
   dbService?: DbService;
   /** Shared memory sample ring — lives outside the Ink tree so history survives the 15-min remount. */
   memSamples?: MemorySampleRing;
+  /** Persistent memory JSONL logger — shared across remount cycles. */
+  memLogger?: MemoryLogger;
+  /** Auto-snapshot on RSS/heap threshold crossings. */
+  snapshotter?: ThresholdSnapshotter;
 }
 
-function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, onComplete, startTime: startTimeProp, scopeStage, dbService, memSamples }: DashboardProps) {
+function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, onComplete, startTime: startTimeProp, scopeStage, dbService, memSamples, memLogger, snapshotter }: DashboardProps) {
   const { stdout } = useStdout();
   const [state, setState] = useState<PipelineState>(initialState);
   const [activities, setActivities] = useState<Map<string, AgentActivity>>(new Map());
@@ -49,6 +68,22 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
   const [gitInfo, setGitInfo] = useState<GitInfo | null | undefined>(null);
   useEffect(() => {
     getGitInfo(projectDir).then((info) => setGitInfo(info ?? undefined));
+  }, []);
+
+  // Expose current Map sizes to the diagnostics registry so memory.jsonl
+  // samples can detect unbounded growth. These are refs so the registry
+  // reads the latest sizes without triggering re-renders.
+  const activitiesRef = useRef<Map<string, AgentActivity>>(new Map());
+  activitiesRef.current = activities;
+  const dispatchRef = useRef<Map<string, number>>(new Map());
+  dispatchRef.current = dispatchStartTimes;
+  useEffect(() => {
+    const releaseA = registerActivityMap(() => activitiesRef.current.size);
+    const releaseD = registerDispatchMap(() => dispatchRef.current.size);
+    return () => {
+      releaseA();
+      releaseD();
+    };
   }, []);
   const lastEventId = useRef(0);
   // Track last-seen state for change detection without stale closure issues.
@@ -155,6 +190,21 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
       setMemUsage(process.memoryUsage());
       memSamples?.record();
 
+      // Check heap/RSS thresholds before the logger sees the sample — that
+      // way the auto-snapshot call site matches the value we persist.
+      const muNow = process.memoryUsage();
+      snapshotter?.maybeSnapshot(muNow.rss, muNow.heapUsed);
+
+      // Persist a memory sample to JSONL. eventCountTotal is filled in from
+      // the DB below; use the best-available value from the previous tick.
+      // A miss of a few seconds on the first sample is fine.
+      try {
+        const db = await openDatabase(projectDir);
+        memLogger?.record(db.countEvents(runId));
+      } catch {
+        memLogger?.record(0);
+      }
+
       try {
         // When a DbService is available, use it to reload (it owns WASM reclaim).
         // Otherwise fall back to loadState's built-in reload for standalone mode.
@@ -181,23 +231,33 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
               // Clean up activities and dispatch times for agents whose stage is no longer in_progress.
               setActivities((prev) => {
                 const next = new Map(prev);
+                const before = next.size;
                 let changed = false;
+                const orphans: string[] = [];
                 for (const [agentKey] of next) {
                   if (!isAgentActive(agentKey, displayState.stages)) {
                     next.delete(agentKey);
+                    orphans.push(agentKey);
                     changed = true;
                   }
+                }
+                if (changed) {
+                  logDebug("leak", "activities-cleanup", { before, after: next.size, orphans });
                 }
                 return changed ? next : prev;
               });
               setDispatchStartTimes((prev) => {
                 const next = new Map(prev);
+                const before = next.size;
                 let changed = false;
                 for (const key of next.keys()) {
                   if (!isAgentActive(key, displayState.stages)) {
                     next.delete(key);
                     changed = true;
                   }
+                }
+                if (changed) {
+                  logDebug("leak", "dispatch-cleanup", { before, after: next.size });
                 }
                 return changed ? next : prev;
               });
@@ -252,7 +312,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [runId, projectDir, startTime, onComplete, useEventBus, scopeStage, dbService, memSamples]);
+  }, [runId, projectDir, startTime, onComplete, useEventBus, scopeStage, dbService, memSamples, memLogger, snapshotter]);
 
   const isComplete =
     state.status === "passed" ||
@@ -347,6 +407,19 @@ export async function launchDashboard(
   const svc = new DbService({ projectDir, mode: "reader" });
   svc.start();
   const memSamples = new MemorySampleRing();
+  const memLogger = isMemoryLogEnabled()
+    ? new MemoryLogger(
+        memoryLogPath(initialState.artifactDir),
+        runId,
+        stateJsonPathFor(initialState.artifactDir),
+        true,
+      )
+    : undefined;
+  const snapshotter = new ThresholdSnapshotter(initialState.artifactDir, runId);
+  const uninstallHeap = installHeapSnapshotHandlers({
+    artifactDir: initialState.artifactDir,
+    runId,
+  });
 
   return new Promise<void>((resolve) => {
     const { unmount, waitUntilExit } = render(
@@ -358,8 +431,12 @@ export async function launchDashboard(
         scopeStage={scopeStage}
         dbService={svc}
         memSamples={memSamples}
+        memLogger={memLogger}
+        snapshotter={snapshotter}
         onComplete={() => {
           svc.stop();
+          memLogger?.close();
+          uninstallHeap();
           unmount();
           resolve();
         }}
@@ -369,6 +446,8 @@ export async function launchDashboard(
 
     waitUntilExit().then(() => {
       svc.stop();
+      memLogger?.close();
+      uninstallHeap();
       resolve();
     });
   });
@@ -396,6 +475,18 @@ export function startDashboard(
 ): InlineDashboardHandle {
   const dashboardStartTime = Date.now();
   const memSamples = new MemorySampleRing();
+  const memLogger = isMemoryLogEnabled()
+    ? new MemoryLogger(
+        memoryLogPath(initialState.artifactDir),
+        runId,
+        stateJsonPathFor(initialState.artifactDir),
+        true,
+      )
+    : undefined;
+  // Threshold snapshotter is owned by the dashboard's poll loop (inline TUI).
+  // SIGUSR2 / crash / periodic handlers are installed by runPipeline in the
+  // same process — don't install them twice here.
+  const snapshotter = new ThresholdSnapshotter(initialState.artifactDir, runId);
   let shuttingDown = false;
 
   function mount() {
@@ -408,6 +499,8 @@ export function startDashboard(
         useEventBus={true}
         startTime={dashboardStartTime}
         memSamples={memSamples}
+        memLogger={memLogger}
+        snapshotter={snapshotter}
       />,
       { maxFps: 10 },
     );
@@ -426,6 +519,7 @@ export function startDashboard(
       shuttingDown = true;
       clearInterval(recycleTimer);
       instance.unmount();
+      memLogger?.close();
     },
   };
 }

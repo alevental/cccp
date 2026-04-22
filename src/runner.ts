@@ -5,12 +5,27 @@ import { resolveAgent } from "./agent-resolver.js";
 import { DefaultAgentDispatcher, PaneAwareDispatcher, type AgentDispatcher } from "./dispatcher.js";
 import { AgentCrashError, MissingOutputError } from "./errors.js";
 import { FilesystemGateStrategy } from "./gate/gate-watcher.js";
-import { ConsoleLogger, type Logger } from "./logger.js";
+import {
+  ConsoleLogger,
+  closeDebugSink,
+  setDebugLogPath,
+  type Logger,
+} from "./logger.js";
 import { writeMcpConfigFile } from "./mcp/mcp-config.js";
 import { runAutoresearchCycle, type AutoresearchCycleOptions } from "./autoresearch.js";
 import { runGeCycle, dispatchGeEvaluatorWithFeedback, type GeCycleOptions } from "./ge.js";
 import { runLoopCycle, type LoopCycleOptions } from "./loop.js";
 import { openDatabase, reclaimWasmMemory } from "./db.js";
+import {
+  MemoryLogger,
+  isMemoryLogEnabled,
+  memoryLogPath,
+  stateJsonPath as stateJsonPathFor,
+} from "./diagnostics/memory-log.js";
+import {
+  installHeapSnapshotHandlers,
+  ThresholdSnapshotter,
+} from "./diagnostics/heap-snapshot.js";
 import { loadPipeline } from "./pipeline.js";
 import { runPgeCycle, dispatchEvaluatorWithFeedback, type PgeCycleOptions } from "./pge.js";
 import { interpolate, resolveVariables, resolveTaskBody, loadAgentMarkdown, buildTaskContext, writeSystemPromptFile } from "./prompt.js";
@@ -1913,15 +1928,21 @@ export async function runPipeline(
   // Detect top-level invocation (sub-pipelines pass an initialized visitedPipelines set).
   const isTopLevel = !ctx.visitedPipelines;
 
-  // Create gate strategy if not provided.
-  if (!ctx.gateStrategy && !ctx.headless && !ctx.dryRun) {
-    // Need a runId — use existing state or generate one via createState.
-    const tempState = opts?.existingState ?? createState(
+  // Materialize a single canonical initial state up-front so the runId is
+  // shared across gate strategy, memory logger, and runStages. Sub-pipelines
+  // and dry-runs don't need this (they don't persist or gate).
+  let initialState: PipelineState | undefined = opts?.existingState;
+  if (isTopLevel && !ctx.dryRun && !initialState) {
+    initialState = createState(
       ctx.pipeline.name, ctx.project, ctx.pipelineFile,
       flattenStageEntries(ctx.pipeline.stages),
       ctx.artifactDir, ctx.projectDir, ctx.sessionId,
     );
-    ctx.gateStrategy = new FilesystemGateStrategy(tempState.runId, ctx.projectDir, ctx.quiet);
+  }
+
+  // Create gate strategy if not provided.
+  if (!ctx.gateStrategy && !ctx.headless && !ctx.dryRun && initialState) {
+    ctx.gateStrategy = new FilesystemGateStrategy(initialState.runId, ctx.projectDir, ctx.quiet);
   }
 
   // Wrap dispatcher with pane manager when running inside cmux (non-headless, non-dry-run).
@@ -1940,9 +1961,66 @@ export async function runPipeline(
   let wasmReclaimTimer: ReturnType<typeof setInterval> | null = null;
   if (isTopLevel && !ctx.dryRun && WASM_RECLAIM_INTERVAL_MS > 0) {
     wasmReclaimTimer = setInterval(() => {
+      const before = process.memoryUsage();
       reclaimWasmMemory();
+      const after = process.memoryUsage();
+      getLogger(ctx).debug(
+        "wasm",
+        "reclaim",
+        { rssBefore: before.rss, rssAfter: after.rss, abBefore: before.arrayBuffers, abAfter: after.arrayBuffers },
+      );
     }, WASM_RECLAIM_INTERVAL_MS);
     wasmReclaimTimer.unref();
+  }
+
+  // ---- Diagnostics: persistent memory JSONL sampling (non-TUI runs only) ----
+  // The TUI path creates its own logger in startDashboard() because the
+  // dashboard's poll loop is the natural sampling cadence. Headless /
+  // --no-tui runs have no dashboard, so install a dedicated timer here.
+  let memLogger: MemoryLogger | null = null;
+  let memSampleTimer: ReturnType<typeof setInterval> | null = null;
+  if (
+    isTopLevel && !ctx.dryRun && !ctx.quiet && initialState && isMemoryLogEnabled()
+  ) {
+    const runIdForLog = initialState.runId;
+    memLogger = new MemoryLogger(
+      memoryLogPath(ctx.artifactDir),
+      runIdForLog,
+      stateJsonPathFor(ctx.artifactDir),
+      true,
+    );
+    const intervalMs = Number(process.env.CCCP_MEM_SAMPLE_MS ?? 5000);
+    if (intervalMs > 0) {
+      const thresholdSnapshotter = new ThresholdSnapshotter(ctx.artifactDir, runIdForLog);
+      memSampleTimer = setInterval(async () => {
+        const mu = process.memoryUsage();
+        thresholdSnapshotter.maybeSnapshot(mu.rss, mu.heapUsed);
+        try {
+          const db = await openDatabase(ctx.projectDir);
+          const count = db.countEvents(runIdForLog);
+          memLogger!.record(count);
+        } catch {
+          memLogger!.record(0);
+        }
+      }, intervalMs);
+      memSampleTimer.unref();
+    }
+  }
+
+  // ---- Diagnostics: heap-snapshot handlers (top-level only; all opt-in) ----
+  let uninstallHeapHandlers: () => void = () => {};
+  if (isTopLevel && !ctx.dryRun && initialState) {
+    uninstallHeapHandlers = installHeapSnapshotHandlers({
+      artifactDir: ctx.artifactDir,
+      runId: initialState.runId,
+    });
+  }
+
+  // ---- Diagnostics: route CCCP_DEBUG-tagged logs to .cccp/debug.log ----
+  // No-op when CCCP_DEBUG is unset (the sink stays stderr-bound but is
+  // never actually touched because tag checks short-circuit).
+  if (isTopLevel && !ctx.dryRun) {
+    setDebugLogPath(resolve(ctx.artifactDir, ".cccp", "debug.log"));
   }
 
   if (opts?.existingState) {
@@ -1952,7 +2030,12 @@ export async function runPipeline(
   }
 
   try {
-    const { state, pipelineResult } = await runStages(ctx, opts?.existingState);
+    // Pass the canonical initialState to runStages so the runId matches
+    // what the memory logger and gate strategy already point at. When this
+    // is a caller-supplied resume, runStages honours the in-progress state
+    // via findResumePoint. When it's our upfront materialization, runStages
+    // starts from stage 0.
+    const { state, pipelineResult } = await runStages(ctx, initialState ?? opts?.existingState);
 
     // Top-level persistence and notifications.
     if (!ctx.dryRun) {
@@ -1965,6 +2048,10 @@ export async function runPipeline(
     return pipelineResult;
   } finally {
     if (wasmReclaimTimer) clearInterval(wasmReclaimTimer);
+    if (memSampleTimer) clearInterval(memSampleTimer);
+    memLogger?.close();
+    uninstallHeapHandlers();
+    closeDebugSink();
     await ctx.tempTracker?.cleanup();
   }
 }

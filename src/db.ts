@@ -380,6 +380,16 @@ export class CccpDatabase {
     );
   }
 
+  /** Total event count for a run. Used by the memory JSONL logger as a leak signal. */
+  countEvents(runId: string): number {
+    const results = this.db.exec(
+      `SELECT COUNT(*) FROM events WHERE run_id = ?`,
+      [runId],
+    );
+    if (results.length === 0) return 0;
+    return Number(results[0].values[0][0] ?? 0);
+  }
+
   getEvents(runId: string, sinceId?: number): StateEvent[] {
     const sql = sinceId != null
       ? `SELECT * FROM events WHERE run_id = ? AND id > ? ORDER BY id`
@@ -622,4 +632,12 @@ export function reclaimWasmMemory(): void {
   }
   instances.clear();
   SQL = null;
+}
+
+/**
+ * Diagnostics snapshot of the sql.js singleton cache. Used by the memory
+ * JSONL logger to track whether the WASM module grows across reclaim cycles.
+ */
+export function getDbDiagnostics(): { instances: number; initialized: boolean } {
+  return { instances: instances.size, initialized: SQL !== null };
 }

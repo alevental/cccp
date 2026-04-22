@@ -316,4 +316,57 @@ program
     await launchAgentMonitor(streamLog, agentName);
   });
 
+// ---------------------------------------------------------------------------
+// `cccp diag memory` — post-mortem analysis of .cccp/memory.jsonl
+// ---------------------------------------------------------------------------
+
+const diag = program
+  .command("diag")
+  .description("Diagnostics and post-mortem analysis tools");
+
+diag
+  .command("memory")
+  .description("Summarize a .cccp/memory.jsonl sample log")
+  .option("-f, --file <path>", "Path to memory.jsonl (default: ./.cccp/memory.jsonl)")
+  .option("-p, --project <name>", "Project name (used with --pipeline to resolve artifact dir)")
+  .option("--pipeline <name>", "Pipeline name (used with --project to resolve artifact dir)")
+  .option("-d, --project-dir <path>", "Project directory (defaults to cwd)")
+  .option("-r, --run <id-prefix>", "Filter to a specific run ID or prefix")
+  .option("--since <dur>", "Only show samples from the last <dur> (e.g. 10m, 2h, 1d)")
+  .option("--field <name>", "Numeric field for the sparkline (rss | heapUsed | arrayBuffers | external)", "rss")
+  .option("--top <n>", "Top-N counters by growth", "10")
+  .option("--width <cols>", "Sparkline width", "60")
+  .action(async (opts) => {
+    const { runDiag, defaultMemoryJsonlFor } = await import("./diagnostics/diag-memory.js");
+    const { resolveArtifactDir } = await import("./context.js");
+    const { loadProjectConfig } = await import("./config.js");
+
+    let jsonlPath: string;
+    if (opts.file) {
+      jsonlPath = resolve(opts.file);
+    } else if (opts.project && opts.pipeline) {
+      const projectDir = resolve(opts.projectDir ?? process.cwd());
+      const projectConfig = await loadProjectConfig(projectDir);
+      const artifactDir = resolveArtifactDir({
+        projectDir,
+        projectConfig,
+        project: opts.project,
+        pipelineName: opts.pipeline,
+      });
+      jsonlPath = defaultMemoryJsonlFor(artifactDir);
+    } else {
+      jsonlPath = resolve(process.cwd(), ".cccp", "memory.jsonl");
+    }
+
+    const out = runDiag({
+      jsonlPath,
+      runId: opts.run,
+      since: opts.since,
+      field: opts.field,
+      top: Number(opts.top),
+      width: Number(opts.width),
+    });
+    console.log(out);
+  });
+
 program.parse();

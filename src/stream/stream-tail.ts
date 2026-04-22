@@ -3,6 +3,8 @@ import { readdir, open } from "node:fs/promises";
 import { resolve } from "node:path";
 import { EventEmitter } from "node:events";
 import { StreamParser, type AgentActivity } from "./stream.js";
+import { incTailerCount, decTailerCount } from "../diagnostics/runtime-registry.js";
+import { debug as logDebug } from "../logger.js";
 
 /**
  * Tails `.stream.jsonl` files in a `.cccp/` directory and emits
@@ -14,8 +16,13 @@ export class StreamTailer extends EventEmitter {
   private dirWatcher: FSWatcher | null = null;
   private pollInterval: ReturnType<typeof setInterval> | null = null;
 
+  private counted = false;
+
   constructor(private cccpDir: string) {
     super();
+    incTailerCount();
+    this.counted = true;
+    logDebug("stream", "StreamTailer opened", { dir: cccpDir });
   }
 
   async start(): Promise<void> {
@@ -50,6 +57,11 @@ export class StreamTailer extends EventEmitter {
     }
     this.parsers.clear();
     this.removeAllListeners();
+    if (this.counted) {
+      decTailerCount();
+      this.counted = false;
+      logDebug("stream", "StreamTailer closed");
+    }
   }
 
   private async scanFiles(): Promise<void> {
