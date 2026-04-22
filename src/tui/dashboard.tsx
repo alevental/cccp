@@ -145,15 +145,18 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
     };
   }, [useEventBus, updateActivity]);
 
-  // File-tailing mode for standalone dashboard.
+  // File-tailing mode for standalone dashboard. Depends on `state.artifactDir`
+  // so scoped dashboards switch to the sub-pipeline's .cccp directory once the
+  // child state loads (child agents write their .stream.jsonl there, not the
+  // parent's artifact dir).
   useEffect(() => {
     if (useEventBus) return;
-    const cccpDir = resolve(artifactDir, ".cccp");
+    const cccpDir = resolve(state.artifactDir, ".cccp");
     const tailer = new StreamTailer(cccpDir);
     tailer.on("activity", (a: AgentActivity) => updateActivity(a));
     tailer.start().catch(() => {});
     return () => { tailer.stop(); };
-  }, [artifactDir, useEventBus, updateActivity]);
+  }, [state.artifactDir, useEventBus, updateActivity]);
 
   // Pause request via keyboard.
   const [pauseRequested, setPauseRequested] = useState(false);
