@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR-003](./003-node-sqlite-over-sql-js.md) (2026-04-23). The ABI concern that drove this decision was resolved when Node 24 LTS shipped `node:sqlite` as a built-in module.
 
 ## Context
 

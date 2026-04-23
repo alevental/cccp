@@ -43,7 +43,7 @@ The Plan-Generate-Evaluate cycle:
 6. Route: PASS -> next stage, FAIL + iterations left -> retry generator/evaluator loop with evaluation feedback, FAIL + max reached -> escalate
 
 ### State persistence (`src/state.ts`, `src/db.ts`)
-Pipeline state is persisted to a SQLite database at `{projectDir}/.cccp/cccp.db` via sql.js (WASM). State is updated after every transition: stage start, contract write, generator dispatch, evaluator dispatch, routing decision, stage completion. All types (`PipelineState`, `StageState`, `GateInfo`, etc.) are defined in `src/types.ts`.
+Pipeline state is persisted to a SQLite database at `{projectDir}/.cccp/cccp.db` via `node:sqlite` (Node 24 LTS built-in) with WAL mode. State is updated after every transition: stage start, contract write, generator dispatch, evaluator dispatch, routing decision, stage completion. All types (`PipelineState`, `StageState`, `GateInfo`, etc.) are defined in `src/types.ts`.
 
 Resume finds the first non-completed stage and skips everything before it. PGE stages resume at the correct iteration and sub-step. `resetFromStage()` enables clean reset from a named stage onward — resets state, deletes events/checkpoints, and removes artifact files from disk. Used by `cccp resume --from <stage>`.
 
@@ -52,14 +52,14 @@ Named MCP profiles defined in `cccp.yaml` with `extends` inheritance. Each profi
 
 ### Gate system (`src/gate/`, `src/mcp/gate-notifier.ts`)
 - **`gate-strategy.ts`** — Strategy interface for gate handling
-- **`gate-watcher.ts`** — `FilesystemGateStrategy` polls SQLite for `approved`/`rejected` (reloads from disk each poll for cross-process updates)
+- **`gate-watcher.ts`** — `FilesystemGateStrategy` polls SQLite for `approved`/`rejected` (WAL mode surfaces cross-process writes immediately — no reload step)
 - **`auto-approve.ts`** — `AutoApproveStrategy` for headless/CI mode
 - **`gate-notifier.ts`** — `GateNotifier` proactively elicits approval from connected Claude Code sessions via MCP elicitation
 
 See `docs/architecture/gate-system.md` for details.
 
 ### MCP server (`src/mcp/mcp-server.ts`)
-General-purpose MCP server with 5 tools: `cccp_runs`, `cccp_status`, `cccp_gate_respond`, `cccp_logs`, `cccp_artifacts`. Includes a `GateNotifier` that automatically detects pending gates and prompts for approval via MCP elicitation. Reloads DB from disk on each tool call for cross-process consistency.
+General-purpose MCP server with 5 tools: `cccp_runs`, `cccp_status`, `cccp_gate_respond`, `cccp_logs`, `cccp_artifacts`. Includes a `GateNotifier` that automatically detects pending gates and prompts for approval via MCP elicitation. WAL mode on `node:sqlite` gives the server a live view of the runner's writes without any reload step.
 
 See `docs/api/mcp-tools.md` for tool reference.
 
@@ -98,4 +98,4 @@ CLI (cli.ts)
 - **Fresh context per agent**: Each `claude -p` invocation starts with a clean context window. No context rot.
 - **Regex routing**: The evaluator's `### Overall: PASS/FAIL` line is the only thing the runner reads. No interpretation.
 - **Artifact-driven communication**: Agents read contracts and evaluations from disk. Artifacts are markdown files — the orchestrator only reads the `### Overall: PASS/FAIL` line.
-- **SQLite state backend**: Pipeline state persisted to `{projectDir}/.cccp/cccp.db` via sql.js (WASM). Append-only events table for audit trail. Atomic flush via `tmp` + `rename`.
+- **SQLite state backend**: Pipeline state persisted to `{projectDir}/.cccp/cccp.db` via `node:sqlite` with WAL mode. Append-only events table for audit trail. Writes persist immediately — no manual flush step (see [ADR-003](adr/003-node-sqlite-over-sql-js.md)).

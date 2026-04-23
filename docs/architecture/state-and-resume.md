@@ -2,7 +2,7 @@
 
 ## State database
 
-Pipeline state lives in a SQLite database at `{projectDir}/.cccp/cccp.db`, managed by `src/db.ts` via sql.js (WASM). One database per project, all runs in one place. The database is flushed to disk atomically (write to `.tmp` then `rename`) after every state change.
+Pipeline state lives in a SQLite database at `{projectDir}/.cccp/cccp.db`, managed by `src/db.ts` via `node:sqlite` (Node 24 LTS built-in). WAL mode is enabled on open, so writes persist immediately and cross-process readers see committed writes without any manual reload. One database per project, all runs in one place. See [ADR-003](../adr/003-node-sqlite-over-sql-js.md) for the migration rationale ([ADR-002](../adr/002-sql-js-over-better-sqlite3.md) is superseded).
 
 Three tables: `runs` (materialized current state), `events` (append-only audit log), `checkpoints` (cached stage outputs). See ADR-001 for the migration rationale.
 
@@ -84,8 +84,8 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 |-------|-------|--------|-----------|
 | `runner.ts` | `loadState` (resume) | `saveState`, `saveStateWithEvent` | Direct DB access via `state.ts` |
 | `pge.ts` | — | Mutates in-memory state via `updatePgeProgress`, `setStageArtifact` | State passed by reference; runner persists via `onProgress` callback |
-| `mcp-server.ts` | `listRuns`, `getRunByArtifactDir` | `saveState` (gate response), `setPauseRequested` (pause) | Direct DB access; calls `reload()` before reads for cross-process sync |
-| `gate-watcher.ts` | `loadState` (polling every 5s) | — | Read-only; passes `reloadFromDisk: true` for cross-process sync. When no `DbService` is provided, calls `reclaimWasmMemory()` every ~15 min; otherwise the service timer handles reclaim. Has 12h safety timeout. |
+| `mcp-server.ts` | `listRuns`, `getRunByArtifactDir` | `saveState` (gate response), `setPauseRequested` (pause) | Direct DB access via `DbService` handle cache; WAL mode makes committed writes immediately visible without manual reload |
+| `gate-watcher.ts` | `loadState` (polling every 5s) | — | Read-only; WAL mode makes the runner's writes visible immediately. Has 12h safety timeout. |
 | `dashboard.tsx` | `loadState` (adaptive: 500ms active, 5s gate-idle), `getEvents` | — | Read-only; uses setTimeout chain with overlap guard |
 | `cli.ts` | `loadState` (resume, dashboard commands) | `saveState` (initial state for TUI) | Direct DB access |
 
@@ -110,9 +110,9 @@ State is saved after every transition in the runner and PGE engine:
 
 The runner writes state; the MCP server, gate watcher, and dashboard read it. Synchronization uses:
 
-- **Atomic flush**: `db.flush()` writes to a `.tmp` file, then renames. This prevents partial reads.
-- **Reload**: `db.reload()` re-reads the database file from disk into the in-memory sql.js instance. Readers call this before querying to pick up the runner's latest writes. Cross-process readers (MCP server, gate-notifier, standalone dashboard) use `DbService` (`src/db-service.ts`) which centralises the reload + periodic `reclaimWasmMemory()` timer to prevent unbounded WASM heap growth.
-- **No locking**: There is no file-level or row-level locking. In practice, only one writer (the runner) writes state at any given time. The MCP server writes gate responses (`gate.status = "approved"/"rejected"`) and pause requests (`pause_requested` column). Pause uses a dedicated DB column (not the state JSON) to avoid write races with the runner.
+- **WAL mode**: `PRAGMA journal_mode = WAL` is enabled on every open. Writers append to `cccp.db-wal`; readers see committed transactions without locking the writer. The sidecar files (`cccp.db-wal`, `cccp.db-shm`) live alongside `cccp.db` under `.cccp/` (already gitignored).
+- **Direct persistence**: there is no separate `flush()` step — every `INSERT`/`UPDATE` lands on disk through SQLite's page cache. Cross-process readers (MCP server, gate-notifier, standalone dashboard) open their own `DatabaseSync` handle via `DbService` and query directly; no reload dance is needed.
+- **No locking at the app layer**: SQLite's WAL handles reader/writer coordination. In practice only one writer (the runner) writes at any given time. The MCP server writes gate responses (`gate.status = "approved"/"rejected"`) and pause requests (`pause_requested` column). Pause uses a dedicated DB column (not the state JSON) to avoid write races with the runner.
 
 ### Gate response flow
 

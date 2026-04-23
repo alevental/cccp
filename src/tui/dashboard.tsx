@@ -163,10 +163,12 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
   useInput((input) => {
     if ((input === "p" || input === "P") && state.status === "running" && !pauseRequested) {
       setPauseRequested(true);
-      openDatabase(projectDir).then((db) => {
+      try {
+        const db = openDatabase(projectDir);
         db.setPauseRequested(state.runId, true);
-        db.flush();
-      }).catch(() => {});
+      } catch {
+        // ignore — pause is best-effort from the UI.
+      }
     } else if (input === "m" || input === "M") {
       setViewMode((v) => (v === "memory" ? "events" : "memory"));
     }
@@ -178,9 +180,6 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
     let timer: ReturnType<typeof setTimeout>;
     let polling = false;
     let cancelled = false;
-    // Standalone dashboards reload from disk. When a DbService is provided,
-    // it handles reload + periodic WASM reclaim via its own timer.
-    const isStandalone = !useEventBus;
 
     const poll = async () => {
       if (polling || cancelled) return;
@@ -200,19 +199,16 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
 
       // Persist a memory sample to JSONL. eventCountTotal is filled in from
       // the DB below; use the best-available value from the previous tick.
-      // A miss of a few seconds on the first sample is fine.
       try {
-        const db = await openDatabase(projectDir);
+        const db = openDatabase(projectDir);
         memLogger?.record(db.countEvents(runId));
       } catch {
         memLogger?.record(0);
       }
 
       try {
-        // When a DbService is available, use it to reload (it owns WASM reclaim).
-        // Otherwise fall back to loadState's built-in reload for standalone mode.
-        if (dbService) await dbService.db();
-        const parentState = await loadState(runId, projectDir, isStandalone && !dbService);
+        // WAL mode: readers see committed writes immediately, no manual reload needed.
+        const parentState = await loadState(runId, projectDir);
         if (parentState) {
           // When scoped, extract the child pipeline state from the parent.
           const displayState = scopeStage
@@ -279,7 +275,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
           }
 
           // Poll events incrementally. When scoped, filter to child events for this stage.
-          const db = dbService ? await dbService.db() : await openDatabase(projectDir);
+          const db = dbService ? dbService.db() : openDatabase(projectDir);
           const newEvents = db.getEvents(parentState.runId, lastEventId.current);
           if (newEvents.length > 0) {
             lastEventId.current = newEvents[newEvents.length - 1].id;
@@ -407,7 +403,7 @@ export async function launchDashboard(
   initialState: PipelineState,
   scopeStage?: string,
 ): Promise<void> {
-  const svc = new DbService({ projectDir, mode: "reader" });
+  const svc = new DbService({ projectDir });
   svc.start();
   const memSamples = new MemorySampleRing();
   const memLogger = isMemoryLogEnabled()

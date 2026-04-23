@@ -78,13 +78,9 @@ The gate strategy is created lazily by the runner after `createState()` produces
 
 The strategy polls the SQLite database via `loadState()` every 5 seconds (`POLL_INTERVAL_MS = 5000`). On each tick:
 
-1. Reload state from disk (`reloadFromDisk: true` to pick up external writes)
+1. Read the latest state from SQLite (WAL mode makes the MCP server's cross-process writes immediately visible — no reload step)
 2. Check if the gate's `stageName` matches the one being waited on
 3. If `status === "approved"` or `status === "rejected"`, resolve the promise
-
-The `reloadFromDisk` flag is critical: it causes the database layer to re-read the SQLite file from disk, which is necessary because the MCP server (running in a separate process) may have written a gate response.
-
-When no `DbService` is provided, the gate-watcher calls `reclaimWasmMemory()` every ~15 minutes (180 polls) to destroy the sql.js WASM module and allow V8 to GC its backing `ArrayBuffer`. When a `DbService` is provided, the service's timer handles reclaim automatically. See [TUI Dashboard — Memory Optimization](tui-dashboard.md#memory-optimization) for details.
 
 A safety timeout (`MAX_POLL_COUNT = 8640`, ~12 hours at 5s) prevents the polling interval from running indefinitely if the gate state is corrupted or never resolved.
 

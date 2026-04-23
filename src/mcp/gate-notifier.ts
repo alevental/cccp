@@ -1,5 +1,4 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { openDatabase } from "../db.js";
 import { writeFeedbackArtifact } from "../gate/feedback-artifact.js";
 import { discoverRuns, loadState, saveState, setStageArtifact } from "../state.js";
 import type { DiscoveredRun } from "../types.js";
@@ -22,8 +21,7 @@ export interface GateNotifierOptions {
   /** Session ID for this MCP server instance. Used to filter gate notifications. */
   sessionId?: string;
   pollIntervalMs?: number;
-  /** Centralized database service for reload + WASM reclaim.
-   *  When omitted, falls back to direct openDatabase() + reload() with no WASM reclaim. */
+  /** Centralized database service. Optional — retained for API stability. */
   dbService?: DbService;
 }
 
@@ -71,13 +69,7 @@ export class GateNotifier {
     if (this.pendingNotification) return; // one at a time
 
     try {
-      // Reload DB from disk before reading runs.
-      if (this.opts.dbService) {
-        await this.opts.dbService.db();
-      } else {
-        const db = await openDatabase(this.opts.projectDir);
-        db.reload();
-      }
+      // WAL mode: readers see committed writes immediately, no manual reload needed.
       const runs = await discoverRuns(this.opts.projectDir);
 
       // Prune lastRunStatus for runs no longer returned by discoverRuns.

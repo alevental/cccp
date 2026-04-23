@@ -12,8 +12,7 @@ describe("CccpDatabase — lifecycle", () => {
     const dir = tmpProjectDir();
     const db = await CccpDatabase.open(dir);
 
-    expect(existsSync(dbPath(dir))).toBe(false); // not flushed yet
-    db.flush();
+    // node:sqlite creates the file on open; writes persist immediately (WAL mode).
     expect(existsSync(dbPath(dir))).toBe(true);
     db.close();
   });
@@ -23,7 +22,6 @@ describe("CccpDatabase — lifecycle", () => {
     const db1 = await CccpDatabase.open(dir);
     const state = makeState();
     db1.insertRun(state, "/tmp/artifacts");
-    db1.flush();
     db1.close();
 
     const db2 = await CccpDatabase.open(dir);
@@ -281,25 +279,37 @@ describe("CccpDatabase — checkpoints", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Flush — atomic persistence
+// Persistence — writes land on disk immediately (WAL mode)
 // ---------------------------------------------------------------------------
 
-describe("CccpDatabase — flush", () => {
-  it("persists data to disk atomically", async () => {
+describe("CccpDatabase — persistence", () => {
+  it("writes are visible to a reopened handle", async () => {
     const dir = tmpProjectDir();
     const db = await CccpDatabase.open(dir);
     const state = makeState();
 
     db.insertRun(state, "/artifacts");
     db.appendEvent(state.runId, "test_event");
-    db.flush();
+    db.close();
 
-    // Reopen and verify
+    // Reopen and verify — no flush() needed with node:sqlite.
     const db2 = await CccpDatabase.open(dir);
     expect(db2.getRun(state.runId)).not.toBeNull();
     expect(db2.getEvents(state.runId)).toHaveLength(1);
-
-    db.close();
     db2.close();
+  });
+
+  it("concurrent handles on the same file see each other's writes", async () => {
+    const dir = tmpProjectDir();
+    const writer = await CccpDatabase.open(dir);
+    const reader = await CccpDatabase.open(dir);
+    const state = makeState();
+
+    writer.insertRun(state, "/artifacts");
+    // WAL mode: reader sees the committed write without any manual reload.
+    expect(reader.getRun(state.runId)).not.toBeNull();
+
+    writer.close();
+    reader.close();
   });
 });

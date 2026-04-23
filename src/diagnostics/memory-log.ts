@@ -21,7 +21,6 @@ import {
 import { resolve, dirname } from "node:path";
 import { getHeapSpaceStatistics } from "node:v8";
 import { activityBus } from "../activity-bus.js";
-import { getDbDiagnostics } from "../db.js";
 import { snapshotRegistry, registerActivityBus } from "./runtime-registry.js";
 
 // Register the activityBus once at module load so the registry can read
@@ -36,8 +35,6 @@ export interface RuntimeCounters {
   activityMapSize: number;
   dispatchStartTimesSize: number;
   activityBusListeners: number;
-  sqlJsCachedInstances: number;
-  sqlJsInitialized: boolean;
   streamTailerCount: number;
   eventCountTotal: number;
   accumulatorEntryCounts: Record<string, number>;
@@ -180,7 +177,6 @@ export class MemoryLogger {
     }
 
     const reg = snapshotRegistry();
-    const db = getDbDiagnostics();
 
     const sample: MemorySampleExt = {
       ts,
@@ -196,8 +192,6 @@ export class MemoryLogger {
         activityMapSize: reg.activityMapSize,
         dispatchStartTimesSize: reg.dispatchMapSize,
         activityBusListeners: reg.activityBusListeners,
-        sqlJsCachedInstances: db.instances,
-        sqlJsInitialized: db.initialized,
         streamTailerCount: reg.streamTailerCount,
         eventCountTotal,
         accumulatorEntryCounts: reg.accumulatorEntryCounts,

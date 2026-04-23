@@ -1,17 +1,8 @@
-import initSqlJs, { type Database } from "sql.js";
-import {
-  readFileSync,
-  writeFileSync,
-  renameSync,
-  existsSync,
-  mkdirSync,
-} from "node:fs";
-import { resolve, join, dirname } from "node:path";
-import { randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
+import { mkdirSync } from "node:fs";
+import { resolve, dirname } from "node:path";
 import type {
   PipelineState,
-  StageState,
-  GateInfo,
   StateEvent,
   DiscoveredRun,
 } from "./types.js";
@@ -22,19 +13,6 @@ export interface RunFilter {
   pipeline?: string;
   status?: string;
   artifactDir?: string;
-}
-
-// ---------------------------------------------------------------------------
-// sql.js initialization (async, once)
-// ---------------------------------------------------------------------------
-
-let SQL: Awaited<ReturnType<typeof initSqlJs>> | null = null;
-
-async function getSql(): Promise<typeof SQL> {
-  if (!SQL) {
-    SQL = await initSqlJs();
-  }
-  return SQL!;
 }
 
 // ---------------------------------------------------------------------------
@@ -50,58 +28,30 @@ export function dbPath(projectDir: string): string {
 // ---------------------------------------------------------------------------
 
 export class CccpDatabase {
-  private db: Database;
+  private db: DatabaseSync;
   private filePath: string;
-  private flushCount = 0;
 
-  private constructor(db: Database, filePath: string) {
+  private constructor(db: DatabaseSync, filePath: string) {
     this.db = db;
     this.filePath = filePath;
   }
 
   /**
-   * Open or create a database. If the file exists, load it. Otherwise create
-   * a new empty DB with the schema.
+   * Open or create a database. Enables WAL mode so readers in other
+   * processes see committed writes without manual reload.
    */
-  static async open(projectDir: string): Promise<CccpDatabase> {
-    const sql = await getSql();
+  static open(projectDir: string): CccpDatabase {
     const fp = dbPath(projectDir);
-    const dir = dirname(fp);
+    mkdirSync(dirname(fp), { recursive: true });
 
-    mkdirSync(dir, { recursive: true });
-
-    let db: Database;
-    if (existsSync(fp)) {
-      const buffer = readFileSync(fp);
-      db = new sql!.Database(buffer);
-    } else {
-      db = new sql!.Database();
-    }
+    const db = new DatabaseSync(fp);
+    db.exec("PRAGMA journal_mode = WAL");
+    db.exec("PRAGMA synchronous = NORMAL");
+    db.exec("PRAGMA busy_timeout = 5000");
 
     const instance = new CccpDatabase(db, fp);
     instance.migrate();
     return instance;
-  }
-
-  /**
-   * Open a read-only copy of the database (for standalone dashboard / MCP server).
-   * Re-reads the file from disk each time — safe for cross-process access.
-   */
-  static async openReadOnly(projectDir: string): Promise<CccpDatabase> {
-    const sql = await getSql();
-    const fp = dbPath(projectDir);
-
-    if (!existsSync(fp)) {
-      // No DB yet — return an empty one (no writes will be flushed)
-      const db = new sql!.Database();
-      const instance = new CccpDatabase(db, fp);
-      instance.migrate();
-      return instance;
-    }
-
-    const buffer = readFileSync(fp);
-    const db = new sql!.Database(buffer);
-    return new CccpDatabase(db, fp);
   }
 
   // -------------------------------------------------------------------------
@@ -112,7 +62,7 @@ export class CccpDatabase {
     const version = this.pragma("user_version");
 
     if (version < 1) {
-      this.db.run(`
+      this.db.exec(`
         CREATE TABLE IF NOT EXISTS runs (
           run_id           TEXT PRIMARY KEY,
           pipeline         TEXT NOT NULL,
@@ -129,14 +79,14 @@ export class CccpDatabase {
           updated_at       TEXT NOT NULL
         )
       `);
-      this.db.run(
+      this.db.exec(
         `CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status)`,
       );
-      this.db.run(
+      this.db.exec(
         `CREATE INDEX IF NOT EXISTS idx_runs_artifact_dir ON runs(artifact_dir)`,
       );
 
-      this.db.run(`
+      this.db.exec(`
         CREATE TABLE IF NOT EXISTS events (
           id          INTEGER PRIMARY KEY AUTOINCREMENT,
           run_id      TEXT NOT NULL,
@@ -147,11 +97,11 @@ export class CccpDatabase {
           created_at  TEXT NOT NULL DEFAULT (datetime('now'))
         )
       `);
-      this.db.run(
+      this.db.exec(
         `CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id, id)`,
       );
 
-      this.db.run(`
+      this.db.exec(`
         CREATE TABLE IF NOT EXISTS checkpoints (
           run_id      TEXT NOT NULL,
           stage_name  TEXT NOT NULL,
@@ -162,26 +112,27 @@ export class CccpDatabase {
         )
       `);
 
-      this.db.run(`PRAGMA user_version = 1`);
+      this.db.exec(`PRAGMA user_version = 1`);
     }
 
     if (version < 2) {
-      this.db.run(`ALTER TABLE runs ADD COLUMN session_id TEXT`);
-      this.db.run(`PRAGMA user_version = 2`);
+      this.db.exec(`ALTER TABLE runs ADD COLUMN session_id TEXT`);
+      this.db.exec(`PRAGMA user_version = 2`);
     }
 
     if (version < 3) {
-      this.db.run(`ALTER TABLE runs ADD COLUMN pause_requested INTEGER DEFAULT 0`);
-      this.db.run(`PRAGMA user_version = 3`);
+      this.db.exec(`ALTER TABLE runs ADD COLUMN pause_requested INTEGER DEFAULT 0`);
+      this.db.exec(`PRAGMA user_version = 3`);
     }
   }
 
   private pragma(name: string): number {
-    const result = this.db.exec(`PRAGMA ${name}`);
-    if (result.length > 0 && result[0].values.length > 0) {
-      return result[0].values[0][0] as number;
-    }
-    return 0;
+    const row = this.db.prepare(`PRAGMA ${name}`).get() as
+      | Record<string, unknown>
+      | undefined;
+    if (!row) return 0;
+    const value = Object.values(row)[0];
+    return typeof value === "number" ? value : 0;
   }
 
   // -------------------------------------------------------------------------
@@ -189,10 +140,12 @@ export class CccpDatabase {
   // -------------------------------------------------------------------------
 
   insertRun(state: PipelineState, artifactDir: string): void {
-    this.db.run(
-      `INSERT INTO runs (run_id, pipeline, project, pipeline_file, artifact_dir, project_dir, started_at, completed_at, status, stages_json, stage_order_json, gate_json, session_id, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
+    this.db
+      .prepare(
+        `INSERT INTO runs (run_id, pipeline, project, pipeline_file, artifact_dir, project_dir, started_at, completed_at, status, stages_json, stage_order_json, gate_json, session_id, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
         state.runId,
         state.pipeline,
         state.project,
@@ -207,17 +160,18 @@ export class CccpDatabase {
         state.gate ? JSON.stringify(state.gate) : null,
         state.sessionId ?? null,
         new Date().toISOString(),
-      ],
-    );
+      );
   }
 
-  updateRun(state: PipelineState, artifactDir: string): void {
-    this.db.run(
-      `UPDATE runs SET
-        status = ?, completed_at = ?, stages_json = ?, stage_order_json = ?,
-        gate_json = ?, session_id = ?, updated_at = ?
-       WHERE run_id = ?`,
-      [
+  updateRun(state: PipelineState, _artifactDir: string): void {
+    this.db
+      .prepare(
+        `UPDATE runs SET
+          status = ?, completed_at = ?, stages_json = ?, stage_order_json = ?,
+          gate_json = ?, session_id = ?, updated_at = ?
+         WHERE run_id = ?`,
+      )
+      .run(
         state.status,
         state.completedAt ?? null,
         JSON.stringify(state.stages),
@@ -226,13 +180,10 @@ export class CccpDatabase {
         state.sessionId ?? null,
         new Date().toISOString(),
         state.runId,
-      ],
-    );
+      );
   }
 
-  /**
-   * Insert or update — tries update first, inserts if no row exists.
-   */
+  /** Insert or update — tries getRun first, inserts if no row exists. */
   upsertRun(state: PipelineState, artifactDir: string): void {
     const existing = this.getRun(state.runId);
     if (existing) {
@@ -243,36 +194,28 @@ export class CccpDatabase {
   }
 
   getRun(runId: string): PipelineState | null {
-    const results = this.db.exec(
-      `SELECT * FROM runs WHERE run_id = ?`,
-      [runId],
-    );
-    if (results.length === 0 || results[0].values.length === 0) return null;
-    return this.rowToState(results[0].columns, results[0].values[0]);
+    const row = this.db
+      .prepare(`SELECT * FROM runs WHERE run_id = ?`)
+      .get(runId) as unknown as RunRow | undefined;
+    return row ? this.rowToState(row) : null;
   }
 
-  /**
-   * @deprecated Use getRun(runId) instead.
-   */
+  /** @deprecated Use getRun(runId) instead. */
   getRunByArtifactDir(artifactDir: string): PipelineState | null {
-    const results = this.db.exec(
-      `SELECT * FROM runs WHERE artifact_dir = ? ORDER BY started_at DESC LIMIT 1`,
-      [artifactDir],
-    );
-    if (results.length === 0 || results[0].values.length === 0) return null;
-    return this.rowToState(results[0].columns, results[0].values[0]);
+    const row = this.db
+      .prepare(
+        `SELECT * FROM runs WHERE artifact_dir = ? ORDER BY started_at DESC LIMIT 1`,
+      )
+      .get(artifactDir) as unknown as RunRow | undefined;
+    return row ? this.rowToState(row) : null;
   }
 
-  /**
-   * Find a run by ID prefix. Returns null if zero or multiple matches.
-   */
+  /** Find a run by ID prefix. Returns null if zero or multiple matches. */
   getRunByIdPrefix(prefix: string): PipelineState | null {
-    const results = this.db.exec(
-      `SELECT * FROM runs WHERE run_id LIKE ? || '%'`,
-      [prefix],
-    );
-    if (results.length === 0 || results[0].values.length !== 1) return null;
-    return this.rowToState(results[0].columns, results[0].values[0]);
+    const rows = this.db
+      .prepare(`SELECT * FROM runs WHERE run_id LIKE ? || '%'`)
+      .all(prefix) as unknown as RunRow[];
+    return rows.length === 1 ? this.rowToState(rows[0]) : null;
   }
 
   listRuns(): DiscoveredRun[] {
@@ -305,41 +248,35 @@ export class CccpDatabase {
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    const results = this.db.exec(
-      `SELECT * FROM runs ${where} ORDER BY
-        CASE WHEN status = 'running' THEN 0 WHEN status = 'paused' THEN 1 ELSE 2 END,
-        started_at DESC`,
-      params,
-    );
-    if (results.length === 0) return [];
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM runs ${where} ORDER BY
+          CASE WHEN status = 'running' THEN 0 WHEN status = 'paused' THEN 1 ELSE 2 END,
+          started_at DESC`,
+      )
+      .all(...params) as unknown as RunRow[];
 
-    return results[0].values.map((row) => {
-      const state = this.rowToState(results[0].columns, row);
+    return rows.map((row) => {
+      const state = this.rowToState(row);
       return { artifactDir: state.artifactDir, state };
     });
   }
 
-  private rowToState(
-    columns: string[],
-    row: unknown[],
-  ): PipelineState {
-    const col = (name: string) => row[columns.indexOf(name)];
+  private rowToState(row: RunRow): PipelineState {
     return {
-      runId: col("run_id") as string,
-      pipeline: col("pipeline") as string,
-      project: col("project") as string,
-      pipelineFile: col("pipeline_file") as string,
-      startedAt: col("started_at") as string,
-      completedAt: (col("completed_at") as string) || undefined,
-      status: col("status") as PipelineState["status"],
-      stages: JSON.parse(col("stages_json") as string),
-      stageOrder: JSON.parse(col("stage_order_json") as string),
-      gate: col("gate_json")
-        ? JSON.parse(col("gate_json") as string)
-        : undefined,
-      artifactDir: col("artifact_dir") as string,
-      projectDir: (col("project_dir") as string) || undefined,
-      sessionId: (col("session_id") as string) || undefined,
+      runId: row.run_id,
+      pipeline: row.pipeline,
+      project: row.project,
+      pipelineFile: row.pipeline_file,
+      startedAt: row.started_at,
+      completedAt: row.completed_at || undefined,
+      status: row.status as PipelineState["status"],
+      stages: JSON.parse(row.stages_json),
+      stageOrder: JSON.parse(row.stage_order_json),
+      gate: row.gate_json ? JSON.parse(row.gate_json) : undefined,
+      artifactDir: row.artifact_dir,
+      projectDir: row.project_dir || undefined,
+      sessionId: row.session_id || undefined,
     };
   }
 
@@ -353,61 +290,61 @@ export class CccpDatabase {
     stageName?: string,
     data?: unknown,
   ): void {
-    this.db.run(
-      `INSERT INTO events (run_id, timestamp, event_type, stage_name, data_json)
-       VALUES (?, ?, ?, ?, ?)`,
-      [
+    this.db
+      .prepare(
+        `INSERT INTO events (run_id, timestamp, event_type, stage_name, data_json)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
         runId,
         new Date().toISOString(),
         eventType,
         stageName ?? null,
         data ? JSON.stringify(data) : null,
-      ],
-    );
+      );
   }
 
   /**
    * Remove old events for a run, keeping only the most recent `keep` entries.
-   * Prevents the append-only events table (and sql.js WASM memory) from
-   * growing without bound during long pipeline runs.
+   * Caps unbounded growth of the append-only events table on long runs.
    */
   pruneEvents(runId: string, keep: number = 500): void {
-    this.db.run(
-      `DELETE FROM events WHERE run_id = ? AND id NOT IN (
-        SELECT id FROM events WHERE run_id = ? ORDER BY id DESC LIMIT ?
-      )`,
-      [runId, runId, keep],
-    );
+    this.db
+      .prepare(
+        `DELETE FROM events WHERE run_id = ? AND id NOT IN (
+          SELECT id FROM events WHERE run_id = ? ORDER BY id DESC LIMIT ?
+        )`,
+      )
+      .run(runId, runId, keep);
   }
 
   /** Total event count for a run. Used by the memory JSONL logger as a leak signal. */
   countEvents(runId: string): number {
-    const results = this.db.exec(
-      `SELECT COUNT(*) FROM events WHERE run_id = ?`,
-      [runId],
-    );
-    if (results.length === 0) return 0;
-    return Number(results[0].values[0][0] ?? 0);
+    const row = this.db
+      .prepare(`SELECT COUNT(*) AS n FROM events WHERE run_id = ?`)
+      .get(runId) as { n: number } | undefined;
+    return Number(row?.n ?? 0);
   }
 
   getEvents(runId: string, sinceId?: number): StateEvent[] {
-    const sql = sinceId != null
-      ? `SELECT * FROM events WHERE run_id = ? AND id > ? ORDER BY id`
-      : `SELECT * FROM events WHERE run_id = ? ORDER BY id`;
-    const params = sinceId != null ? [runId, sinceId] : [runId];
-    const results = this.db.exec(sql, params);
-    if (results.length === 0) return [];
+    const rows =
+      sinceId != null
+        ? (this.db
+            .prepare(
+              `SELECT * FROM events WHERE run_id = ? AND id > ? ORDER BY id`,
+            )
+            .all(runId, sinceId) as unknown as EventRow[])
+        : (this.db
+            .prepare(`SELECT * FROM events WHERE run_id = ? ORDER BY id`)
+            .all(runId) as unknown as EventRow[]);
 
-    const cols = results[0].columns;
-    return results[0].values.map((row) => ({
-      id: row[cols.indexOf("id")] as number,
-      runId: row[cols.indexOf("run_id")] as string,
-      timestamp: row[cols.indexOf("timestamp")] as string,
-      eventType: row[cols.indexOf("event_type")] as string,
-      stageName: (row[cols.indexOf("stage_name")] as string) || undefined,
-      data: row[cols.indexOf("data_json")]
-        ? JSON.parse(row[cols.indexOf("data_json")] as string)
-        : undefined,
+    return rows.map((row) => ({
+      id: row.id,
+      runId: row.run_id,
+      timestamp: row.timestamp,
+      eventType: row.event_type,
+      stageName: row.stage_name || undefined,
+      data: row.data_json ? JSON.parse(row.data_json) : undefined,
     }));
   }
 
@@ -421,11 +358,12 @@ export class CccpDatabase {
     key: string,
     value: string,
   ): void {
-    this.db.run(
-      `INSERT OR REPLACE INTO checkpoints (run_id, stage_name, key, value, created_at)
-       VALUES (?, ?, ?, ?, datetime('now'))`,
-      [runId, stageName, key, value],
-    );
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO checkpoints (run_id, stage_name, key, value, created_at)
+         VALUES (?, ?, ?, ?, datetime('now'))`,
+      )
+      .run(runId, stageName, key, value);
   }
 
   getCheckpoint(
@@ -433,32 +371,12 @@ export class CccpDatabase {
     stageName: string,
     key: string,
   ): string | null {
-    const results = this.db.exec(
-      `SELECT value FROM checkpoints WHERE run_id = ? AND stage_name = ? AND key = ?`,
-      [runId, stageName, key],
-    );
-    if (results.length === 0 || results[0].values.length === 0) return null;
-    return results[0].values[0][0] as string;
-  }
-
-  /**
-   * Get all checkpoints for a stage as a key-value map.
-   * Used to restore stage outputs on resume.
-   */
-  getCheckpointsForStage(
-    runId: string,
-    stageName: string,
-  ): Record<string, string> {
-    const results = this.db.exec(
-      `SELECT key, value FROM checkpoints WHERE run_id = ? AND stage_name = ?`,
-      [runId, stageName],
-    );
-    if (results.length === 0) return {};
-    const out: Record<string, string> = {};
-    for (const row of results[0].values) {
-      out[row[0] as string] = row[1] as string;
-    }
-    return out;
+    const row = this.db
+      .prepare(
+        `SELECT value FROM checkpoints WHERE run_id = ? AND stage_name = ? AND key = ?`,
+      )
+      .get(runId, stageName, key) as { value: string } | undefined;
+    return row ? row.value : null;
   }
 
   // -------------------------------------------------------------------------
@@ -466,19 +384,16 @@ export class CccpDatabase {
   // -------------------------------------------------------------------------
 
   setPauseRequested(runId: string, requested: boolean): void {
-    this.db.run(
-      `UPDATE runs SET pause_requested = ? WHERE run_id = ?`,
-      [requested ? 1 : 0, runId],
-    );
+    this.db
+      .prepare(`UPDATE runs SET pause_requested = ? WHERE run_id = ?`)
+      .run(requested ? 1 : 0, runId);
   }
 
   isPauseRequested(runId: string): boolean {
-    const results = this.db.exec(
-      `SELECT pause_requested FROM runs WHERE run_id = ?`,
-      [runId],
-    );
-    if (results.length === 0 || results[0].values.length === 0) return false;
-    return results[0].values[0][0] === 1;
+    const row = this.db
+      .prepare(`SELECT pause_requested FROM runs WHERE run_id = ?`)
+      .get(runId) as { pause_requested: number } | undefined;
+    return row?.pause_requested === 1;
   }
 
   // -------------------------------------------------------------------------
@@ -488,19 +403,21 @@ export class CccpDatabase {
   deleteEventsForStages(runId: string, stageNames: string[]): void {
     if (stageNames.length === 0) return;
     const placeholders = stageNames.map(() => "?").join(", ");
-    this.db.run(
-      `DELETE FROM events WHERE run_id = ? AND stage_name IN (${placeholders})`,
-      [runId, ...stageNames],
-    );
+    this.db
+      .prepare(
+        `DELETE FROM events WHERE run_id = ? AND stage_name IN (${placeholders})`,
+      )
+      .run(runId, ...stageNames);
   }
 
   deleteCheckpointsForStages(runId: string, stageNames: string[]): void {
     if (stageNames.length === 0) return;
     const placeholders = stageNames.map(() => "?").join(", ");
-    this.db.run(
-      `DELETE FROM checkpoints WHERE run_id = ? AND stage_name IN (${placeholders})`,
-      [runId, ...stageNames],
-    );
+    this.db
+      .prepare(
+        `DELETE FROM checkpoints WHERE run_id = ? AND stage_name IN (${placeholders})`,
+      )
+      .run(runId, ...stageNames);
   }
 
   /**
@@ -515,66 +432,50 @@ export class CccpDatabase {
   ): void {
     if (childStageNames.length === 0) return;
     const placeholders = childStageNames.map(() => "?").join(", ");
-    this.db.run(
-      `DELETE FROM events WHERE run_id = ? AND stage_name = ?
-       AND event_type LIKE 'child_%'
-       AND json_extract(data_json, '$.childStage') IN (${placeholders})`,
-      [runId, parentStageName, ...childStageNames],
-    );
-  }
-
-  // -------------------------------------------------------------------------
-  // Persistence — flush to disk
-  // -------------------------------------------------------------------------
-
-  /**
-   * Atomically write the database to disk (write to .tmp then rename).
-   */
-  flush(): void {
-    // Periodically prune old events to cap DB size for long-running pipelines.
-    // Pruned every 10 flushes: at typical 1-2 flushes/sec during active stages
-    // that is ~5-10s between prunes, keeping each db.export() buffer small.
-    this.flushCount++;
-    if (this.flushCount % 10 === 0) {
-      this.pruneAllEvents();
-    }
-
-    const data = this.db.export();
-    const dir = dirname(this.filePath);
-    mkdirSync(dir, { recursive: true });
-    const tmp = join(dir, `.cccp-db-${randomUUID()}.tmp`);
-    // Write Uint8Array directly — avoids a full copy through Buffer.from().
-    writeFileSync(tmp, data);
-    renameSync(tmp, this.filePath);
-  }
-
-  /**
-   * Prune events for all active runs. Called periodically during flush.
-   */
-  private pruneAllEvents(): void {
-    const results = this.db.exec(
-      `SELECT DISTINCT run_id FROM events`,
-    );
-    if (results.length === 0) return;
-    for (const row of results[0].values) {
-      this.pruneEvents(row[0] as string);
-    }
-  }
-
-  /**
-   * Reload the database from disk (for read-only consumers in separate processes).
-   */
-  reload(): void {
-    if (!existsSync(this.filePath)) return;
-    const buffer = readFileSync(this.filePath);
-    const sql = SQL!;
-    this.db.close();
-    this.db = new sql.Database(buffer);
+    this.db
+      .prepare(
+        `DELETE FROM events WHERE run_id = ? AND stage_name = ?
+         AND event_type LIKE 'child_%'
+         AND json_extract(data_json, '$.childStage') IN (${placeholders})`,
+      )
+      .run(runId, parentStageName, ...childStageNames);
   }
 
   close(): void {
     this.db.close();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Row type shapes (internal to this module)
+// ---------------------------------------------------------------------------
+
+interface RunRow {
+  run_id: string;
+  pipeline: string;
+  project: string;
+  pipeline_file: string;
+  artifact_dir: string;
+  project_dir: string | null;
+  started_at: string;
+  completed_at: string | null;
+  status: string;
+  stages_json: string;
+  stage_order_json: string;
+  gate_json: string | null;
+  session_id: string | null;
+  updated_at: string;
+  pause_requested?: number;
+}
+
+interface EventRow {
+  id: number;
+  run_id: string;
+  timestamp: string;
+  event_type: string;
+  stage_name: string | null;
+  data_json: string | null;
+  created_at: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -587,13 +488,11 @@ const instances = new Map<string, CccpDatabase>();
  * Get or create a CccpDatabase for the given project directory.
  * Caches the instance for reuse within the same process.
  */
-export async function openDatabase(
-  projectDir: string,
-): Promise<CccpDatabase> {
+export function openDatabase(projectDir: string): CccpDatabase {
   const key = resolve(projectDir);
   let db = instances.get(key);
   if (!db) {
-    db = await CccpDatabase.open(projectDir);
+    db = CccpDatabase.open(projectDir);
     instances.set(key, db);
   }
   return db;
@@ -609,35 +508,4 @@ export function closeDatabase(projectDir: string): void {
     db.close();
     instances.delete(key);
   }
-}
-
-/**
- * Destroy all cached database instances and discard the sql.js WASM module.
- *
- * WASM linear memory (WebAssembly.Memory) can grow but never shrink. Over
- * many `reload()` cycles the WASM heap grows unboundedly even though each
- * `Database.close()` frees memory *within* the heap. Calling this function
- * drops all references to the old WASM module so V8 can GC its backing
- * ArrayBuffer, then the next `openDatabase()` lazily re-initialises a
- * fresh module with minimal memory.
- *
- * Safe to call at any time — the next database operation will transparently
- * re-initialise. Callers should avoid calling this while another async
- * database operation is in-flight on the same tick (single-threaded JS
- * guarantees this naturally between await points).
- */
-export function reclaimWasmMemory(): void {
-  for (const db of instances.values()) {
-    db.close();
-  }
-  instances.clear();
-  SQL = null;
-}
-
-/**
- * Diagnostics snapshot of the sql.js singleton cache. Used by the memory
- * JSONL logger to track whether the WASM module grows across reclaim cycles.
- */
-export function getDbDiagnostics(): { instances: number; initialized: boolean } {
-  return { instances: instances.size, initialized: SQL !== null };
 }

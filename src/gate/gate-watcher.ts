@@ -1,5 +1,4 @@
 import { loadState } from "../state.js";
-import { reclaimWasmMemory } from "../db.js";
 import type { GateInfo } from "../types.js";
 import type { GateResponse, GateStrategy } from "./gate-strategy.js";
 import { notifyGateRequired } from "../tui/cmux.js";
@@ -10,9 +9,6 @@ import type { DbService } from "../db-service.js";
 // ---------------------------------------------------------------------------
 
 const POLL_INTERVAL_MS = 5000;
-
-/** Reclaim sql.js WASM memory every ~15 minutes (180 polls × 5s). */
-const WASM_RECLAIM_EVERY = 180;
 
 /** Safety timeout: 12 hours at 5s per poll = 8640 polls. */
 const MAX_POLL_COUNT = 8640;
@@ -50,12 +46,6 @@ export class FilesystemGateStrategy implements GateStrategy {
             clearInterval(interval);
             reject(new Error(`Gate "${gate.stageName}" timed out after ${MAX_POLL_COUNT} polls (~12 hours)`));
             return;
-          }
-
-          // Periodically reclaim sql.js WASM linear memory (only when
-          // no DbService is provided — the service manages its own timer).
-          if (!this.dbService && pollCount % WASM_RECLAIM_EVERY === 0) {
-            reclaimWasmMemory();
           }
 
           const state = await loadState(this.runId, this.projectDir, true);

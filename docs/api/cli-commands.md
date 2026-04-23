@@ -196,11 +196,10 @@ npx @alevental/cccp dashboard -r <run-id-prefix> [options]
 ### Behavior
 
 The standalone dashboard:
-- Reads pipeline state from SQLite (reloads from disk on each poll for cross-process visibility)
+- Reads pipeline state from SQLite (WAL mode makes the runner's committed writes immediately visible — no reload step)
 - Tails `.cccp/*.stream.jsonl` files for live agent activity (via `StreamTailer`)
 - Polls the database every 500ms for state changes (5s when gate-idle)
 - Exits automatically when the pipeline completes
-- Reclaims sql.js WASM memory every ~15 minutes via `DbService` to prevent unbounded heap growth
 
 When `--scope` is used, the dashboard loads the parent run's state but displays only the child pipeline's stages, activity, and events. The `child_*` event prefixes are stripped so the scoped dashboard looks like a standalone pipeline view.
 

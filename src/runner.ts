@@ -15,7 +15,7 @@ import { writeMcpConfigFile } from "./mcp/mcp-config.js";
 import { runAutoresearchCycle, type AutoresearchCycleOptions } from "./autoresearch.js";
 import { runGeCycle, dispatchGeEvaluatorWithFeedback, type GeCycleOptions } from "./ge.js";
 import { runLoopCycle, type LoopCycleOptions } from "./loop.js";
-import { openDatabase, reclaimWasmMemory } from "./db.js";
+import { openDatabase } from "./db.js";
 import {
   MemoryLogger,
   isMemoryLogEnabled,
@@ -157,7 +157,7 @@ async function collectStageOutputs(
   }
 
   // Store in checkpoints (persists across resume).
-  const db = await openDatabase(ctx.projectDir);
+  const db = openDatabase(ctx.projectDir);
   for (const [key, value] of Object.entries(collected)) {
     db.setCheckpoint(state.runId, stage.name, key, value);
   }
@@ -1806,7 +1806,7 @@ async function runStages(
   for (const step of plan) {
     // --- Pause check: stop at clean breakpoint if requested ---
     if (!ctx.dryRun) {
-      const db = await openDatabase(ctx.projectDir);
+      const db = openDatabase(ctx.projectDir);
       if (db.isPauseRequested(state.runId)) {
         db.setPauseRequested(state.runId, false);
         const nextStage = step.stages[0].name;
@@ -1900,23 +1900,6 @@ export interface RunOptions {
 }
 
 /**
- * WASM reclaim interval for the main runner process.
- *
- * sql.js linear memory grows but never shrinks. Every `saveState` and
- * `saveStateWithEvent` calls `db.export()`, which churns Uint8Array
- * allocations inside the WASM heap. Over multi-hour runs this accumulates
- * to gigabytes. Periodically dropping the sql.js module lets V8 GC the
- * backing ArrayBuffer; the next `openDatabase()` lazily re-initialises.
- *
- * Safe to fire between await boundaries: every caller of `openDatabase`
- * uses the returned handle synchronously (no awaits between fetch and use),
- * so the singleton cache being cleared mid-timer can't cause use-after-free.
- */
-const WASM_RECLAIM_INTERVAL_MS = Number(
-  process.env.CCCP_WASM_RECLAIM_MS ?? 10 * 60 * 1000, // 10 minutes
-);
-
-/**
  * Run all stages in a pipeline sequentially.
  * Handles top-level lifecycle: state creation, DB persistence, gate strategy,
  * cmux notifications, and temp file cleanup.
@@ -1956,23 +1939,6 @@ export async function runPipeline(
     ctx.visitedPipelines = new Set([resolve(ctx.pipelineFile)]);
   }
 
-  // Schedule periodic WASM reclaim at top level only (sub-pipelines share the process).
-  // Skip in dry-run (no DB writes) and when interval is 0/negative (disabled).
-  let wasmReclaimTimer: ReturnType<typeof setInterval> | null = null;
-  if (isTopLevel && !ctx.dryRun && WASM_RECLAIM_INTERVAL_MS > 0) {
-    wasmReclaimTimer = setInterval(() => {
-      const before = process.memoryUsage();
-      reclaimWasmMemory();
-      const after = process.memoryUsage();
-      getLogger(ctx).debug(
-        "wasm",
-        "reclaim",
-        { rssBefore: before.rss, rssAfter: after.rss, abBefore: before.arrayBuffers, abAfter: after.arrayBuffers },
-      );
-    }, WASM_RECLAIM_INTERVAL_MS);
-    wasmReclaimTimer.unref();
-  }
-
   // ---- Diagnostics: persistent memory JSONL sampling (non-TUI runs only) ----
   // The TUI path creates its own logger in startDashboard() because the
   // dashboard's poll loop is the natural sampling cadence. Headless /
@@ -1992,11 +1958,11 @@ export async function runPipeline(
     const intervalMs = Number(process.env.CCCP_MEM_SAMPLE_MS ?? 5000);
     if (intervalMs > 0) {
       const thresholdSnapshotter = new ThresholdSnapshotter(ctx.artifactDir, runIdForLog);
-      memSampleTimer = setInterval(async () => {
+      memSampleTimer = setInterval(() => {
         const mu = process.memoryUsage();
         thresholdSnapshotter.maybeSnapshot(mu.rss, mu.heapUsed);
         try {
-          const db = await openDatabase(ctx.projectDir);
+          const db = openDatabase(ctx.projectDir);
           const count = db.countEvents(runIdForLog);
           memLogger!.record(count);
         } catch {
@@ -2047,7 +2013,6 @@ export async function runPipeline(
 
     return pipelineResult;
   } finally {
-    if (wasmReclaimTimer) clearInterval(wasmReclaimTimer);
     if (memSampleTimer) clearInterval(memSampleTimer);
     memLogger?.close();
     uninstallHeapHandlers();

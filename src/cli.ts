@@ -140,7 +140,7 @@ program
     const projectConfig = await loadProjectConfig(projectDir);
 
     const { openDatabase } = await import("./db.js");
-    const db = await openDatabase(projectDir);
+    const db = openDatabase(projectDir);
     const existingState = db.getRunByIdPrefix(opts.run);
     if (!existingState) {
       console.error(`No run matching "${opts.run}". Use \`cccp runs\` to list available runs.`);
@@ -224,7 +224,7 @@ program
   .action(async (opts) => {
     const dashProjectDir = resolve(opts.projectDir ?? process.cwd());
     const { openDatabase } = await import("./db.js");
-    const db = await openDatabase(dashProjectDir);
+    const db = openDatabase(dashProjectDir);
     const existingState = db.getRunByIdPrefix(opts.run);
 
     if (!existingState) {

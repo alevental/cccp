@@ -21,8 +21,8 @@ async function resolveRun(
   runIdPrefix?: string,
 ): Promise<{ run: DiscoveredRun } | { error: string }> {
   const projectDir = process.cwd();
-  // Reload DB from disk via the service — the runner (separate process) may have written new state.
-  await dbService.db();
+  // WAL mode: readers see committed writes immediately, no manual reload needed.
+  dbService.db();
   const runs = await discoverRuns(projectDir);
 
   if (runs.length === 0) {
@@ -172,8 +172,7 @@ export async function startMcpServer(): Promise<void> {
     "List all pipeline runs (active and completed). Shows run ID, pipeline name, project, status, and any pending gates.",
     {},
     async () => {
-      // Reload DB from disk via the service before reading runs.
-      await dbService.db();
+      dbService.db();
       const runs = await discoverRuns(process.cwd());
 
       if (runs.length === 0) {
@@ -290,9 +289,8 @@ export async function startMcpServer(): Promise<void> {
         );
       }
 
-      const db = await dbService.db();
+      const db = dbService.db();
       db.setPauseRequested(state.runId, true);
-      db.flush();
 
       const short = state.runId.slice(0, 8);
       return textResult(
@@ -610,7 +608,7 @@ export async function startMcpServer(): Promise<void> {
   );
 
   // --- Start DB service and server ---
-  dbService = new DbService({ projectDir, mode: "reader" });
+  dbService = new DbService({ projectDir });
   dbService.start();
 
   const transport = new StdioServerTransport();

@@ -140,8 +140,9 @@ export async function loadState(
 ): Promise<PipelineState | null> {
   try {
     const dir = projectDir ?? resolveProjectDir();
-    const db = await openDatabase(dir);
-    if (reloadFromDisk) db.reload();
+    const db = openDatabase(dir);
+    // reloadFromDisk is a no-op with WAL mode — readers see committed writes immediately.
+    void reloadFromDisk;
     return db.getRun(runId);
   } catch (err) {
     // Log database errors but don't crash — callers handle null gracefully.
@@ -160,9 +161,8 @@ export async function saveState(
   state: PipelineState,
 ): Promise<void> {
   const dir = resolveProjectDir(state);
-  const db = await openDatabase(dir);
+  const db = openDatabase(dir);
   db.upsertRun(state, state.artifactDir);
-  db.flush();
 }
 
 /**
@@ -176,10 +176,9 @@ export async function saveStateWithEvent(
   eventData?: unknown,
 ): Promise<void> {
   const dir = resolveProjectDir(state);
-  const db = await openDatabase(dir);
+  const db = openDatabase(dir);
   db.upsertRun(state, state.artifactDir);
   db.appendEvent(state.runId, eventType, stageName, eventData);
-  db.flush();
 }
 
 // ---------------------------------------------------------------------------
@@ -363,11 +362,10 @@ export async function resetFromStage(
     delete state.gate;
 
     const dir = resolveProjectDir(state);
-    const db = await openDatabase(dir);
+    const db = openDatabase(dir);
     db.deleteEventsForStages(state.runId, stagesToReset);
     db.deleteCheckpointsForStages(state.runId, stagesToReset);
     db.upsertRun(state, state.artifactDir);
-    db.flush();
 
     await cleanStageArtifacts(state.artifactDir, stagesToReset);
     return stagesToReset;
@@ -418,12 +416,11 @@ export async function resetFromStage(
 
   // DB cleanup.
   const dir = resolveProjectDir(state);
-  const db = await openDatabase(dir);
+  const db = openDatabase(dir);
   const parentStageName = ancestors[ancestors.length - 1].stageName;
   db.deleteChildEventsForStages(state.runId, parentStageName, childStagesToReset);
   db.deleteCheckpointsForStages(state.runId, childStagesToReset);
   db.upsertRun(state, state.artifactDir);
-  db.flush();
 
   // Clean child filesystem artifacts.
   await cleanStageArtifacts(current.artifactDir, childStagesToReset);
@@ -445,7 +442,7 @@ export async function discoverRuns(
   filter?: RunFilter,
 ): Promise<DiscoveredRun[]> {
   try {
-    const db = await openDatabase(projectDir);
+    const db = openDatabase(projectDir);
     return db.findRuns(filter);
   } catch (err) {
     // Log database errors but don't crash — callers handle empty list gracefully.

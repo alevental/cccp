@@ -2,7 +2,6 @@ import React, { useRef } from "react";
 import { Box, Text, useStdout } from "ink";
 import { getHeapSpaceStatistics } from "node:v8";
 import { snapshotRegistry, type RegistrySnapshot } from "../diagnostics/runtime-registry.js";
-import { getDbDiagnostics } from "../db.js";
 
 // ---------------------------------------------------------------------------
 // Sample types + bounded ring buffer
@@ -317,22 +316,18 @@ export function MemoryView({ samples, events, activities, dispatches, chromeHeig
 }
 
 // ---------------------------------------------------------------------------
-// Tracked leak suspects — live counters from the diagnostics registry +
-// sql.js singleton cache. Captures a baseline on first render and renders
-// deltas in red when a counter grew > 2x or > 500 absolute.
+// Tracked leak suspects — live counters from the diagnostics registry.
+// Captures a baseline on first render and renders deltas in red when a
+// counter grew > 2x or > 500 absolute.
 // ---------------------------------------------------------------------------
 
 function LeakSuspectsPanel() {
-  const baselineRef = useRef<{
-    reg: RegistrySnapshot;
-    sqlJs: { instances: number; initialized: boolean };
-  } | null>(null);
+  const baselineRef = useRef<{ reg: RegistrySnapshot } | null>(null);
 
   const reg = snapshotRegistry();
-  const sqlJs = getDbDiagnostics();
 
   if (!baselineRef.current) {
-    baselineRef.current = { reg, sqlJs };
+    baselineRef.current = { reg };
   }
   const base = baselineRef.current;
 
@@ -342,7 +337,6 @@ function LeakSuspectsPanel() {
     { label: "dispatchMap", curr: reg.dispatchMapSize, base: base.reg.dispatchMapSize },
     { label: "busListeners", curr: reg.activityBusListeners, base: base.reg.activityBusListeners },
     { label: "streamTailers", curr: reg.streamTailerCount, base: base.reg.streamTailerCount },
-    { label: "sqlJsInstances", curr: sqlJs.instances, base: base.sqlJs.instances },
   ];
   const accumTotal = Object.values(reg.accumulatorEntryCounts).reduce((a, b) => a + b, 0);
   const accumBase = Object.values(base.reg.accumulatorEntryCounts).reduce((a, b) => a + b, 0);

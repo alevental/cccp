@@ -33,7 +33,7 @@ All tools that accept a `run_id` parameter use prefix matching with the followin
 - Prefix matching (8+ characters recommended) selects the matching run
 - Ambiguous prefixes return an error with guidance
 
-The MCP server uses a `DbService` in `"reader"` mode which reloads the database from disk before each read and periodically reclaims sql.js WASM memory. The `GateNotifier` shares this service instance.
+The MCP server uses a `DbService` handle cache. With `node:sqlite` in WAL mode, committed writes from the runner are visible to the MCP server's `DatabaseSync` handle immediately — no reload needed. The `GateNotifier` shares the same `DbService` instance.
 
 ---
 

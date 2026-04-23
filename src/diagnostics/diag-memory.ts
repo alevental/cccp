@@ -123,7 +123,6 @@ function extractCounters(s: MemorySampleExt): Record<string, number> {
     activityMapSize: c.activityMapSize,
     dispatchStartTimesSize: c.dispatchStartTimesSize,
     activityBusListeners: c.activityBusListeners,
-    sqlJsCachedInstances: c.sqlJsCachedInstances,
     streamTailerCount: c.streamTailerCount,
     eventCountTotal: c.eventCountTotal,
     stateJsonBytes: c.stateJsonBytes,

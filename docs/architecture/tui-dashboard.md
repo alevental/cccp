@@ -301,7 +301,7 @@ Pressing `m` replaces the DetailLog with a memory diagnostics view for debugging
 | **V8 heap spaces** | Per-space used/committed breakdown, sorted by used size (via `v8.getHeapSpaceStatistics()`) |
 | **In-process state** | Event count, activity map size, dispatch times size, sample buffer fill |
 
-The `arrayBuffers` metric is the key WASM signal — both yoga-layout and sql.js grow this counter. Separating it from JS heap growth identifies whether leaks are in WASM or JS objects.
+The `arrayBuffers` metric surfaces yoga-layout (Ink's layout engine) WASM growth. Separating it from JS heap growth identifies whether leaks are in WASM or JS objects. SQLite memory is not in `arrayBuffers` — `node:sqlite` uses native malloc, bounded by SQLite's page cache.
 
 ```typescript
 interface MemorySample {
@@ -317,7 +317,9 @@ interface MemorySample {
 
 ## Memory Optimization
 
-Two WASM modules contribute to memory growth during long runs: **yoga-layout** (Ink's layout engine) and **sql.js** (SQLite compiled to WASM). Both suffer from the same fundamental constraint: WASM linear memory (`WebAssembly.Memory`) can grow but never shrink. Freed allocations are reusable within the WASM heap, but the backing `ArrayBuffer` pages are never returned to V8. Over multi-hour runs this can accumulate to gigabytes.
+One WASM module still contributes to memory growth during long runs: **yoga-layout** (Ink's layout engine). WASM linear memory (`WebAssembly.Memory`) can grow but never shrink — freed allocations are reusable inside the WASM heap, but the backing `ArrayBuffer` pages are never returned to V8. Over multi-hour runs this can accumulate to gigabytes.
+
+SQLite is no longer on this list. Since [ADR-003](../adr/003-node-sqlite-over-sql-js.md) CCCP uses Node's built-in `node:sqlite` (native, not WASM). Memory is bounded by SQLite's page cache (default ~2 MB).
 
 ### Render throttle (10 FPS)
 
@@ -348,36 +350,11 @@ const recycleTimer = setInterval(() => {
 }, RECYCLE_INTERVAL_MS);
 ```
 
-### Centralized WASM reclaim (DbService, sql.js)
+### DB handle cache (DbService)
 
-Cross-process readers (standalone dashboard, gate-notifier, MCP server) call `db.reload()` on every poll cycle, which creates a new `sql.Database` from disk. Each allocation grows the sql.js WASM heap. The `DbService` (`src/db-service.ts`) centralises this: in `"reader"` mode it reloads on every `.db()` call and runs a periodic `reclaimWasmMemory()` timer (default 15 minutes). This closes all cached `CccpDatabase` instances, clears the singleton cache, and sets the sql.js WASM module reference to `null`, dropping all references so V8 can GC the backing `ArrayBuffer`. The next `openDatabase()` call lazily re-initialises a fresh module with minimal memory.
+Cross-process readers (standalone dashboard, gate-notifier, MCP server) read from SQLite via `DbService` (`src/db-service.ts`), which is a thin per-projectDir handle cache over `openDatabase()`. With WAL mode committed writes are visible to the reader's `DatabaseSync` handle immediately — no reload, no export/import. The class retains `start()` / `stop()` lifecycle hooks as no-ops for future extension points.
 
-```typescript
-// db-service.ts
-export class DbService {
-  start(): void {
-    // reader mode: periodic reclaimWasmMemory() on unref'd timer
-  }
-  async db(): Promise<CccpDatabase> {
-    // reader mode: reload from disk before returning handle
-  }
-  stop(): void {
-    // clear timer + final reclaimWasmMemory()
-  }
-}
-```
-
-The standalone dashboard creates a `DbService` at launch and stops it on completion. The MCP server creates one at startup and passes it to the `GateNotifier`. The inline dashboard (used by `cccp run` and `cccp resume`) does not need a `DbService` — it reads from the in-process singleton without reloading.
-
-### Runner-side WASM reclaim (src/runner.ts)
-
-The main pipeline runner drives `db.export()` on every `saveState` / `saveStateWithEvent`, each of which materialises a fresh `Uint8Array` inside the sql.js WASM heap. Without periodic reclamation, the WASM `arrayBuffers` counter grows monotonically over multi-hour runs and eventually hits V8's 4GB heap cap.
-
-`runPipeline()` starts a `setInterval(() => reclaimWasmMemory(), WASM_RECLAIM_INTERVAL_MS)` at top-level invocation (sub-pipelines share the process and skip the timer). The timer is `.unref()`'d and cleared in the `finally` block so tests and short CLI invocations don't hang. Firing is safe between `await` boundaries because every `openDatabase()` caller (in `state.ts`, `runner.ts`, `dashboard.tsx`, `gate-notifier.ts`) uses the returned handle synchronously — the singleton cache being cleared mid-timer cannot cause use-after-free.
-
-Default interval: 10 minutes, configurable via `CCCP_WASM_RECLAIM_MS` env var (set to `0` to disable).
-
-In addition, `src/db.ts` prunes the events table every 10 flushes (down from 50) so each `db.export()` buffer stays close to the 500-event cap during busy stages.
+The event-pruning logic in `src/db.ts` still caps `events` at 500 rows per run (most recent), keeping row count bounded during long pipelines.
 
 ## cmux Integration
 
