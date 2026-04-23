@@ -1,6 +1,6 @@
 {
   "name": "@alevental/cccp",
-  "version": "0.16.2",
+  "version": "0.16.3",
   "description": "Claude Code and Cmux Pipeline Reagent — deterministic YAML-based pipeline orchestration",
   "type": "module",
   "bin": {

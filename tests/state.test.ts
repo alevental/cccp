@@ -377,6 +377,37 @@ describe("resetFromStage", () => {
     closeDatabase(projectDir);
   });
 
+  it("clears nested children when resetting a top-level sub-pipeline stage", async () => {
+    const projectDir = tmpProjectDir();
+    const state = createState("parent", "proj", "p.yaml", [
+      { name: "setup", type: "agent" },
+      { name: "sub", type: "pipeline" },
+      { name: "after", type: "agent" },
+    ], join(projectDir, "artifacts"), projectDir);
+    state.stages.setup.status = "passed";
+    state.stages.sub.status = "passed";
+    state.stages.sub.children = createState("child", "proj", "child.yaml", [
+      { name: "c1", type: "agent" },
+      { name: "c2", type: "agent" },
+    ], join(projectDir, "artifacts", "sub"));
+    state.stages.sub.children.stages.c1.status = "passed";
+    state.stages.sub.children.stages.c2.status = "passed";
+    state.stages.sub.children.status = "passed";
+    state.stages.after.status = "passed";
+    state.status = "passed";
+    await saveState(state);
+
+    const reset = await resetFromStage(state, "sub");
+
+    expect(reset).toEqual(["sub", "after"]);
+    expect(state.stages.sub.status).toBe("pending");
+    // children must be cleared so the sub-pipeline re-runs from scratch.
+    expect(state.stages.sub.children).toBeUndefined();
+    expect(state.status).toBe("running");
+
+    closeDatabase(projectDir);
+  });
+
   it("resets child stages via dotted path", async () => {
     const projectDir = tmpProjectDir();
     const state = createState("parent", "proj", "p.yaml", [

@@ -307,6 +307,10 @@ function resetStagesInPipeline(
     delete stage.outputs;
     delete stage.durationMs;
     delete stage.error;
+    // Drop nested sub-pipeline state so `runPipelineStage` re-creates it from
+    // scratch. Otherwise resume reuses the prior child state (whose stages are
+    // marked "passed") and skips the sub-pipeline entirely.
+    delete stage.children;
   }
   return stagesToReset;
 }

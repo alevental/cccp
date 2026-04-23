@@ -759,4 +759,64 @@ stages:
     expect(resumeDispatcher.calls[0].userPrompt).toContain("Second child task");
     expect(resumeDispatcher.calls[1].userPrompt).toContain("Third child task");
   });
+
+  it("--from <sub-pipeline-stage> re-runs the entire sub-pipeline from scratch", async () => {
+    const dir = tmpProjectDir();
+    await writeAgent(dir, "worker.md", "# Worker\nDo work.");
+
+    const subDir = join(dir, "pipelines");
+    await mkdir(subDir, { recursive: true });
+    await writeFile(join(subDir, "from-sub.yaml"), `
+name: from-sub
+stages:
+  - name: child-a
+    type: agent
+    agent: agents/worker.md
+    task: A task
+  - name: child-b
+    type: agent
+    agent: agents/worker.md
+    task: B task
+`, "utf-8");
+
+    const pipeline = await writePipeline(dir, `
+name: from-parent
+stages:
+  - name: run-sub
+    type: pipeline
+    file: pipelines/from-sub.yaml
+`);
+
+    // First run: sub-pipeline fully passes.
+    const firstDispatcher = new ScriptedDispatcher([
+      async () => ({ exitCode: 0, outputExists: false, durationMs: 1 }),
+      async () => ({ exitCode: 0, outputExists: false, durationMs: 1 }),
+    ]);
+    const result1 = await runPipeline(
+      buildTestContext({ projectDir: dir, pipeline, dispatcher: firstDispatcher }),
+    );
+    expect(result1.status).toBe("passed");
+    expect(firstDispatcher.calls).toHaveLength(2);
+
+    // Load parent state and reset from the sub-pipeline stage.
+    const { openDatabase } = await import("../src/db.js");
+    const { resetFromStage } = await import("../src/state.js");
+    const db = await openDatabase(dir);
+    const parentState = db.listRuns().find(r => r.state.pipeline === "from-parent")!.state;
+    await resetFromStage(parentState, "run-sub");
+
+    // Resume should re-dispatch BOTH child stages, not skip them.
+    const resumeDispatcher = new ScriptedDispatcher([
+      async () => ({ exitCode: 0, outputExists: false, durationMs: 1 }),
+      async () => ({ exitCode: 0, outputExists: false, durationMs: 1 }),
+    ]);
+    const result2 = await runPipeline(
+      buildTestContext({ projectDir: dir, pipeline, dispatcher: resumeDispatcher }),
+      { existingState: parentState },
+    );
+    expect(result2.status).toBe("passed");
+    expect(resumeDispatcher.calls).toHaveLength(2);
+    expect(resumeDispatcher.calls[0].userPrompt).toContain("A task");
+    expect(resumeDispatcher.calls[1].userPrompt).toContain("B task");
+  });
 });
