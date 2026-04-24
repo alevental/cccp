@@ -502,6 +502,14 @@ export async function launchDashboard(
   initialState: PipelineState,
   scopeStage?: string,
 ): Promise<void> {
+  // Drain react-reconciler's PerformanceMeasure emissions — the default
+  // perf_hooks buffer is unbounded and Ink re-renders at 10 FPS produce
+  // hundreds of measures per tick. Must be installed before Ink mounts.
+  // This path is used for the standalone dashboard (`cccp dashboard`) AND
+  // for scoped sub-pipeline panes auto-launched in cmux — without this
+  // install, scoped dashboards leaked the same 426k-measure retention
+  // pattern we fixed in the inline dashboard in v0.17.5.
+  const uninstallPerfSink = installPerfMeasureSink();
   const svc = new DbService({ projectDir });
   svc.start();
   const memSamples = new MemorySampleRing();
@@ -535,6 +543,7 @@ export async function launchDashboard(
           svc.stop();
           memLogger?.close();
           uninstallHeap();
+          uninstallPerfSink();
           unmount();
           resolve();
         }}
@@ -546,6 +555,7 @@ export async function launchDashboard(
       svc.stop();
       memLogger?.close();
       uninstallHeap();
+      uninstallPerfSink();
       resolve();
     });
   });
