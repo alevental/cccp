@@ -17,7 +17,9 @@ type AccumulatorCountGetter = () => Record<string, number>;
 
 let activityMapSize: SizedMapGetter = () => 0;
 let dispatchMapSize: SizedMapGetter = () => 0;
+let eventHistorySize: SizedMapGetter = () => 0;
 let accumulatorCounts: AccumulatorCountGetter = () => ({});
+const monitorAccumulators = new Map<string, SizedMapGetter>();
 let streamTailerCount = 0;
 let activityBusRef: typeof ActivityBusType | null = null;
 
@@ -33,10 +35,22 @@ export function registerDispatchMap(getter: SizedMapGetter): () => void {
   return () => { dispatchMapSize = () => 0; };
 }
 
+/** Dashboard registers a function that returns its event-history array length. */
+export function registerEventHistory(getter: SizedMapGetter): () => void {
+  eventHistorySize = getter;
+  return () => { eventHistorySize = () => 0; };
+}
+
 /** Agent monitor registers a function that returns per-agent accumulator entry counts. */
 export function registerAccumulatorGetter(getter: AccumulatorCountGetter): () => void {
   accumulatorCounts = getter;
   return () => { accumulatorCounts = () => ({}); };
+}
+
+/** Each StreamDetailAccumulator-bearing tailer registers its own entry-count getter, keyed by agent name. */
+export function registerMonitorAccumulator(name: string, getter: SizedMapGetter): () => void {
+  monitorAccumulators.set(name, getter);
+  return () => { monitorAccumulators.delete(name); };
 }
 
 /** StreamTailer / SingleFileTailer call these in their constructor and stop(). */
@@ -57,17 +71,21 @@ export function registerActivityBus(bus: typeof ActivityBusType): void {
 export interface RegistrySnapshot {
   activityMapSize: number;
   dispatchMapSize: number;
+  eventHistorySize: number;
   streamTailerCount: number;
   activityBusListeners: number;
   accumulatorEntryCounts: Record<string, number>;
 }
 
 export function snapshotRegistry(): RegistrySnapshot {
+  const counts: Record<string, number> = { ...accumulatorCounts() };
+  for (const [name, get] of monitorAccumulators) counts[name] = get();
   return {
     activityMapSize: activityMapSize(),
     dispatchMapSize: dispatchMapSize(),
+    eventHistorySize: eventHistorySize(),
     streamTailerCount,
     activityBusListeners: activityBusRef?.listenerCount("activity") ?? 0,
-    accumulatorEntryCounts: accumulatorCounts(),
+    accumulatorEntryCounts: counts,
   };
 }

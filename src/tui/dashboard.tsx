@@ -25,6 +25,7 @@ import {
 import {
   registerActivityMap,
   registerDispatchMap,
+  registerEventHistory,
 } from "../diagnostics/runtime-registry.js";
 import { debug as logDebug } from "../logger.js";
 
@@ -77,12 +78,16 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
   activitiesRef.current = activities;
   const dispatchRef = useRef<Map<string, number>>(new Map());
   dispatchRef.current = dispatchStartTimes;
+  const eventsRef = useRef<StateEvent[]>([]);
+  eventsRef.current = events;
   useEffect(() => {
     const releaseA = registerActivityMap(() => activitiesRef.current.size);
     const releaseD = registerDispatchMap(() => dispatchRef.current.size);
+    const releaseE = registerEventHistory(() => eventsRef.current.length);
     return () => {
       releaseA();
       releaseD();
+      releaseE();
     };
   }, []);
   const lastEventId = useRef(0);

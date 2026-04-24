@@ -232,7 +232,7 @@ export function MemoryView({ samples, events, activities, dispatches, chromeHeig
 
   // Cap heap-space rows so the whole view fits roughly within the pane.
   const availableRows = Math.max(8, rows - chromeHeight - 2);
-  const reservedRows = 10; // title + snapshot + delta + rate + 3 sparkline rows + counters block
+  const reservedRows = 11; // title + snapshot + delta + rate + 3 sparkline rows + counters block
   const maxSpaceRows = Math.max(3, availableRows - reservedRows);
   const visibleSpaces = spaceEntries.slice(0, maxSpaceRows);
 
@@ -335,12 +335,13 @@ function LeakSuspectsPanel() {
   const rows: Row[] = [
     { label: "activityMap", curr: reg.activityMapSize, base: base.reg.activityMapSize },
     { label: "dispatchMap", curr: reg.dispatchMapSize, base: base.reg.dispatchMapSize },
+    { label: "eventHistory", curr: reg.eventHistorySize, base: base.reg.eventHistorySize },
     { label: "busListeners", curr: reg.activityBusListeners, base: base.reg.activityBusListeners },
     { label: "streamTailers", curr: reg.streamTailerCount, base: base.reg.streamTailerCount },
   ];
   const accumTotal = Object.values(reg.accumulatorEntryCounts).reduce((a, b) => a + b, 0);
   const accumBase = Object.values(base.reg.accumulatorEntryCounts).reduce((a, b) => a + b, 0);
-  rows.push({ label: "accumulatorEntries", curr: accumTotal, base: accumBase });
+  rows.push({ label: "monitorEntries", curr: accumTotal, base: accumBase });
 
   function color(r: Row): "red" | "yellow" | undefined {
     const delta = r.curr - r.base;

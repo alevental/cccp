@@ -12,7 +12,11 @@ import {
   type ToolUseBlock,
   type ToolResultBlock,
 } from "./stream.js";
-import { incTailerCount, decTailerCount } from "../diagnostics/runtime-registry.js";
+import {
+  incTailerCount,
+  decTailerCount,
+  registerMonitorAccumulator,
+} from "../diagnostics/runtime-registry.js";
 
 // ---------------------------------------------------------------------------
 // Monitor entry types — full-fidelity event log for the agent-monitor TUI
@@ -234,6 +238,7 @@ export class SingleFileTailer extends EventEmitter {
   private pollInterval: ReturnType<typeof setInterval> | null = null;
   private offset = 0;
   private counted = false;
+  private unregisterAccumulator: (() => void) | null = null;
 
   constructor(
     private filePath: string,
@@ -250,6 +255,10 @@ export class SingleFileTailer extends EventEmitter {
     });
     incTailerCount();
     this.counted = true;
+    this.unregisterAccumulator = registerMonitorAccumulator(
+      agentName,
+      () => this.accumulator.entries.length,
+    );
   }
 
   get detail(): StreamDetailAccumulator {
@@ -286,6 +295,10 @@ export class SingleFileTailer extends EventEmitter {
     if (this.counted) {
       decTailerCount();
       this.counted = false;
+    }
+    if (this.unregisterAccumulator) {
+      this.unregisterAccumulator();
+      this.unregisterAccumulator = null;
     }
   }
 
