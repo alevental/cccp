@@ -272,13 +272,14 @@ Press **`[g]`** to call `global.gc()` and see the reclaim delta. Only works when
 
 ### 5. Tag-gated debug logger (opt-in)
 
-`CCCP_DEBUG=wasm,leak,stream` enables structured debug lines to `.cccp/debug.log` (10 MB rotation; `*` = all tags). Zero overhead when unset (single `Set.has()` check).
+`CCCP_DEBUG=leak,stream` enables structured debug lines to `.cccp/debug.log` (10 MB rotation; `*` = all tags). Zero overhead when unset (single `Set.has()` check).
 
 | Tag | Logs |
 |-----|------|
-| `wasm` | (legacy sql.js reclaim cycles — now a no-op after the v0.17 node:sqlite migration) |
 | `leak` | Dashboard activity-map / dispatch-map cleanup — lists orphaned keys when prefix-match fails |
 | `stream` | StreamTailer open/close |
+
+(The pre-v0.17 `wasm` tag that traced sql.js reclaim cycles has no call sites after the migration to `node:sqlite` — setting it is harmless but a no-op.)
 
 Override rotation size with `CCCP_DEBUG_MAX_MB=10`.
 
@@ -294,7 +295,11 @@ Press `m` in a running dashboard for the live memory view. Panels (all read from
 - **Data sizes**: eventHistoryBytes, maxEventBytes, stateBytes, V8 code/bytecode/external script source — red >500MB, yellow >50MB. *The fastest way to confirm that the leak lives inside event payloads or state snapshots.*
 - **Object tracker**: WeakRef-based `live / created` counts per kind (`PipelineState`, `StateEvent`, `AgentActivity`, plus anything else registered via `trackObject`). A rising `live` number that doesn't plateau points directly at retention of that class.
 - **Active handles**: counts by type (`Timeout`, `FSReqCallback`, `TCPSocketWrap`, …). Growing `Timeout` count means zombie `setInterval`s.
-- **Runtime**: event loop utilization, `maxRSS` (kernel high-water), page faults (minor/major), context switches (vol/invol), `activityBus` monotonic emit count.
+- **Runtime**: event loop utilization, `maxRSS` (kernel high-water), page faults (minor/major), context switches (vol/invol), `activityBus` monotonic emit count, and `perfMeasuresDrained` (monotonic count of `PerformanceMeasure`/mark entries the sink has absorbed — see below).
+
+### The Ink / `perfMeasuresDrained` fix
+
+`ink` / `react-reconciler` call `performance.measure('Text', …)`, `performance.measure('Box', …)` etc. on every fiber commit. Node's default `perf_hooks` timeline buffer is unbounded, so on a multi-hour TUI run this accumulates hundreds of thousands of `PerformanceMeasure` objects (we saw 426,489 in a single 3-hour heap snapshot — ~260 MB of correlated strings/objects, effectively the entire `old_space`). CCCP installs a `PerformanceObserver` at dashboard/agent-monitor mount that drains the default buffer on every callback — `perfMeasuresDrained` reports the running count. A climbing counter with flat heap means the sink is working; if `perfMeasuresDrained` is flat but heap grows, something else is leaking.
 
 Keybind footer: `[p] pause · [m] events/memory · [g] force-gc · [h] heap snapshot`.
 

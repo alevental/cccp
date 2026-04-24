@@ -18,6 +18,7 @@ import {
   resourceUsage,
 } from "./runtime-introspection.js";
 import { snapshotObjects, type ObjectSnapshot } from "./object-tracker.js";
+import { performanceMeasuresDrained } from "./perf-measure-sink.js";
 
 type SizedMapGetter = () => number;
 type AccumulatorCountGetter = () => Record<string, number>;
@@ -132,6 +133,7 @@ export interface RegistrySnapshot {
     involuntaryContextSwitches: number;
   };
   objectTracker: ObjectSnapshot;
+  performanceMeasuresDrained: number;
 }
 
 export function snapshotRegistry(): RegistrySnapshot {
@@ -153,5 +155,6 @@ export function snapshotRegistry(): RegistrySnapshot {
     eventLoopUtilization: eventLoopUtilization(),
     resourceUsage: resourceUsage(),
     objectTracker: snapshotObjects(),
+    performanceMeasuresDrained: performanceMeasuresDrained(),
   };
 }

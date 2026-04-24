@@ -12,7 +12,7 @@ export interface Logger {
   warn(...args: unknown[]): void;
   /**
    * Tag-gated structured debug logging. Disabled by default; enable tags
-   * via the `CCCP_DEBUG` env var, e.g. `CCCP_DEBUG=wasm,leak`, or `*` for all.
+   * via the `CCCP_DEBUG` env var, e.g. `CCCP_DEBUG=leak,stream`, or `*` for all.
    * When the tag isn't enabled the call returns after a single Set lookup —
    * safe to leave in hot paths.
    */

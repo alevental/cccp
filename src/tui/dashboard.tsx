@@ -32,6 +32,7 @@ import {
   registerStateBytes,
 } from "../diagnostics/runtime-registry.js";
 import { trackObject } from "../diagnostics/object-tracker.js";
+import { installPerfMeasureSink } from "../diagnostics/perf-measure-sink.js";
 import { debug as logDebug } from "../logger.js";
 
 // ---------------------------------------------------------------------------
@@ -570,6 +571,10 @@ export function startDashboard(
   projectDir: string,
   initialState: PipelineState,
 ): InlineDashboardHandle {
+  // Drain react-reconciler's PerformanceMeasure emissions — they otherwise
+  // accumulate unbounded in Node's default perf timeline buffer. Must be
+  // installed before Ink mounts so the first-render batch is caught too.
+  const uninstallPerfSink = installPerfMeasureSink();
   const dashboardStartTime = Date.now();
   const memSamples = new MemorySampleRing();
   const memLogger = isMemoryLogEnabled()
@@ -617,6 +622,7 @@ export function startDashboard(
       clearInterval(recycleTimer);
       instance.unmount();
       memLogger?.close();
+      uninstallPerfSink();
     },
   };
 }

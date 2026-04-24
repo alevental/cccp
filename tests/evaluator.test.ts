@@ -85,9 +85,53 @@ No overall line here.`;
     expect(result.outcome).toBe("parse_error");
   });
 
-  it("ignores Overall in wrong heading level", () => {
+  // Post-v0.17.5: the parser accepts H1–H6, bold, and plain-line variants
+  // so a one-character format drift doesn't kill hours of upstream work.
+  // Regression driven by a real incident — `## Overall: PASS` (H2 instead
+  // of H3) caused a 5h pipeline to halt with "Evaluation parse error"
+  // after task-11 completed successfully.
+  it("accepts H2 Overall line (regression: bug report)", () => {
     const result = parseEvaluationContent("## Overall: PASS");
-    expect(result.outcome).toBe("parse_error");
+    expect(result.outcome).toBe("pass");
+    expect(result.rawLine).toBe("## Overall: PASS");
+  });
+
+  it("accepts H1 Overall line", () => {
+    const result = parseEvaluationContent("# Overall: FAIL");
+    expect(result.outcome).toBe("fail");
+  });
+
+  it("accepts H4-H6 Overall line", () => {
+    expect(parseEvaluationContent("#### Overall: PASS").outcome).toBe("pass");
+    expect(parseEvaluationContent("##### Overall: FAIL").outcome).toBe("fail");
+    expect(parseEvaluationContent("###### Overall: PASS").outcome).toBe("pass");
+  });
+
+  it("accepts bold Overall line", () => {
+    const result = parseEvaluationContent("**Overall: PASS**");
+    expect(result.outcome).toBe("pass");
+  });
+
+  it("accepts plain-line Overall (no markdown)", () => {
+    const result = parseEvaluationContent("Overall: FAIL");
+    expect(result.outcome).toBe("fail");
+  });
+
+  it("accepts trailing decoration after verdict", () => {
+    // Some models append emoji / extra punctuation after the verdict word.
+    const result = parseEvaluationContent("### Overall: PASS ✅");
+    expect(result.outcome).toBe("pass");
+  });
+
+  it("prefers the stricter (H3) pattern over looser alternatives", () => {
+    // If both an H3 and a plain line exist, the H3 wins because it's
+    // evaluated first. rawLine reflects which pattern matched.
+    const content = `Overall: FAIL
+
+### Overall: PASS`;
+    const result = parseEvaluationContent(content);
+    expect(result.outcome).toBe("pass");
+    expect(result.rawLine).toBe("### Overall: PASS");
   });
 
   it("ignores Overall in code blocks (finds real one)", () => {

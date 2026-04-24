@@ -218,10 +218,15 @@ export function buildTaskContext(ctx: TaskContext): string {
   if (ctx.evaluatorFormat) {
     lines.push(
       `## Evaluation Format\n`,
-      `Your evaluation MUST end with exactly one of these lines:\n`,
-      `### Overall: PASS\n`,
+      `Your evaluation MUST end with EXACTLY one of these two lines, copied verbatim — three hash marks, single space, capital P-A-S-S or F-A-I-L, nothing else on the line:\n`,
+      `\`\`\``,
+      `### Overall: PASS`,
+      `\`\`\``,
       `or\n`,
-      `### Overall: FAIL\n`,
+      `\`\`\``,
+      `### Overall: FAIL`,
+      `\`\`\``,
+      `\n**Before you finish writing, re-read the final line of your evaluation and confirm it matches one of the two forms above exactly.** Wrong heading level (\`##\` or \`#\`), bold instead of heading, extra trailing characters, or any other drift will be tolerated by the parser but is considered a defect — emit the strict form.\n`,
       `Use a criterion results table to justify your decision:\n`,
       `| # | Criterion | Result | Evidence |`,
       `|---|-----------|--------|----------|`,

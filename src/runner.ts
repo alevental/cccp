@@ -1446,10 +1446,14 @@ async function runPipelineStage(
       return { ...result, status: "skipped" };
     }
     if (stage.on_fail === "human_gate" && ctx.gateStrategy) {
+      const failureDetail = describeSubPipelineFailure(childResult.state);
       const gate: GateInfo = {
         stageName: stage.name,
         status: "pending",
-        prompt: `Sub-pipeline "${childPipeline.name}" failed. Approve to continue, reject to stop.`,
+        prompt:
+          `Sub-pipeline "${childPipeline.name}" failed.\n\n` +
+          (failureDetail ? `${failureDetail}\n\n` : "") +
+          `Approve to continue, reject to stop.`,
       };
       state.gate = gate;
       await saveState(state);
@@ -1462,6 +1466,29 @@ async function runPipelineStage(
   }
 
   return result;
+}
+
+/**
+ * Walk a child pipeline's stage map and produce a one-paragraph description
+ * of the first 3 failing/errored stages and their error messages — so a
+ * sub-pipeline gate prompt tells the reviewer *why* it failed, not just
+ * that it did. Returns an empty string when no failures are recorded.
+ *
+ * Exported for tests.
+ */
+export function describeSubPipelineFailure(childState: PipelineState): string {
+  const failures: string[] = [];
+  for (const name of childState.stageOrder) {
+    const s = childState.stages[name];
+    if (!s) continue;
+    if (s.status === "failed" || s.status === "error") {
+      const reason = s.error ? `: ${s.error}` : "";
+      failures.push(`  - ${name} (${s.status})${reason}`);
+    }
+    if (failures.length >= 3) break;
+  }
+  if (failures.length === 0) return "";
+  return `Failed stage(s):\n${failures.join("\n")}`;
 }
 
 // ---------------------------------------------------------------------------

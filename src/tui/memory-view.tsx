@@ -480,6 +480,11 @@ function RuntimePanel() {
         <Text>{reg.activityBusEmitCount}</Text>
         <Text dimColor>{"  (monotonic)"}</Text>
       </Box>
+      <Box>
+        <Text dimColor>  perfMeasuresDrained</Text>
+        <Text> {reg.performanceMeasuresDrained}</Text>
+        <Text dimColor>{"  (Ink/react-reconciler measures sunk — flat heap = sink working)"}</Text>
+      </Box>
     </>
   );
 }

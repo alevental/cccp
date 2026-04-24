@@ -145,7 +145,7 @@ Plan-Generate-Evaluate cycle with retry loop.
 4. **Evaluator**: Reads contract + deliverable, writes `evaluation-N.md`
 5. **Route**: PASS → stage succeeds. FAIL → retry from step 3. Max iterations → apply `on_fail`.
 
-The evaluator output must contain `### Overall: PASS` or `### Overall: FAIL`.
+The evaluator output must contain `### Overall: PASS` or `### Overall: FAIL`. The parser also accepts H1/H2/H4–H6 heading levels, bold (`**Overall: PASS**`), or a bare line (`Overall: PASS`) as a safety net against minor format drift — but authors should emit the strict H3 form.
 
 ### `on_fail` Strategies
 

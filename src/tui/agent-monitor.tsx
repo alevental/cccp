@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { render, Box, Text, useStdout, useInput } from "ink";
 import { SingleFileTailer, type StreamDetailAccumulator, type MonitorEntry } from "../stream/stream-detail.js";
+import { installPerfMeasureSink } from "../diagnostics/perf-measure-sink.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -280,6 +281,8 @@ export async function launchAgentMonitor(
   streamLogPath: string,
   agentName: string,
 ): Promise<void> {
+  // Drain react-reconciler's PerformanceMeasure emissions before Ink mounts.
+  const uninstallPerfSink = installPerfMeasureSink();
   return new Promise<void>((resolvePromise) => {
     const { unmount, waitUntilExit } = render(
       <AgentMonitor
@@ -287,12 +290,16 @@ export async function launchAgentMonitor(
         agentName={agentName}
         onDone={() => {
           unmount();
+          uninstallPerfSink();
           resolvePromise();
         }}
       />,
       { maxFps: 10 },
     );
 
-    waitUntilExit().then(() => resolvePromise());
+    waitUntilExit().then(() => {
+      uninstallPerfSink();
+      resolvePromise();
+    });
   });
 }
