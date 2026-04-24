@@ -14,6 +14,7 @@ import type { DbService } from "../db-service.js";
 // ---------------------------------------------------------------------------
 
 const DEFAULT_POLL_MS = 2000;
+const FRESH_START_WINDOW_MS = 30_000;
 
 export interface GateNotifierOptions {
   server: McpServer;
@@ -78,7 +79,7 @@ export class GateNotifier {
         if (!currentRunIds.has(runId)) this.lastRunStatus.delete(runId);
       }
 
-      // Detect pipeline completion transitions and send channel notifications.
+      // Detect pipeline lifecycle transitions and send channel notifications.
       for (const run of runs) {
         // Session affinity: skip runs belonging to other MCP sessions.
         if (
@@ -92,9 +93,42 @@ export class GateNotifier {
         const prevStatus = this.lastRunStatus.get(run.state.runId);
         this.lastRunStatus.set(run.state.runId, run.state.status);
 
-        const isTerminal = run.state.status === "passed" || run.state.status === "failed" || run.state.status === "error";
-        if (isTerminal && prevStatus && prevStatus !== run.state.status) {
-          // Pipeline just completed — send notification (fire-and-forget).
+        const status = run.state.status;
+        const isTerminal = status === "passed" || status === "failed" || status === "error";
+
+        // Start/resume notifications route only to a session explicitly bound
+        // to the run (both sides set and matching). Unbound runs produce no
+        // start/resume push — matches the gate-routing convention for
+        // session-tagged events.
+        const sessionBound =
+          !!this.opts.sessionId &&
+          !!run.state.sessionId &&
+          run.state.sessionId === this.opts.sessionId;
+
+        // Fresh start — first observation of a running run whose startedAt
+        // is within the recency window. The window guards against firing for
+        // pre-existing runs when the notifier starts mid-flight.
+        if (
+          sessionBound &&
+          !prevStatus &&
+          status === "running" &&
+          isWithinWindow(run.state.startedAt, FRESH_START_WINDOW_MS)
+        ) {
+          void this.sendPipelineStartNotification(run);
+        }
+
+        // Resume — observed transition from paused/interrupted back to running.
+        if (
+          sessionBound &&
+          prevStatus &&
+          (prevStatus === "paused" || prevStatus === "interrupted") &&
+          status === "running"
+        ) {
+          void this.sendPipelineResumeNotification(run);
+        }
+
+        // Pipeline completion (fire-and-forget).
+        if (isTerminal && prevStatus && prevStatus !== status) {
           void this.sendPipelineCompleteNotification(run);
         }
       }
@@ -448,6 +482,71 @@ export class GateNotifier {
   }
 
   // -------------------------------------------------------------------------
+  // Pipeline start / resume notifications
+  //
+  // Delivered via the same channel transport as gate and completion pushes.
+  // Scoped to the session bound to the run via --session-id so the session
+  // that dispatched the pipeline sees its start/resume events inline.
+  // -------------------------------------------------------------------------
+
+  private async sendPipelineStartNotification(run: DiscoveredRun): Promise<void> {
+    await this.sendLifecycleNotification(run, {
+      type: "pipeline_started",
+      verb: "started",
+      emoji: "\u25B6",
+    });
+  }
+
+  private async sendPipelineResumeNotification(run: DiscoveredRun): Promise<void> {
+    await this.sendLifecycleNotification(run, {
+      type: "pipeline_resumed",
+      verb: "resumed",
+      emoji: "\u21BB",
+    });
+  }
+
+  private async sendLifecycleNotification(
+    run: DiscoveredRun,
+    kind: { type: string; verb: string; emoji: string },
+  ): Promise<void> {
+    if (this.channelSupported === false) return;
+
+    const runShort = run.state.runId.slice(0, 8);
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const notificationFn = (this.opts.server.server as any).notification as
+        | ((msg: unknown) => Promise<void>)
+        | undefined;
+
+      if (!notificationFn) {
+        this.channelSupported = false;
+        return;
+      }
+
+      await notificationFn.call(this.opts.server.server, {
+        method: "notifications/claude/channel",
+        params: {
+          content: `${kind.emoji} Pipeline "${run.state.pipeline}" ${kind.verb} (run ${runShort}).`,
+          meta: {
+            severity: "info",
+            type: kind.type,
+            run_id: runShort,
+            project: run.state.project,
+            pipeline: run.state.pipeline,
+          },
+        },
+      });
+
+      if (this.channelSupported === null) {
+        this.channelSupported = true;
+      }
+    } catch {
+      this.channelSupported = false;
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // Pipeline completion notification
   // -------------------------------------------------------------------------
 
@@ -610,4 +709,11 @@ function formatDurationMs(ms: number): string {
   if (mins < 60) return `${mins}m ${secs % 60}s`;
   const hrs = Math.floor(mins / 60);
   return `${hrs}h ${mins % 60}m`;
+}
+
+function isWithinWindow(iso: string | undefined, windowMs: number): boolean {
+  if (!iso) return false;
+  const ts = new Date(iso).getTime();
+  if (Number.isNaN(ts)) return false;
+  return Date.now() - ts <= windowMs;
 }

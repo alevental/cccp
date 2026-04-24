@@ -422,4 +422,152 @@ describe("GateNotifier", () => {
 
     closeDatabase(projectDir);
   });
+
+  // -------------------------------------------------------------------------
+  // Pipeline start / resume channel notifications
+  // -------------------------------------------------------------------------
+
+  function createServerWithChannel() {
+    const elicitInput = vi.fn<[], Promise<MockElicitResult>>();
+    elicitInput.mockResolvedValue({ action: "accept", content: { decision: "approve" } });
+    const notification = vi.fn<[unknown], Promise<void>>();
+    notification.mockResolvedValue(undefined);
+    return {
+      mock: { server: { elicitInput, notification } } as unknown as McpServer,
+      notification,
+    };
+  }
+
+  async function createFreshRun(
+    projectDir: string,
+    sessionId: string | undefined,
+  ): Promise<PipelineState> {
+    const state = createState(
+      "lifecycle-pipeline",
+      "lifecycle-project",
+      "lifecycle.yaml",
+      [{ name: "build", type: "agent" }],
+      `${projectDir}/artifacts`,
+      projectDir,
+      sessionId,
+    );
+    await saveState(state);
+    return state;
+  }
+
+  function channelCallsOfType(
+    notification: ReturnType<typeof vi.fn>,
+    type: string,
+  ): unknown[] {
+    return notification.mock.calls
+      .map((c) => c[0])
+      .filter((msg: unknown) => {
+        const params = (msg as { params?: { meta?: { type?: string } } })?.params;
+        return params?.meta?.type === type;
+      });
+  }
+
+  it("pushes pipeline_started for a freshly-started session-bound run", async () => {
+    const projectDir = tmpProjectDir();
+    await createFreshRun(projectDir, "sess-1");
+
+    const { mock, notification } = createServerWithChannel();
+    notifier = new GateNotifier({
+      server: mock,
+      projectDir,
+      sessionId: "sess-1",
+      pollIntervalMs: 30,
+    });
+    notifier.start();
+
+    await vi.waitFor(() => {
+      expect(channelCallsOfType(notification, "pipeline_started").length).toBe(1);
+    }, { timeout: 2000 });
+
+    closeDatabase(projectDir);
+  });
+
+  it("does not push pipeline_started when the run has no sessionId", async () => {
+    const projectDir = tmpProjectDir();
+    await createFreshRun(projectDir, undefined);
+
+    const { mock, notification } = createServerWithChannel();
+    notifier = new GateNotifier({
+      server: mock,
+      projectDir,
+      sessionId: "sess-1",
+      pollIntervalMs: 30,
+    });
+    notifier.start();
+
+    // Give the notifier a few poll cycles to observe the run.
+    await new Promise((r) => setTimeout(r, 250));
+    expect(channelCallsOfType(notification, "pipeline_started")).toHaveLength(0);
+
+    closeDatabase(projectDir);
+  });
+
+  it("does not push pipeline_started for a stale running run (startedAt outside recency window)", async () => {
+    const projectDir = tmpProjectDir();
+    const state = createState(
+      "lifecycle-pipeline",
+      "lifecycle-project",
+      "lifecycle.yaml",
+      [{ name: "build", type: "agent" }],
+      `${projectDir}/artifacts`,
+      projectDir,
+      "sess-1",
+    );
+    // Seed startedAt outside the recency window before the first persist,
+    // since saveState's update path does not overwrite started_at.
+    state.startedAt = new Date(Date.now() - 5 * 60_000).toISOString();
+    await saveState(state);
+
+    const { mock, notification } = createServerWithChannel();
+    notifier = new GateNotifier({
+      server: mock,
+      projectDir,
+      sessionId: "sess-1",
+      pollIntervalMs: 30,
+    });
+    notifier.start();
+
+    await new Promise((r) => setTimeout(r, 250));
+    expect(channelCallsOfType(notification, "pipeline_started")).toHaveLength(0);
+
+    closeDatabase(projectDir);
+  });
+
+  it("pushes pipeline_resumed on paused → running transition", async () => {
+    const projectDir = tmpProjectDir();
+    const state = await createFreshRun(projectDir, "sess-1");
+    // Present the run as paused before the notifier starts polling.
+    state.status = "paused";
+    await saveState(state);
+
+    const { mock, notification } = createServerWithChannel();
+    notifier = new GateNotifier({
+      server: mock,
+      projectDir,
+      sessionId: "sess-1",
+      pollIntervalMs: 30,
+    });
+    notifier.start();
+
+    // Let the notifier record paused as the prevStatus.
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Flip back to running — simulates `cccp resume`.
+    state.status = "running";
+    await saveState(state);
+
+    await vi.waitFor(() => {
+      expect(channelCallsOfType(notification, "pipeline_resumed").length).toBe(1);
+    }, { timeout: 2000 });
+
+    // Should not also fire a start for the same run.
+    expect(channelCallsOfType(notification, "pipeline_started")).toHaveLength(0);
+
+    closeDatabase(projectDir);
+  });
 });

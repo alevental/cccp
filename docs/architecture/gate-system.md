@@ -403,6 +403,16 @@ Both the elicitation and channel paths call `writeGateResponse()`, which writes 
 
 The notifier tracks seen gates by `{runId}:{stageName}`. A gate is only notified once. Seen gates are cleaned up when the run no longer has a pending gate. If the gate is resolved externally while a notification is pending, the notifier reloads state before writing and discards the stale response.
 
+### Pipeline lifecycle channel pushes
+
+Alongside gate notifications, the notifier publishes short lifecycle pushes over the same channel transport:
+
+- `pipeline_started` — fires the first time a run is observed with `status: "running"` and `startedAt` within the last 30 seconds. A recency window guards against firing for pre-existing runs when the notifier (re)starts.
+- `pipeline_resumed` — fires on a `paused`/`interrupted` → `running` transition.
+- `pipeline_complete` — fires when a run transitions to `passed`, `failed`, or `error`.
+
+Start and resume pushes are scoped strictly by session affinity: both `run.sessionId` and the notifier's `sessionId` must be set and equal. Runs with no `sessionId` produce no start/resume push. Launch pipelines with `cccp run --session-id <uuid>` (the `/cccp-run` skill does this by default) to bind them to the session that should receive the events.
+
 ### Startup
 
 The notifier is started automatically by `startMcpServer()` after the MCP server connects to its transport. It receives the server instance, project directory, and session ID.
