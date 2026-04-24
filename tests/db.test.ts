@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { existsSync, rmSync } from "node:fs";
-import { CccpDatabase, dbPath } from "../src/db.js";
+import { spawnSync } from "node:child_process";
+import { CccpDatabase, dbPath, openDatabase, reopenDatabase, closeDatabase } from "../src/db.js";
 import { tmpProjectDir, makeState } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
@@ -311,5 +312,44 @@ describe("CccpDatabase — persistence", () => {
 
     writer.close();
     reader.close();
+  });
+
+  // Regression for v0.17.3: a long-lived reader in a different process was
+  // observed to miss WAL frames committed by the writer until the connection
+  // was recycled. reopenDatabase() is the recycle primitive. The test opens
+  // a reader, lets a child process insert a row, then asserts that the
+  // recycled handle sees the row. We don't assert on the stale handle's
+  // behavior — it's platform-dependent — only that the fix works.
+  it("reopenDatabase picks up a sibling-process write on the reader side", () => {
+    const dir = tmpProjectDir();
+    const filePath = dbPath(dir);
+
+    // Seed one row so the DB file exists with schema applied.
+    const seed = openDatabase(dir);
+    seed.insertRun(makeState({ runId: "seed-run" }), "/artifacts");
+
+    // Child process: open the same DB via node:sqlite directly, insert a
+    // row, exit. Uses raw SQL so the child doesn't need tsx / the built dist.
+    const childScript = `
+      const { DatabaseSync } = require("node:sqlite");
+      const db = new DatabaseSync(${JSON.stringify(filePath)});
+      db.exec("PRAGMA journal_mode = WAL");
+      db.exec("PRAGMA busy_timeout = 5000");
+      db.prepare(
+        "INSERT INTO runs (run_id, pipeline, project, pipeline_file, artifact_dir, started_at, status, stages_json, stage_order_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      ).run("child-run", "p", "pr", "/f", "/a", new Date().toISOString(), "running", "{}", "[]", new Date().toISOString());
+      db.close();
+    `;
+    const child = spawnSync(process.execPath, ["-e", childScript], {
+      encoding: "utf-8",
+    });
+    expect(child.status, child.stderr).toBe(0);
+
+    // After reopen the reader must see the child-process write.
+    const fresh = reopenDatabase(dir);
+    expect(fresh.getRun("child-run")).not.toBeNull();
+    expect(fresh.getRun("seed-run")).not.toBeNull();
+
+    closeDatabase(dir);
   });
 });

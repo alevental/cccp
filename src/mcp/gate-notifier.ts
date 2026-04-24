@@ -70,8 +70,12 @@ export class GateNotifier {
     if (this.pendingNotification) return; // one at a time
 
     try {
-      // WAL mode: readers see committed writes immediately, no manual reload needed.
-      const runs = await discoverRuns(this.opts.projectDir);
+      // Cross-process read — recycle the cached connection so the reader
+      // picks up WAL frames committed by the runner since the last poll.
+      // Without this, the gate notifier's long-lived DatabaseSync handle
+      // was observed to pin a WAL snapshot on macOS + Node 24/25 and never
+      // fire a channel push for new pending gates.
+      const runs = await discoverRuns(this.opts.projectDir, undefined, { fresh: true });
 
       // Prune lastRunStatus for runs no longer returned by discoverRuns.
       const currentRunIds = new Set(runs.map((r) => r.state.runId));

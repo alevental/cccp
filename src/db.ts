@@ -509,3 +509,15 @@ export function closeDatabase(projectDir: string): void {
     instances.delete(key);
   }
 }
+
+/**
+ * Close the cached instance and return a freshly opened one. Cross-process
+ * readers call this before each read: long-lived `DatabaseSync` handles on
+ * macOS + Node 24/25 were observed to pin a WAL snapshot and miss frames
+ * committed by a sibling writer process until the connection is recycled.
+ * See v0.17.3 notes / regression test in tests/db.test.ts.
+ */
+export function reopenDatabase(projectDir: string): CccpDatabase {
+  closeDatabase(projectDir);
+  return openDatabase(projectDir);
+}

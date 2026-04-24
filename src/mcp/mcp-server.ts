@@ -21,9 +21,9 @@ async function resolveRun(
   runIdPrefix?: string,
 ): Promise<{ run: DiscoveredRun } | { error: string }> {
   const projectDir = process.cwd();
-  // WAL mode: readers see committed writes immediately, no manual reload needed.
-  dbService.db();
-  const runs = await discoverRuns(projectDir);
+  // Cross-process read — recycle the cached connection so the reader picks
+  // up WAL frames committed by the runner since the last tool call.
+  const runs = await discoverRuns(projectDir, undefined, { fresh: true });
 
   if (runs.length === 0) {
     return { error: "No pipeline runs found. Start one with `cccp run`." };
@@ -172,8 +172,7 @@ export async function startMcpServer(): Promise<void> {
     "List all pipeline runs (active and completed). Shows run ID, pipeline name, project, status, and any pending gates.",
     {},
     async () => {
-      dbService.db();
-      const runs = await discoverRuns(process.cwd());
+      const runs = await discoverRuns(process.cwd(), undefined, { fresh: true });
 
       if (runs.length === 0) {
         return textResult("No pipeline runs found.");

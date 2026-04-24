@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { rm, readdir, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { openDatabase, type RunFilter } from "./db.js";
+import { openDatabase, reopenDatabase, type RunFilter } from "./db.js";
 import type {
   PipelineState,
   StageState,
@@ -130,8 +130,11 @@ export function createState(
 
 /**
  * Load pipeline state by run ID. Queries the SQLite database.
- * When `reloadFromDisk` is true, re-reads the DB file first — needed when
- * another process (e.g., MCP server) may have written to it.
+ * When `reloadFromDisk` is true, the cached connection is recycled before
+ * the read — required when another process (MCP server, gate watcher)
+ * may have written since this process last read. Post-migration to
+ * node:sqlite, long-lived DatabaseSync handles can pin a WAL snapshot and
+ * miss sibling-process commits; recycling forces a fresh read transaction.
  */
 export async function loadState(
   runId: string,
@@ -140,9 +143,7 @@ export async function loadState(
 ): Promise<PipelineState | null> {
   try {
     const dir = projectDir ?? resolveProjectDir();
-    const db = openDatabase(dir);
-    // reloadFromDisk is a no-op with WAL mode — readers see committed writes immediately.
-    void reloadFromDisk;
+    const db = reloadFromDisk ? reopenDatabase(dir) : openDatabase(dir);
     return db.getRun(runId);
   } catch (err) {
     // Log database errors but don't crash — callers handle null gracefully.
@@ -436,13 +437,19 @@ export async function resetFromStage(
  * Discover pipeline runs from the SQLite database.
  * Optionally filter by project, pipeline, status, or artifact directory.
  * Returns matching runs sorted running-first, then by start time descending.
+ *
+ * When `opts.fresh` is true the cached connection is recycled before the
+ * read — required for cross-process readers (MCP server, gate notifier,
+ * standalone dashboard) so a long-lived handle doesn't keep serving a
+ * pinned WAL snapshot and miss sibling-process commits.
  */
 export async function discoverRuns(
   projectDir: string,
   filter?: RunFilter,
+  opts?: { fresh?: boolean },
 ): Promise<DiscoveredRun[]> {
   try {
-    const db = openDatabase(projectDir);
+    const db = opts?.fresh ? reopenDatabase(projectDir) : openDatabase(projectDir);
     return db.findRuns(filter);
   } catch (err) {
     // Log database errors but don't crash — callers handle empty list gracefully.

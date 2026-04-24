@@ -15,7 +15,7 @@ import { writeMcpConfigFile } from "./mcp/mcp-config.js";
 import { runAutoresearchCycle, type AutoresearchCycleOptions } from "./autoresearch.js";
 import { runGeCycle, dispatchGeEvaluatorWithFeedback, type GeCycleOptions } from "./ge.js";
 import { runLoopCycle, type LoopCycleOptions } from "./loop.js";
-import { openDatabase } from "./db.js";
+import { openDatabase, reopenDatabase } from "./db.js";
 import {
   MemoryLogger,
   isMemoryLogEnabled,
@@ -1806,7 +1806,9 @@ async function runStages(
   for (const step of plan) {
     // --- Pause check: stop at clean breakpoint if requested ---
     if (!ctx.dryRun) {
-      const db = openDatabase(ctx.projectDir);
+      // pause_requested is written by the MCP server in a different process —
+      // recycle the cached connection so we actually see its UPDATE.
+      const db = reopenDatabase(ctx.projectDir);
       if (db.isPauseRequested(state.runId)) {
         db.setPauseRequested(state.runId, false);
         const nextStage = step.stages[0].name;

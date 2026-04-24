@@ -212,8 +212,11 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
       }
 
       try {
-        // WAL mode: readers see committed writes immediately, no manual reload needed.
-        const parentState = await loadState(runId, projectDir);
+        // Standalone dashboard (no event bus) reads a DB that the runner
+        // writes from a different process. Recycle the cached connection
+        // so the reader picks up committed WAL frames — long-lived
+        // DatabaseSync handles can otherwise pin a stale snapshot.
+        const parentState = await loadState(runId, projectDir, !useEventBus);
         if (parentState) {
           // When scoped, extract the child pipeline state from the parent.
           const displayState = scopeStage
