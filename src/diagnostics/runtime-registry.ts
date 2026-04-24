@@ -11,6 +11,13 @@
 // ---------------------------------------------------------------------------
 
 import type { activityBus as ActivityBusType } from "../activity-bus.js";
+import {
+  activeHandleCounts,
+  heapCodeStats,
+  eventLoopUtilization,
+  resourceUsage,
+} from "./runtime-introspection.js";
+import { snapshotObjects, type ObjectSnapshot } from "./object-tracker.js";
 
 type SizedMapGetter = () => number;
 type AccumulatorCountGetter = () => Record<string, number>;
@@ -18,9 +25,13 @@ type AccumulatorCountGetter = () => Record<string, number>;
 let activityMapSize: SizedMapGetter = () => 0;
 let dispatchMapSize: SizedMapGetter = () => 0;
 let eventHistorySize: SizedMapGetter = () => 0;
+let eventHistoryBytes: SizedMapGetter = () => 0;
+let maxEventBytes: SizedMapGetter = () => 0;
+let stateBytes: SizedMapGetter = () => 0;
 let accumulatorCounts: AccumulatorCountGetter = () => ({});
 const monitorAccumulators = new Map<string, SizedMapGetter>();
 let streamTailerCount = 0;
+let activityBusEmitCount = 0;
 let activityBusRef: typeof ActivityBusType | null = null;
 
 /** Dashboard registers a function that returns its activities Map size. */
@@ -41,6 +52,27 @@ export function registerEventHistory(getter: SizedMapGetter): () => void {
   return () => { eventHistorySize = () => 0; };
 }
 
+/** Dashboard registers a function that returns total byte size of retained event data payloads. */
+export function registerEventHistoryBytes(getter: SizedMapGetter): () => void {
+  eventHistoryBytes = getter;
+  return () => { eventHistoryBytes = () => 0; };
+}
+
+/** Dashboard registers a function that returns the single largest event's payload byte size. */
+export function registerMaxEventBytes(getter: SizedMapGetter): () => void {
+  maxEventBytes = getter;
+  return () => { maxEventBytes = () => 0; };
+}
+
+/** Dashboard registers a function that returns JSON.stringify(state).length for the current PipelineState. */
+export function registerStateBytes(getter: SizedMapGetter): () => void {
+  stateBytes = getter;
+  return () => { stateBytes = () => 0; };
+}
+
+/** Runner / bus owner calls this per activity emit — monotonic counter. */
+export function incActivityBusEmit(): void { activityBusEmitCount++; }
+
 /** Agent monitor registers a function that returns per-agent accumulator entry counts. */
 export function registerAccumulatorGetter(getter: AccumulatorCountGetter): () => void {
   accumulatorCounts = getter;
@@ -59,9 +91,13 @@ export function decTailerCount(): void {
   streamTailerCount = Math.max(0, streamTailerCount - 1);
 }
 
-/** Memory log calls this so it can read activityBus.listenerCount without a cycle. */
+/** Memory log calls this so it can read activityBus.listenerCount without a cycle.
+ *  Also attaches a listener that increments the emit counter — listeners run on
+ *  every emit, so this gives us a cheap monotonic throughput counter. */
 export function registerActivityBus(bus: typeof ActivityBusType): void {
+  if (activityBusRef === bus) return; // idempotent
   activityBusRef = bus;
+  bus.on("activity", () => { activityBusEmitCount++; });
 }
 
 // ---------------------------------------------------------------------------
@@ -72,9 +108,30 @@ export interface RegistrySnapshot {
   activityMapSize: number;
   dispatchMapSize: number;
   eventHistorySize: number;
+  eventHistoryBytes: number;
+  maxEventBytes: number;
+  stateBytes: number;
   streamTailerCount: number;
   activityBusListeners: number;
+  activityBusEmitCount: number;
   accumulatorEntryCounts: Record<string, number>;
+  activeHandles: Record<string, number>;
+  heapCodeStats: {
+    codeAndMetadataSize: number;
+    bytecodeAndMetadataSize: number;
+    externalScriptSourceSize: number;
+  };
+  eventLoopUtilization: { utilization: number; idleMs: number; activeMs: number };
+  resourceUsage: {
+    userCPUTimeMs: number;
+    systemCPUTimeMs: number;
+    maxRssKB: number;
+    minorPageFaults: number;
+    majorPageFaults: number;
+    voluntaryContextSwitches: number;
+    involuntaryContextSwitches: number;
+  };
+  objectTracker: ObjectSnapshot;
 }
 
 export function snapshotRegistry(): RegistrySnapshot {
@@ -84,8 +141,17 @@ export function snapshotRegistry(): RegistrySnapshot {
     activityMapSize: activityMapSize(),
     dispatchMapSize: dispatchMapSize(),
     eventHistorySize: eventHistorySize(),
+    eventHistoryBytes: eventHistoryBytes(),
+    maxEventBytes: maxEventBytes(),
+    stateBytes: stateBytes(),
     streamTailerCount,
     activityBusListeners: activityBusRef?.listenerCount("activity") ?? 0,
+    activityBusEmitCount,
     accumulatorEntryCounts: counts,
+    activeHandles: activeHandleCounts(),
+    heapCodeStats: heapCodeStats(),
+    eventLoopUtilization: eventLoopUtilization(),
+    resourceUsage: resourceUsage(),
+    objectTracker: snapshotObjects(),
   };
 }

@@ -226,19 +226,23 @@ All cmux commands are no-ops when not in a cmux workspace.
 
 ## Debugging memory / investigating OOM crashes
 
-Long runs can OOM. Three layered tools, each with zero cost when disabled.
+Long runs can leak or OOM. Five layered tools, each with zero cost when disabled.
 
 ### 1. Memory JSONL (always on)
 
-Every run writes `{artifactDir}/.cccp/memory.jsonl` — one sample per poll tick (500ms in TUI, 5s headless) with memory, V8 heap spaces, growth rates, and runtime counters (activity map, dispatch map, activityBus listeners, sql.js instances, stream tailers, `state.json` size, event count, accumulator entries). Uses `appendFileSync` so samples land on disk even if the process OOM-crashes.
+Every run writes `{artifactDir}/.cccp/memory.jsonl` — one sample per poll tick (500ms in TUI, 5s headless) with memory, V8 heap spaces, growth rates, and runtime counters (activity map, dispatch map, eventHistory size + bytes, max event bytes, state bytes, activityBus listeners + emit count, stream tailers, monitor entries, active-handle counts, event loop utilization, `state.json` size, event count). Uses `appendFileSync` so samples land on disk even if the process OOM-crashes.
 
 After a crash, analyse with `cccp diag memory` (see CLI section). Whichever counter grew monotonically identifies the leaking code path.
 
 Disable with `CCCP_MEM_LOG=0`. Sample frequency for headless runs: `CCCP_MEM_SAMPLE_MS=5000`.
 
-### 2. Heap snapshots (opt-in)
+### 2. Heap snapshots (opt-in + on-demand keybind)
 
-All triggers default OFF — set any env var to enable:
+On-demand from the TUI: press **`[h]`** while the dashboard is visible to write `.cccp/heap-<runId>-<ts>-keybind.heapsnapshot`. Load in Chrome DevTools → Memory panel and compare two snapshots to find retainers.
+
+Signal-driven: `kill -USR2 <pid>` from a shell writes the same snapshot (works even on headless runs; requires at least one of the env vars below to be set to enable the handler).
+
+Automatic triggers (all default OFF):
 
 | Env var | Effect |
 |---------|--------|
@@ -247,27 +251,58 @@ All triggers default OFF — set any env var to enable:
 | `CCCP_HEAP_SNAPSHOT_EVERY_MIN=60` | Periodic baseline for diff comparison |
 | `CCCP_HEAP_SNAPSHOT_ON_CRASH=1` | Snapshot on `uncaughtException` / `unhandledRejection` |
 
-When any of the above are set, `kill -USR2 <pid>` also writes an on-demand snapshot. Output: `.cccp/heap-<runId>-<timestamp>-<reason>.heapsnapshot`. Load in Chrome DevTools → Memory panel. Use "Comparison" between two snapshots (early + pre-crash) to find retainers.
+Output path: `.cccp/heap-<runId>-<timestamp>-<reason>.heapsnapshot`.
 
-### 3. Tag-gated debug logger (opt-in)
+### 3. Sampled profilers — CPU & heap allocation (opt-in)
 
-`CCCP_DEBUG=wasm,leak,stream` enables structured debug lines to `.cccp/debug.log` (10 MB rotation; `*` = all tags). Zero overhead when unset (single `Set.has()` check). Existing tags:
+Env-gated `node:inspector` profilers that run for the full lifetime of the pipeline. The **heap sampling profile** is the gold-standard tool for localising leaks: it captures the call stack at every sampled allocation, so the resulting flame graph shows *which code path produced the retained bytes* — useful when no single counter grows.
+
+| Env var | Effect |
+|---------|--------|
+| `CCCP_PROFILE=heap` | Run `HeapProfiler.startSampling`; write `.cccp/heap-<ts>.heapprofile` on shutdown |
+| `CCCP_PROFILE=cpu`  | Run `Profiler.start`; write `.cccp/cpu-<ts>.cpuprofile` on shutdown |
+| `CCCP_PROFILE=cpu,heap` (or `all`) | Both |
+| `CCCP_PROFILE_HEAP_INTERVAL_BYTES=32768` | Sampling interval (default 32KB). Smaller = more detail, more overhead. |
+
+Load `.heapprofile` in Chrome DevTools → Memory → **Load profile**. Load `.cpuprofile` in DevTools → Performance → **Load profile**.
+
+### 4. Force-GC keybind (in the TUI)
+
+Press **`[g]`** to call `global.gc()` and see the reclaim delta. Only works when node was started with `--expose-gc` (e.g. `NODE_OPTIONS='--expose-gc' npx @alevental/cccp run ...`). Useful to distinguish **retention** (heap stays high after forced GC) from **GC lag** (heap drops sharply). When `--expose-gc` is missing, the keybind prints a hint.
+
+### 5. Tag-gated debug logger (opt-in)
+
+`CCCP_DEBUG=wasm,leak,stream` enables structured debug lines to `.cccp/debug.log` (10 MB rotation; `*` = all tags). Zero overhead when unset (single `Set.has()` check).
 
 | Tag | Logs |
 |-----|------|
-| `wasm` | sql.js reclaim cycles — RSS and arrayBuffers before/after |
+| `wasm` | (legacy sql.js reclaim cycles — now a no-op after the v0.17 node:sqlite migration) |
 | `leak` | Dashboard activity-map / dispatch-map cleanup — lists orphaned keys when prefix-match fails |
 | `stream` | StreamTailer open/close |
 
 Override rotation size with `CCCP_DEBUG_MAX_MB=10`.
 
-### TUI memory view
+### TUI memory view (`[m]`)
 
-Press `m` in a running dashboard for the live memory view: current + delta memory, heap-space breakdown, sparklines, and a **Tracked leak suspects** panel (activity map / dispatch map / busListeners / streamTailers / sqlJsInstances / accumulatorEntries) with red highlights when a counter grew >2× or >500 since baseline.
+Press `m` in a running dashboard for the live memory view. Panels (all read from the runtime registry):
+
+- **Header**: current + delta RSS/heap/external/arrayBuffers; 1-minute growth rates.
+- **Sparklines**: RSS, heapUsed, arrayBuffers across the `MemorySampleRing` (600 samples).
+- **V8 heap spaces**: per-space used/committed, sorted largest first.
+- **In-process state**: events, activities, dispatches, samples.
+- **Tracked leak suspects**: activityMap, dispatchMap, eventHistory, busListeners, streamTailers, monitorEntries — red when delta exceeds 2× or +500.
+- **Data sizes**: eventHistoryBytes, maxEventBytes, stateBytes, V8 code/bytecode/external script source — red >500MB, yellow >50MB. *The fastest way to confirm that the leak lives inside event payloads or state snapshots.*
+- **Object tracker**: WeakRef-based `live / created` counts per kind (`PipelineState`, `StateEvent`, `AgentActivity`, plus anything else registered via `trackObject`). A rising `live` number that doesn't plateau points directly at retention of that class.
+- **Active handles**: counts by type (`Timeout`, `FSReqCallback`, `TCPSocketWrap`, …). Growing `Timeout` count means zombie `setInterval`s.
+- **Runtime**: event loop utilization, `maxRSS` (kernel high-water), page faults (minor/major), context switches (vol/invol), `activityBus` monotonic emit count.
+
+Keybind footer: `[p] pause · [m] events/memory · [g] force-gc · [h] heap snapshot`.
 
 ### Leak hunt workflow
 
-1. Let the pipeline run until it OOMs (or hit a threshold with `CCCP_HEAP_SNAPSHOT_ON_RSS_MB`).
-2. `cccp diag memory --since 30m` → see which counter grew. That's the leaking code path.
-3. If needed, open the `.heapsnapshot` in Chrome DevTools and compare two snapshots to find retainers.
-4. For live tracing of the same run or the next one: `CCCP_DEBUG=leak,wasm npx @alevental/cccp@latest run ...` → watch `.cccp/debug.log`.
+1. Start the suspect run with `CCCP_PROFILE=heap NODE_OPTIONS='--expose-gc' npx @alevental/cccp@latest run ...`.
+2. Periodically check the TUI memory view (`m`). Watch the **Data sizes** and **Object tracker** panels — they usually localise the leak within a few minutes.
+3. If a specific kind's `live` is climbing: search for where that kind is stashed (a Map, Set, closure capture, listener) and cap / clear it.
+4. If no tracked counter matches the heap growth: press **`[h]`** twice about five minutes apart. Open both `.heapsnapshot` files in DevTools → Memory and use **Comparison** mode to see which class grew most — that points at the retaining allocation.
+5. Stop the run cleanly so the `.heapprofile` writes; load it in DevTools Memory → **Sampling profile**. The flame graph pins the allocation site.
+6. For live tracing across runs: `CCCP_DEBUG=leak npx @alevental/cccp@latest run ...` → tail `.cccp/debug.log`.

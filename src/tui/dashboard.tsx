@@ -21,12 +21,17 @@ import {
 import {
   installHeapSnapshotHandlers,
   ThresholdSnapshotter,
+  writeSnapshot,
 } from "../diagnostics/heap-snapshot.js";
 import {
   registerActivityMap,
   registerDispatchMap,
   registerEventHistory,
+  registerEventHistoryBytes,
+  registerMaxEventBytes,
+  registerStateBytes,
 } from "../diagnostics/runtime-registry.js";
+import { trackObject } from "../diagnostics/object-tracker.js";
 import { debug as logDebug } from "../logger.js";
 
 // ---------------------------------------------------------------------------
@@ -80,14 +85,60 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
   dispatchRef.current = dispatchStartTimes;
   const eventsRef = useRef<StateEvent[]>([]);
   eventsRef.current = events;
+  const stateRef = useRef<PipelineState>(initialState);
+  stateRef.current = state;
+
+  // Cached byte-size getters. Computing JSON.stringify on every registry
+  // snapshot would be O(eventCount) per read — instead we memoise on a
+  // 2-second clock and expose the cached value. The dashboard polls every
+  // 500ms, so worst-case staleness is 2s.
+  const byteCacheRef = useRef<{
+    ts: number;
+    eventsBytes: number;
+    maxEventBytes: number;
+    stateBytes: number;
+  }>({ ts: 0, eventsBytes: 0, maxEventBytes: 0, stateBytes: 0 });
+  const computeByteSizes = () => {
+    const now = Date.now();
+    if (now - byteCacheRef.current.ts < 2000) return;
+    let total = 0;
+    let max = 0;
+    for (const ev of eventsRef.current) {
+      const n = ev.data ? JSON.stringify(ev.data).length : 0;
+      total += n;
+      if (n > max) max = n;
+    }
+    byteCacheRef.current = {
+      ts: now,
+      eventsBytes: total,
+      maxEventBytes: max,
+      stateBytes: JSON.stringify(stateRef.current).length,
+    };
+  };
+
   useEffect(() => {
     const releaseA = registerActivityMap(() => activitiesRef.current.size);
     const releaseD = registerDispatchMap(() => dispatchRef.current.size);
     const releaseE = registerEventHistory(() => eventsRef.current.length);
+    const releaseEB = registerEventHistoryBytes(() => {
+      computeByteSizes();
+      return byteCacheRef.current.eventsBytes;
+    });
+    const releaseMB = registerMaxEventBytes(() => {
+      computeByteSizes();
+      return byteCacheRef.current.maxEventBytes;
+    });
+    const releaseSB = registerStateBytes(() => {
+      computeByteSizes();
+      return byteCacheRef.current.stateBytes;
+    });
     return () => {
       releaseA();
       releaseD();
       releaseE();
+      releaseEB();
+      releaseMB();
+      releaseSB();
     };
   }, []);
   const lastEventId = useRef(0);
@@ -102,6 +153,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const updateActivity = useCallback((a: AgentActivity) => {
+    trackObject("AgentActivity", a);
     const doUpdate = (act: AgentActivity) => {
       setActivities((prev) => {
         const next = new Map(prev);
@@ -163,7 +215,15 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
     return () => { tailer.stop(); };
   }, [state.artifactDir, useEventBus, updateActivity]);
 
-  // Pause request via keyboard.
+  // Transient status message surfaced by diagnostic keybinds ([g], [h]).
+  // Shown for a few seconds then cleared.
+  const [diagMsg, setDiagMsg] = useState<string | null>(null);
+  const flashDiag = (msg: string) => {
+    setDiagMsg(msg);
+    setTimeout(() => setDiagMsg((m) => (m === msg ? null : m)), 5000);
+  };
+
+  // Pause request + diagnostic keybinds via keyboard.
   const [pauseRequested, setPauseRequested] = useState(false);
   useInput((input) => {
     if ((input === "p" || input === "P") && state.status === "running" && !pauseRequested) {
@@ -176,6 +236,31 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
       }
     } else if (input === "m" || input === "M") {
       setViewMode((v) => (v === "memory" ? "events" : "memory"));
+    } else if (input === "g" || input === "G") {
+      // Force a full GC if node was started with --expose-gc. Diffing the
+      // before/after numbers tells us whether we're seeing retention or
+      // just GC lag.
+      const gc = (globalThis as unknown as { gc?: () => void }).gc;
+      if (!gc) {
+        flashDiag("GC unavailable — start node with --expose-gc");
+        return;
+      }
+      const before = process.memoryUsage();
+      gc();
+      const after = process.memoryUsage();
+      const dRss = (before.rss - after.rss) / 1024 / 1024;
+      const dHeap = (before.heapUsed - after.heapUsed) / 1024 / 1024;
+      flashDiag(
+        `forced GC — reclaimed RSS ${dRss.toFixed(1)}MB, heap ${dHeap.toFixed(1)}MB`,
+      );
+    } else if (input === "h" || input === "H") {
+      // On-demand heap snapshot — opens in Chrome DevTools → Memory.
+      try {
+        const file = writeSnapshot(artifactDir, runId, "keybind");
+        flashDiag(`heap snapshot: ${file}`);
+      } catch (err) {
+        flashDiag(`snapshot failed: ${(err as Error).message}`);
+      }
     }
   });
 
@@ -233,6 +318,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
               lastStatus.current = displayState.status;
               lastStagesJson.current = stagesJson;
               lastGateStatus.current = displayState.gate?.status;
+              trackObject("PipelineState", displayState);
               setState(displayState);
 
               // Clean up activities and dispatch times for agents whose stage is no longer in_progress.
@@ -297,6 +383,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
                   }))
               : newEvents;
             if (filtered.length > 0) {
+              for (const ev of filtered) trackObject("StateEvent", ev);
               setEvents((prev) => [...prev, ...filtered].slice(-500));
             }
           }
@@ -364,7 +451,10 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
               <Text color="blue"> {"\u23F8"} Pause requested {"\u2014"} will pause after current stage</Text>
             )}
             {!pauseRequested && (
-              <Text dimColor> [p] pause {"\u00B7"} [m] {viewMode === "memory" ? "events" : "memory"}</Text>
+              <Text dimColor> [p] pause {"\u00B7"} [m] {viewMode === "memory" ? "events" : "memory"} {"\u00B7"} [g] force-gc {"\u00B7"} [h] heap snapshot</Text>
+            )}
+            {diagMsg && (
+              <Text color="cyan"> {"\u25CF"} {diagMsg}</Text>
             )}
           </Box>
         ) : (

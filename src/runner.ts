@@ -26,6 +26,10 @@ import {
   installHeapSnapshotHandlers,
   ThresholdSnapshotter,
 } from "./diagnostics/heap-snapshot.js";
+import {
+  startProfilers,
+  parseProfilerConfig,
+} from "./diagnostics/profiler.js";
 import { loadPipeline } from "./pipeline.js";
 import { runPgeCycle, dispatchEvaluatorWithFeedback, type PgeCycleOptions } from "./pge.js";
 import { interpolate, resolveVariables, resolveTaskBody, loadAgentMarkdown, buildTaskContext, writeSystemPromptFile } from "./prompt.js";
@@ -1984,6 +1988,22 @@ export async function runPipeline(
     });
   }
 
+  // ---- Diagnostics: sampled CPU/heap profilers (CCCP_PROFILE=cpu,heap) ----
+  // Env-gated. Writes .cpuprofile / .heapprofile to .cccp/ on shutdown.
+  // Load into Chrome DevTools → Performance / Memory.
+  let stopProfilers: () => Promise<void> = async () => {};
+  if (isTopLevel && !ctx.dryRun && initialState) {
+    const profCfg = parseProfilerConfig();
+    if (profCfg.cpu || profCfg.heap) {
+      stopProfilers = await startProfilers({
+        artifactDir: ctx.artifactDir,
+        runId: initialState.runId,
+        cfg: profCfg,
+        log: (m) => getLogger(ctx).log(m),
+      });
+    }
+  }
+
   // ---- Diagnostics: route CCCP_DEBUG-tagged logs to .cccp/debug.log ----
   // No-op when CCCP_DEBUG is unset (the sink stays stderr-bound but is
   // never actually touched because tag checks short-circuit).
@@ -2018,6 +2038,7 @@ export async function runPipeline(
     if (memSampleTimer) clearInterval(memSampleTimer);
     memLogger?.close();
     uninstallHeapHandlers();
+    await stopProfilers();
     closeDebugSink();
     await ctx.tempTracker?.cleanup();
   }

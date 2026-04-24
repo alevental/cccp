@@ -232,7 +232,9 @@ export function MemoryView({ samples, events, activities, dispatches, chromeHeig
 
   // Cap heap-space rows so the whole view fits roughly within the pane.
   const availableRows = Math.max(8, rows - chromeHeight - 2);
-  const reservedRows = 11; // title + snapshot + delta + rate + 3 sparkline rows + counters block
+  // Generous reservation to accommodate leak suspects, data sizes, object
+  // tracker, active handles, runtime panel, and keybind footer.
+  const reservedRows = 40;
   const maxSpaceRows = Math.max(3, availableRows - reservedRows);
   const visibleSpaces = spaceEntries.slice(0, maxSpaceRows);
 
@@ -311,7 +313,174 @@ export function MemoryView({ samples, events, activities, dispatches, chromeHeig
       </Box>
 
       <LeakSuspectsPanel />
+      <DataSizesPanel />
+      <ObjectTrackerPanel />
+      <ActiveHandlesPanel />
+      <RuntimePanel />
+
+      <Box marginTop={1}>
+        <Text dimColor>Keybinds:  [g] force GC (needs --expose-gc)  [h] write heap snapshot</Text>
+      </Box>
     </Box>
+  );
+}
+
+function fmtBytesHuman(n: number): string {
+  if (n < 1024) return `${n}B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)}MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)}GB`;
+}
+
+// ---------------------------------------------------------------------------
+// Data sizes panel — byte-level view of known accumulators. If the leak is
+// in data we already track (events, state), this panel localises it.
+// ---------------------------------------------------------------------------
+
+function DataSizesPanel() {
+  const reg = snapshotRegistry();
+  const rows: Array<{ label: string; bytes: number }> = [
+    { label: "eventHistoryBytes", bytes: reg.eventHistoryBytes },
+    { label: "maxEventBytes",     bytes: reg.maxEventBytes },
+    { label: "stateBytes",        bytes: reg.stateBytes },
+    { label: "code+metadata",     bytes: reg.heapCodeStats.codeAndMetadataSize },
+    { label: "bytecode+metadata", bytes: reg.heapCodeStats.bytecodeAndMetadataSize },
+    { label: "extScriptSource",   bytes: reg.heapCodeStats.externalScriptSourceSize },
+  ];
+
+  function color(bytes: number): "red" | "yellow" | undefined {
+    if (bytes > 500 * 1024 * 1024) return "red";
+    if (bytes > 50 * 1024 * 1024) return "yellow";
+    return undefined;
+  }
+
+  return (
+    <>
+      <Box marginTop={1}>
+        <Text bold>Data sizes</Text>
+        <Text dimColor>  (byte-level view of tracked buffers; yellow &gt;50MB, red &gt;500MB)</Text>
+      </Box>
+      {rows.map((r) => (
+        <Box key={r.label}>
+          <Text dimColor>  {r.label.padEnd(20)}</Text>
+          <Text color={color(r.bytes)}>{fmtBytesHuman(r.bytes).padStart(10)}</Text>
+        </Box>
+      ))}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Object tracker panel — WeakRef-based created-vs-live counts. A kind whose
+// `live` keeps growing in step with `created` points directly at the leak.
+// ---------------------------------------------------------------------------
+
+function ObjectTrackerPanel() {
+  const reg = snapshotRegistry();
+  const entries = Object.entries(reg.objectTracker);
+
+  if (entries.length === 0) {
+    return (
+      <>
+        <Box marginTop={1}>
+          <Text bold>Object tracker</Text>
+          <Text dimColor>  (no tracked kinds — register via trackObject)</Text>
+        </Box>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Box marginTop={1}>
+        <Text bold>Object tracker</Text>
+        <Text dimColor>  (WeakRef live vs ever-created; rising live = retention)</Text>
+      </Box>
+      {entries.map(([kind, c]) => {
+        const ratio = c.created > 0 ? c.live / c.created : 0;
+        const color: "red" | "yellow" | undefined =
+          c.live > 10_000 || ratio > 0.8 ? "red" :
+          c.live > 1_000 || ratio > 0.5 ? "yellow" : undefined;
+        return (
+          <Box key={kind}>
+            <Text dimColor>  {kind.padEnd(20)}</Text>
+            <Text color={color}>{String(c.live).padStart(8)}</Text>
+            <Text dimColor>{" live / "}{c.created}{" created"}</Text>
+          </Box>
+        );
+      })}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Active handles panel — counts by type. A growing Timer count reveals
+// zombie setInterval callbacks; growing FSReqCallback hints at file leaks.
+// ---------------------------------------------------------------------------
+
+function ActiveHandlesPanel() {
+  const reg = snapshotRegistry();
+  const entries = Object.entries(reg.activeHandles).sort((a, b) => b[1] - a[1]);
+  const total = entries.reduce((s, [, n]) => s + n, 0);
+
+  return (
+    <>
+      <Box marginTop={1}>
+        <Text bold>Active handles</Text>
+        <Text dimColor>  (total {total} — what's keeping the event loop alive)</Text>
+      </Box>
+      {entries.slice(0, 10).map(([type, n]) => (
+        <Box key={type}>
+          <Text dimColor>  {type.padEnd(28)}</Text>
+          <Text color={n > 100 ? "red" : n > 20 ? "yellow" : undefined}>{n}</Text>
+        </Box>
+      ))}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Runtime panel — event loop utilization, resource usage, activity bus.
+// ---------------------------------------------------------------------------
+
+function RuntimePanel() {
+  const reg = snapshotRegistry();
+  const elu = reg.eventLoopUtilization;
+  const ru = reg.resourceUsage;
+
+  return (
+    <>
+      <Box marginTop={1}>
+        <Text bold>Runtime</Text>
+      </Box>
+      <Box>
+        <Text dimColor>  eventLoopUtil      </Text>
+        <Text color={elu.utilization > 0.9 ? "red" : elu.utilization > 0.5 ? "yellow" : undefined}>
+          {(elu.utilization * 100).toFixed(1)}%
+        </Text>
+        <Text dimColor>{"  "}(active {elu.activeMs.toFixed(0)}ms / idle {elu.idleMs.toFixed(0)}ms over last sample)</Text>
+      </Box>
+      <Box>
+        <Text dimColor>  maxRSS             </Text>
+        <Text>{fmtBytesHuman(ru.maxRssKB * 1024)}</Text>
+        <Text dimColor>{"  "}(kernel high-water mark)</Text>
+      </Box>
+      <Box>
+        <Text dimColor>  pageFaults         </Text>
+        <Text>{ru.minorPageFaults}</Text>
+        <Text dimColor>{" minor  "}{ru.majorPageFaults}{" major"}</Text>
+      </Box>
+      <Box>
+        <Text dimColor>  ctxSwitches        </Text>
+        <Text>{ru.voluntaryContextSwitches}</Text>
+        <Text dimColor>{" vol  "}{ru.involuntaryContextSwitches}{" invol"}</Text>
+      </Box>
+      <Box>
+        <Text dimColor>  activityBusEmits   </Text>
+        <Text>{reg.activityBusEmitCount}</Text>
+        <Text dimColor>{"  (monotonic)"}</Text>
+      </Box>
+    </>
   );
 }
 
