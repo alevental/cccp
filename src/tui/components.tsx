@@ -1,5 +1,5 @@
-import React from "react";
-import { Box, Text } from "ink";
+import React, { useState } from "react";
+import { Box, Text, useInput } from "ink";
 import Spinner from "ink-spinner";
 import type { PipelineState, StageState, GateInfo, StateEvent } from "../types.js";
 import type { AgentActivity } from "../stream/stream.js";
@@ -44,6 +44,22 @@ function stageColor(status: StageState["status"]): string | undefined {
 
 interface StageListProps {
   state: PipelineState;
+  /**
+   * Total height (rows) the parent has allocated to the Stages pane,
+   * including the title line. The component clips its row list to fit.
+   * If omitted, the list renders uncapped (legacy behavior).
+   */
+  paneHeight?: number;
+  /**
+   * When true, ↑↓/PgUp/PgDn/Home/End scroll the stage list. Defaults to
+   * false so the inline log keeps its arrow-key behavior unless the user
+   * has tabbed focus over.
+   */
+  isFocused?: boolean;
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, n));
 }
 
 /** Visual tag suffix for gate-like stages (rendered after the name). */
@@ -108,8 +124,9 @@ type StageRow_t =
   | { kind: "group-start" }
   | { kind: "group-end" };
 
-export function StageList({ state }: StageListProps) {
-  // Group consecutive stages by groupId for visual bracketing.
+export function StageList({ state, paneHeight, isFocused = false }: StageListProps) {
+  // Build flat rows array: parallel-group brackets and sub-pipeline children
+  // are flattened inline so we can slice by visible window.
   const rows: StageRow_t[] = [];
   let currentGroupId: string | undefined;
 
@@ -137,10 +154,80 @@ export function StageList({ state }: StageListProps) {
   }
   if (currentGroupId) rows.push({ kind: "group-end" });
 
+  const totalRows = rows.length;
+
+  // Locate the active stage's row index so follow-mode can keep it visible.
+  // Prefer the first in_progress row; fall back to the last completed one.
+  const stageStatus = (row: StageRow_t): StageState["status"] | undefined => {
+    if (row.kind !== "stage") return undefined;
+    if (row.parentName) {
+      return state.stages[row.parentName]?.children?.stages[row.name]?.status;
+    }
+    return state.stages[row.name]?.status;
+  };
+  let activeIndex = rows.findIndex((r) => stageStatus(r) === "in_progress");
+  if (activeIndex < 0) {
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const s = stageStatus(rows[i]);
+      if (s === "passed" || s === "failed" || s === "error") {
+        activeIndex = i;
+        break;
+      }
+    }
+  }
+  if (activeIndex < 0) activeIndex = 0;
+
+  // Reserve rows for the title and (if present) the pending-gate panel.
+  const gatePending = state.gate?.status === "pending";
+  const handoffRow =
+    gatePending && state.gate?.kind === "pipeline_handoff" && state.gate.handoff ? 1 : 0;
+  const gateRows = gatePending ? 2 + handoffRow : 0;
+  const titleRows = 1;
+  const availableHeight = paneHeight != null
+    ? Math.max(3, paneHeight - titleRows - gateRows)
+    : totalRows;
+  const maxStart = Math.max(0, totalRows - availableHeight);
+  const followStart = clamp(
+    activeIndex - Math.floor(availableHeight / 2),
+    0,
+    maxStart,
+  );
+
+  // null = follow-mode (auto-track active). A number is an explicit
+  // window-top index that stays put as the active stage advances.
+  const [scrollOffset, setScrollOffset] = useState<number | null>(null);
+
+  useInput(
+    (_input, key) => {
+      const cur = scrollOffset ?? followStart;
+      if (key.upArrow) setScrollOffset(clamp(cur - 1, 0, maxStart));
+      else if (key.downArrow) setScrollOffset(clamp(cur + 1, 0, maxStart));
+      else if (key.pageUp) setScrollOffset(clamp(cur - availableHeight, 0, maxStart));
+      else if (key.pageDown) setScrollOffset(clamp(cur + availableHeight, 0, maxStart));
+      else if (key.home) setScrollOffset(0);
+      else if (key.end) setScrollOffset(null);
+    },
+    { isActive: isFocused },
+  );
+
+  const windowStart = clamp(scrollOffset ?? followStart, 0, maxStart);
+  const visibleRows = paneHeight != null
+    ? rows.slice(windowStart, windowStart + availableHeight)
+    : rows;
+  const isScrolled = scrollOffset !== null && scrollOffset !== followStart;
+  const overflowing = paneHeight != null && totalRows > availableHeight;
+
   return (
     <Box flexDirection="column" minWidth={24}>
-      <Text bold underline>Stages</Text>
-      {rows.map((row, i) => {
+      <Box>
+        <Text bold underline>Stages</Text>
+        {isFocused && <Text dimColor> [focused]</Text>}
+        {isScrolled && <Text dimColor> [scrolled — End to follow]</Text>}
+        {overflowing && !isScrolled && !isFocused && (
+          <Text dimColor> [Tab+↑↓ scroll]</Text>
+        )}
+      </Box>
+      {visibleRows.map((row, i) => {
         if (row.kind === "group-start") {
           return (
             <Box key={`gs-${i}`}>

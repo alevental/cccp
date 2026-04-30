@@ -301,7 +301,9 @@ Press `m` in a running dashboard for the live memory view. Panels (all read from
 
 `ink` / `react-reconciler` call `performance.measure('Text', …)`, `performance.measure('Box', …)` etc. on every fiber commit. Node's default `perf_hooks` timeline buffer is unbounded, so on a multi-hour TUI run this accumulates hundreds of thousands of `PerformanceMeasure` objects (we saw 426,489 in a single 3-hour heap snapshot — ~260 MB of correlated strings/objects, effectively the entire `old_space`). CCCP installs a `PerformanceObserver` at dashboard/agent-monitor mount that drains the default buffer on every callback — `perfMeasuresDrained` reports the running count. A climbing counter with flat heap means the sink is working; if `perfMeasuresDrained` is flat but heap grows, something else is leaking.
 
-Keybind footer: `[p] pause · [m] events/memory · [g] force-gc · [h] heap snapshot`.
+Keybind footer: `[p] pause · [Tab] focus · [m] events/memory · [g] force-gc · [h] heap snapshot`.
+
+`Tab` cycles focus between the two scrollable panels (Stages, Detail Log). Only the focused panel responds to ↑↓/PgUp/PgDn/Home/End — defaults to the Detail Log so existing arrow-key UX is preserved. Title of the focused panel shows `[focused]`. The Stages panel is height-bounded (~45% of the terminal) and auto-tracks the in-progress stage in follow mode; manual scroll suspends follow, `End` resumes.
 
 ### Leak hunt workflow
 

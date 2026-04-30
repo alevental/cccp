@@ -11,9 +11,15 @@ interface DetailLogProps {
   events: StateEvent[];
   /** Height of the fixed panes above (header + split pane + margins). */
   chromeHeight?: number;
+  /**
+   * When true, ↑↓/PgUp/PgDn/Home/End scroll this log. Defaults to true so
+   * existing call sites keep working; the dashboard passes `false` when
+   * focus has moved to the Stages panel via Tab.
+   */
+  isFocused?: boolean;
 }
 
-export function DetailLog({ events, chromeHeight = 14 }: DetailLogProps) {
+export function DetailLog({ events, chromeHeight = 14, isFocused = true }: DetailLogProps) {
   const { stdout } = useStdout();
   // +2 for the DetailLog title line and its marginTop
   const availableHeight = Math.max(5, (stdout.rows ?? 24) - chromeHeight - 2);
@@ -33,7 +39,8 @@ export function DetailLog({ events, chromeHeight = 14 }: DetailLogProps) {
   const totalLines = allLines.length;
   const maxOffset = Math.max(0, totalLines - availableHeight);
 
-  // Keyboard-driven scroll.
+  // Keyboard-driven scroll. Gated on focus so it doesn't double-fire with
+  // the Stages panel's scroll handler when the user has tabbed focus over.
   useInput((input, key) => {
     if (key.upArrow) {
       setScrollOffset(prev => Math.min(maxOffset, prev + 1));
@@ -48,7 +55,7 @@ export function DetailLog({ events, chromeHeight = 14 }: DetailLogProps) {
     } else if (key.home || (input === "g")) {
       setScrollOffset(maxOffset); // Jump to top
     }
-  });
+  }, { isActive: isFocused });
 
   // Auto-scroll: when new events arrive and user is at bottom, stay at bottom.
   const clampedOffset = Math.min(scrollOffset, maxOffset);
@@ -61,8 +68,10 @@ export function DetailLog({ events, chromeHeight = 14 }: DetailLogProps) {
     <Box flexDirection="column" marginTop={1}>
       <Box>
         <Text bold underline>Detail Log</Text>
+        {isFocused && <Text dimColor> [focused]</Text>}
         {isScrolled && <Text dimColor> [scrolled {"\u2014"} press End to resume]</Text>}
-        {totalLines > availableHeight && !isScrolled && <Text dimColor> [{"\u2191\u2193"} scroll]</Text>}
+        {totalLines > availableHeight && !isScrolled && isFocused && <Text dimColor> [{"\u2191\u2193"} scroll]</Text>}
+        {totalLines > availableHeight && !isScrolled && !isFocused && <Text dimColor> [Tab+{"\u2191\u2193"} scroll]</Text>}
       </Box>
       {visibleLines.length === 0 && (
         <Text dimColor>  Waiting for events...</Text>

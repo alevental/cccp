@@ -47,15 +47,15 @@ The dashboard uses a split-pane layout:
 │ CCCP: pipeline-name (project)  a1b2c3d4  Elapsed: 5m 3s │
 │   main  7a3e1f2  ✗ dirty  ↑2  [my-repo]                 │
 +──────────────────────────────────────────────────────────+
-│ Stages              │ Agent Activity (2 active)          │
-│  ✓ research  12.3s  │ [design-gen] sonnet · 2m  │ [eval]│
-│  ▸ build-pipeline e5f6g7h8                       │  ▶ Rea│
-│    ├─ ✓ design      │   ✓ Read /src/foo.ts      │  2,100│
-│    ├─ ▸ implement   │   ✓ Grep "pattern"        │  $0.01│
-│    ├─ ○ review      │   12.4k/3.2k tok · $0.04  │       │
-│  ○ approval ⚑       │                           │       │
-+──────────────────────────────────────────────────────────+
-│ Detail Log [↑↓ scroll]                                   │
+│ Stages [Tab+↑↓ scroll] │ Agent Activity (2 active)       │
+│  ✓ research  12.3s     │ [design-gen] sonnet · 2m │ [ev] │
+│  ▸ build-pipeline e5f6g7h8                                │
+│    ├─ ✓ design         │   ✓ Read /src/foo.ts      │ 2.1k│
+│    ├─ ▸ implement      │   ✓ Grep "pattern"        │ $.01│
+│    ├─ ○ review         │   12.4k/3.2k tok · $0.04  │     │
+│  ○ approval ⚑          │                           │     │
++───────────────────────────────────────────────────────────+
+│ Detail Log [focused] [↑↓ scroll]                          │
 │ 14:32:01  ▶ Started: research (agent)                    │
 │              agent: researcher · sonnet · high            │
 │ 14:32:45  ✓ Completed: research passed (45.2s)           │
@@ -133,6 +133,14 @@ Additional indicators:
 
 The spinner for in-progress stages uses the `ink-spinner` package with `type="dots"`. Human gate stages use a static `⏸` icon instead of an animated spinner to avoid continuous re-renders during long gate waits.
 
+#### Bounded scrollable viewport
+
+The Stages pane has a bounded height (`stagesPaneHeight = max(8, min(stageListRows + 3, floor(availableArea * 0.45)))`) computed by the parent `Dashboard` from `terminalRows`. Small pipelines hug their content; long ones top out at ~45% of the terminal so the Detail Log keeps its share. The component slices its flat `rows: StageRow_t[]` array to fit the allocation. The window auto-tracks the in-progress stage in **follow mode** (`scrollOffset === null`); the row list is centered so the active row stays visible as the run advances.
+
+Manual keyboard scroll (only when the panel has focus — see [Keyboard shortcuts](#keyboard-shortcuts)) sets `scrollOffset` to an explicit window-top index and shows `[scrolled — End to follow]` in the title. Press `End` to clear the offset and resume follow mode. `Home` jumps to row 0. `↑↓` step one row, `PgUp/PgDn` step one window-height. The `useInput` handler is gated on `{ isActive: isFocused }` so arrow keys don't double-fire across the Stages and Detail Log handlers.
+
+The pending-gate panel (when present) reserves rows below the row list — 2 rows for human/agent gates, 3 for `pipeline_handoff`. The available row count subtracts the title and gate reservation: `availableHeight = max(3, paneHeight - 1 - gateRows)`. Without `paneHeight` (legacy callers), the component renders all rows uncapped.
+
 ### AgentActivityPanel (right pane)
 
 Shows only agents whose corresponding stage is `in_progress`, with per-agent elapsed timers:
@@ -164,9 +172,11 @@ Agents are cleaned up per-stage: when a stage leaves `in_progress`, its agent ke
 
 ### DetailLog (bottom pane)
 
-Keyboard-scrollable event log showing rich PGE visualization. Uses Up/Down arrows, PageUp/PageDown, Home/End for navigation. Keeps up to 500 events in React state.
+Keyboard-scrollable event log showing rich PGE visualization. Uses Up/Down arrows, PageUp/PageDown, Home/End for navigation when the panel has focus. Keeps up to 500 events in React state.
 
-When scrolled up, shows `[scrolled — press End to resume]` indicator. When at the bottom with overflow, shows `[↑↓ scroll]` hint.
+The `useInput` handler is gated on `{ isActive: isFocused }` so it doesn't double-fire with the Stages panel. Default focus is the log (preserves prior UX where arrow keys always scrolled the log). Press `Tab` to cycle focus.
+
+Title indicators: `[focused]` when the panel has focus; `[scrolled — press End to resume]` when manually scrolled; `[↑↓ scroll]` when focused with overflow but at tail; `[Tab+↑↓ scroll]` when not focused with overflow.
 
 Stage start events include metadata: agent name, model, effort, inputs, and output. PGE phase starts show model/effort badges: `▶ Generator [architect] sonnet · high iter 1/3`.
 
@@ -223,14 +233,20 @@ Sub-pipeline child events render as `↳ [child-pipeline] stage: started/complet
 
 ### Keyboard shortcuts
 
+Arrow / page / home / end keys scroll the **focused** panel only — both the Stages list and the Detail Log register `useInput({ isActive: isFocused })` handlers, so a key press is consumed by exactly one of them. Default focus is the log.
+
 | Key | Action |
 |-----|--------|
-| `↑` / `↓` | Scroll detail log |
-| `PgUp` / `PgDn` | Page scroll detail log |
-| `Home` / `g` | Jump to top |
-| `End` / `G` | Jump to bottom (auto-scroll) |
+| `Tab` | Cycle focus between Stages and Detail Log (focused panel shows `[focused]`) |
+| `↑` / `↓` | Scroll focused panel by one row |
+| `PgUp` / `PgDn` | Page-scroll focused panel by one window height |
+| `Home` | Jump to top (Stages: row 0; Detail Log: oldest event) |
+| `End` | Resume follow / auto-scroll (Stages: re-center on active stage; Detail Log: tail) |
+| `g` / `G` | (Detail Log only) jump to top / bottom — alias for Home/End |
 | `p` | Request pipeline pause at next clean breakpoint |
 | `m` | Toggle between Detail Log and Memory Diagnostics view |
+| `g` (with `--expose-gc`) | Force GC and report reclaim delta |
+| `h` | Write on-demand heap snapshot to `.cccp/heap-*.heapsnapshot` |
 
 ## Polling and Update Strategy
 

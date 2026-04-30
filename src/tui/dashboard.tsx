@@ -224,9 +224,18 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
     setTimeout(() => setDiagMsg((m) => (m === msg ? null : m)), 5000);
   };
 
+  // Focus model: arrow keys scroll the focused panel. Default is the log
+  // (preserves the prior behavior where ↑↓ always scrolled DetailLog).
+  // Tab cycles focus between Stages and the bottom pane.
+  const [focusedPanel, setFocusedPanel] = useState<"stages" | "log">("log");
+
   // Pause request + diagnostic keybinds via keyboard.
   const [pauseRequested, setPauseRequested] = useState(false);
-  useInput((input) => {
+  useInput((input, key) => {
+    if (key.tab) {
+      setFocusedPanel((p) => (p === "stages" ? "log" : "stages"));
+      return;
+    }
     if ((input === "p" || input === "P") && state.status === "running" && !pauseRequested) {
       setPauseRequested(true);
       try {
@@ -417,7 +426,9 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
 
   const terminalRows = stdout.rows ?? 24;
 
-  // Compute visible row count including sub-pipeline children and parallel group markers.
+  // Total rows the StageList would render uncapped (parents + sub-pipeline
+  // children + parallel-group brackets). Used only to pick a "hug content"
+  // height for short pipelines; long pipelines cap at ~45% of the terminal.
   let stageListRows = state.stageOrder.length;
   const groupIds = new Set<string>();
   for (const name of state.stageOrder) {
@@ -428,6 +439,18 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
     if (stage.groupId) groupIds.add(stage.groupId);
   }
   stageListRows += groupIds.size * 2; // group start + end markers
+
+  // Bound the Stages pane: hug content for small pipelines, but cap at
+  // ~45% of the available area so long stage lists scroll internally
+  // instead of pushing the Detail Log off-screen (which is what produced
+  // the right-edge character bleed in scoped sub-pipeline panes).
+  const headerRows = gitInfo ? 4 : 3;
+  const availableArea = Math.max(10, terminalRows - headerRows);
+  const stagesPaneHeight = Math.max(
+    8,
+    Math.min(stageListRows + 3, Math.floor(availableArea * 0.45)),
+  );
+  const detailChromeHeight = stagesPaneHeight + (gitInfo ? 4 : 3);
 
   return (
     <Box flexDirection="column" height={terminalRows} overflow="hidden">
@@ -441,10 +464,10 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
         gitInfo={gitInfo}
       />
 
-      {/* Split pane: Stages (left) | Activity (right)
-         Fixed height prevents Ink re-render corruption when content changes. */}
-      <Box marginTop={1} flexDirection="row" height={Math.max(stageListRows + 3, 8)} overflow="hidden">
-        <StageList state={state} />
+      {/* Split pane: Stages (left) | Activity (right). Stages scrolls
+         internally so its allocation stays bounded regardless of stage count. */}
+      <Box marginTop={1} flexDirection="row" height={stagesPaneHeight} overflow="hidden">
+        <StageList state={state} paneHeight={stagesPaneHeight} isFocused={focusedPanel === "stages"} />
         {!isComplete ? (
           <Box flexDirection="column" flexGrow={1}>
             <AgentActivityPanel activities={activities} stages={state.stages} dispatchStartTimes={dispatchStartTimes} now={now} />
@@ -452,7 +475,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
               <Text color="blue"> {"\u23F8"} Pause requested {"\u2014"} will pause after current stage</Text>
             )}
             {!pauseRequested && (
-              <Text dimColor> [p] pause {"\u00B7"} [m] {viewMode === "memory" ? "events" : "memory"} {"\u00B7"} [g] force-gc {"\u00B7"} [h] heap snapshot</Text>
+              <Text dimColor> [p] pause {"\u00B7"} [Tab] focus {"\u00B7"} [m] {viewMode === "memory" ? "events" : "memory"} {"\u00B7"} [g] force-gc {"\u00B7"} [h] heap snapshot</Text>
             )}
             {diagMsg && (
               <Text color="cyan"> {"\u25CF"} {diagMsg}</Text>
@@ -483,10 +506,14 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
           events={events.length}
           activities={activities.size}
           dispatches={dispatchStartTimes.size}
-          chromeHeight={Math.max(stageListRows + 3, 8) + (gitInfo ? 4 : 3)}
+          chromeHeight={detailChromeHeight}
         />
       ) : (
-        <DetailLog events={events} chromeHeight={Math.max(stageListRows + 3, 8) + (gitInfo ? 4 : 3)} />
+        <DetailLog
+          events={events}
+          chromeHeight={detailChromeHeight}
+          isFocused={focusedPanel === "log"}
+        />
       )}
     </Box>
   );

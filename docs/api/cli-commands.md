@@ -60,7 +60,9 @@ Variables are merged in this order (later overrides earlier):
 - TUI dashboard is shown by default
 - Disabled when `--headless`, `--dry-run`, or `--no-tui` is set
 - When TUI is active, console output from agents is suppressed (`quiet: true`)
-- Detail log is keyboard-scrollable: Up/Down, PageUp/PageDown, Home/End
+- Both the Stages panel (top) and the Detail Log (bottom) are keyboard-scrollable: ↑/↓, PgUp/PgDn, Home/End
+- Press `Tab` to cycle focus between the two scrollable panels — only the focused panel responds to arrow keys (focused panel's title shows `[focused]`)
+- The Stages panel is height-bounded (~45% of the terminal) and follow-mode-tracks the in-progress stage; press `End` to resume follow after manual scroll
 - Press `p` to request a pause — the pipeline finishes the current stage and stops
 - Active agents panel shows only in-progress agents with elapsed timers
 - Sub-pipeline stages are shown inline with `├─` indentation; in cmux, depth-1 sub-pipelines also get their own split-pane dashboard
