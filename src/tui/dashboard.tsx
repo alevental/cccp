@@ -496,6 +496,19 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
 // Launch dashboard (standalone)
 // ---------------------------------------------------------------------------
 
+// Wipe the terminal before Ink mounts. Ink's render() draws inline from the
+// current cursor position and only repaints columns it knows it wrote, so
+// any prior content (npx noise, a previous sub-pipeline's dashboard frame,
+// or a longer pre-recycle frame) bleeds through on the right edges of rows
+// where the new render is shorter. Writing CSI 2J + CSI 3J + CSI H clears
+// the visible screen and scrollback and parks the cursor at home so the
+// first frame paints over a known-empty buffer.
+function clearTerminal(): void {
+  if (process.stdout.isTTY) {
+    process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
+  }
+}
+
 export async function launchDashboard(
   runId: string,
   projectDir: string,
@@ -526,6 +539,8 @@ export async function launchDashboard(
     artifactDir: initialState.artifactDir,
     runId,
   });
+
+  clearTerminal();
 
   return new Promise<void>((resolve) => {
     const { unmount, waitUntilExit } = render(
@@ -602,6 +617,10 @@ export function startDashboard(
   let shuttingDown = false;
 
   function mount() {
+    // Clear before each (re)mount so the recycle interval doesn't leave a
+    // longer prior frame's right-edge characters behind when the new frame
+    // is shorter.
+    clearTerminal();
     return render(
       <Dashboard
         runId={runId}
