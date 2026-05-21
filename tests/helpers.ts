@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { rm } from "node:fs/promises";
+import { beforeEach, afterEach } from "vitest";
+import { closeDatabase } from "../src/db.js";
 import type { PipelineState, GateInfo } from "../src/types.js";
 import type { GateResponse, GateStrategy } from "../src/gate/gate-strategy.js";
 
@@ -36,6 +38,41 @@ export async function cleanupAll(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Isolated DB per test
+//
+// Sets CCCP_DB_PATH to a fresh temp file before each test and recycles the
+// global handle cache so the new path is picked up. Without this, tests share
+// the user's real ~/.cccp/cccp.db.
+//
+// Call once at the top of a describe() block. Returns a getter for the path
+// in case the test needs it directly.
+// ---------------------------------------------------------------------------
+
+export function useIsolatedDb(): { dbPath: () => string } {
+  let currentPath = "";
+  let saved: string | undefined;
+
+  beforeEach(() => {
+    saved = process.env.CCCP_DB_PATH;
+    const dir = tmpProjectDir();
+    currentPath = join(dir, "test.db");
+    process.env.CCCP_DB_PATH = currentPath;
+    closeDatabase();
+  });
+
+  afterEach(() => {
+    closeDatabase();
+    if (saved === undefined) {
+      delete process.env.CCCP_DB_PATH;
+    } else {
+      process.env.CCCP_DB_PATH = saved;
+    }
+  });
+
+  return { dbPath: () => currentPath };
+}
+
+// ---------------------------------------------------------------------------
 // State factory
 // ---------------------------------------------------------------------------
 
@@ -53,6 +90,7 @@ export function makeState(overrides?: Partial<PipelineState>): PipelineState {
     },
     stageOrder: ["s1", "s2"],
     artifactDir: "/tmp/artifacts",
+    projectDir: "/tmp/project",
     ...overrides,
   };
 }

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted. Per-worktree DB location (`{projectDir}/.cccp/cccp.db`) superseded by [ADR-004](004-global-state-db.md), which centralizes state to `~/.cccp/cccp.db`. The SQLite-over-JSON decision and three-table schema described here are still in force.
 
 ## Context
 

@@ -18,7 +18,6 @@ const FRESH_START_WINDOW_MS = 30_000;
 
 export interface GateNotifierOptions {
   server: McpServer;
-  projectDir: string;
   /** Session ID for this MCP server instance. Used to filter gate notifications. */
   sessionId?: string;
   pollIntervalMs?: number;
@@ -75,7 +74,7 @@ export class GateNotifier {
       // Without this, the gate notifier's long-lived DatabaseSync handle
       // was observed to pin a WAL snapshot on macOS + Node 24/25 and never
       // fire a channel push for new pending gates.
-      const runs = await discoverRuns(this.opts.projectDir, undefined, { fresh: true });
+      const runs = await discoverRuns(undefined, { fresh: true });
 
       // Prune lastRunStatus for runs no longer returned by discoverRuns.
       const currentRunIds = new Set(runs.map((r) => r.state.runId));
@@ -454,7 +453,7 @@ export class GateNotifier {
     targetPane: string | undefined,
     note: string | undefined,
   ): Promise<void> {
-    const freshState = await loadState(run.state.runId, this.opts.projectDir, true);
+    const freshState = await loadState(run.state.runId, true);
     if (!freshState?.gate || freshState.gate.status !== "pending") {
       return;
     }
@@ -672,7 +671,7 @@ export class GateNotifier {
     feedback?: string,
   ): Promise<void> {
     // Reload state to ensure we have the latest (gate may have been resolved externally).
-    const freshState = await loadState(run.state.runId, this.opts.projectDir, true);
+    const freshState = await loadState(run.state.runId, true);
     if (!freshState?.gate || freshState.gate.status !== "pending") {
       return; // Gate already resolved — discard.
     }

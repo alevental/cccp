@@ -14,7 +14,7 @@ program
   .description(
     "Claude Code and Cmux Pipeline Reagent — deterministic YAML-based pipeline orchestration",
   )
-  .version("0.10.3");
+  .version("0.18.0");
 
 program
   .command("run")
@@ -136,16 +136,27 @@ program
     "Clean-reset and resume from this named stage (resets it and all subsequent stages)",
   )
   .action(async (opts) => {
-    const projectDir = resolve(opts.projectDir ?? process.cwd());
-    const projectConfig = await loadProjectConfig(projectDir);
+    // -d (and the cwd fallback) act as a project_dir filter on the global DB
+    // lookup. If your prefix is globally unique you can omit -d entirely.
+    const projectDirFilter = opts.projectDir ? resolve(opts.projectDir) : undefined;
 
     const { openDatabase } = await import("./db.js");
-    const db = openDatabase(projectDir);
-    const existingState = db.getRunByIdPrefix(opts.run);
+    const db = openDatabase();
+    const existingState = db.getRunByIdPrefix(opts.run, {
+      project: opts.project,
+      projectDir: projectDirFilter,
+    });
     if (!existingState) {
-      console.error(`No run matching "${opts.run}". Use \`cccp runs\` to list available runs.`);
+      console.error(
+        `No run matching "${opts.run}"${opts.project ? ` in project "${opts.project}"` : ""}${projectDirFilter ? ` under ${projectDirFilter}` : ""}. Use \`cccp_runs\` (MCP) or check ~/.cccp/cccp.db to list available runs.`,
+      );
       process.exit(1);
     }
+
+    // Use the run's own project_dir for artifact resolution and as the
+    // subprocess cwd for agent dispatch.
+    const projectDir = resolve(existingState.projectDir);
+    const projectConfig = await loadProjectConfig(projectDir);
 
     // --- Update session affinity for gate notifications ---
     if (opts.sessionId) {
@@ -214,23 +225,34 @@ program
     "Run ID or prefix (8+ chars) to monitor",
   )
   .option(
+    "-p, --project <name>",
+    "Project name (filter for prefix disambiguation)",
+  )
+  .option(
     "-d, --project-dir <path>",
-    "Project directory (defaults to cwd)",
+    "Project directory (filter for prefix disambiguation)",
   )
   .option(
     "--scope <stage>",
     "Scope dashboard to a sub-pipeline stage",
   )
   .action(async (opts) => {
-    const dashProjectDir = resolve(opts.projectDir ?? process.cwd());
+    const projectDirFilter = opts.projectDir ? resolve(opts.projectDir) : undefined;
     const { openDatabase } = await import("./db.js");
-    const db = openDatabase(dashProjectDir);
-    const existingState = db.getRunByIdPrefix(opts.run);
+    const db = openDatabase();
+    const existingState = db.getRunByIdPrefix(opts.run, {
+      project: opts.project,
+      projectDir: projectDirFilter,
+    });
 
     if (!existingState) {
-      console.error(`No run matching "${opts.run}". Use \`cccp runs\` to list available runs.`);
+      console.error(
+        `No run matching "${opts.run}"${opts.project ? ` in project "${opts.project}"` : ""}${projectDirFilter ? ` under ${projectDirFilter}` : ""}. Use \`cccp_runs\` (MCP) to list available runs.`,
+      );
       process.exit(1);
     }
+
+    const dashProjectDir = existingState.projectDir;
 
     if (opts.scope) {
       const stageState = existingState.stages[opts.scope];

@@ -7,7 +7,7 @@ import { SilentLogger } from "../src/logger.js";
 import { TempFileTracker } from "../src/temp-tracker.js";
 import type { AgentDispatcher, DispatchOptions } from "../src/dispatcher.js";
 import type { AgentResult, RunContext, Pipeline } from "../src/types.js";
-import { tmpProjectDir, cleanupAll } from "./helpers.js";
+import { tmpProjectDir, cleanupAll, useIsolatedDb } from "./helpers.js";
 
 afterAll(async () => {
   await cleanupAll();
@@ -200,6 +200,8 @@ stages:
 // ---------------------------------------------------------------------------
 
 describe("Integration: conditional execution", () => {
+  useIsolatedDb();
+
   it("skips stage when condition is not met", async () => {
     const dir = tmpProjectDir();
     await writeAgent(dir, "agent.md");
@@ -634,6 +636,8 @@ stages:
 // ---------------------------------------------------------------------------
 
 describe("Integration: resume with conditions", () => {
+  useIsolatedDb();
+
   it("restores outputs and evaluates conditions on resume", async () => {
     const dir = tmpProjectDir();
     await writeAgent(dir, "agent.md");
@@ -685,10 +689,10 @@ stages:
 
     // Load state for resume
     const { loadState } = await import("../src/state.js");
-    const savedState = await loadState(result1.stages[0].stageName, dir, true);
+    const savedState = await loadState(result1.stages[0].stageName, true);
     // Get the actual state by run
     const { openDatabase } = await import("../src/db.js");
-    const db = await openDatabase(dir);
+    const db = await openDatabase();
     const runs = db.listRuns();
     expect(runs.length).toBeGreaterThan(0);
     const existingState = runs[0].state;

@@ -1,6 +1,5 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { join } from "node:path";
-import { closeDatabase } from "../src/db.js";
 import {
   createState,
   loadState,
@@ -13,7 +12,7 @@ import {
   discoverRuns,
   resetFromStage,
 } from "../src/state.js";
-import { tmpProjectDir } from "./helpers.js";
+import { tmpProjectDir, useIsolatedDb } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
 // createState
@@ -82,6 +81,8 @@ describe("createState", () => {
 // ---------------------------------------------------------------------------
 
 describe("saveState / loadState", () => {
+  useIsolatedDb();
+
   it("persists and reloads state via SQLite", async () => {
     const projectDir = tmpProjectDir();
     const artifactDir = join(projectDir, "docs/projects/proj/test");
@@ -93,13 +94,12 @@ describe("saveState / loadState", () => {
 
     await saveState(state);
 
-    const loaded = await loadState(state.runId, projectDir);
+    const loaded = await loadState(state.runId);
     expect(loaded).not.toBeNull();
     expect(loaded!.pipeline).toBe("test");
     expect(loaded!.stages.step1.status).toBe("passed");
     expect(loaded!.runId).toBe(state.runId);
 
-    closeDatabase(projectDir);
   });
 
   it("persists sessionId through SQLite round-trip", async () => {
@@ -113,10 +113,9 @@ describe("saveState / loadState", () => {
 
     await saveState(state);
 
-    const loaded = await loadState(state.runId, projectDir);
+    const loaded = await loadState(state.runId);
     expect(loaded?.sessionId).toBe("mcp-session-abc-123");
 
-    closeDatabase(projectDir);
   });
 
   it("returns undefined sessionId when not set", async () => {
@@ -130,17 +129,15 @@ describe("saveState / loadState", () => {
 
     await saveState(state);
 
-    const loaded = await loadState(state.runId, projectDir);
+    const loaded = await loadState(state.runId);
     expect(loaded?.sessionId).toBeUndefined();
 
-    closeDatabase(projectDir);
   });
 
   it("returns null for non-existent artifact dir", async () => {
     const projectDir = tmpProjectDir();
-    const loaded = await loadState("nonexistent-run-id", projectDir);
+    const loaded = await loadState("nonexistent-run-id");
     expect(loaded).toBeNull();
-    closeDatabase(projectDir);
   });
 
   it("updates existing run on subsequent saves", async () => {
@@ -158,12 +155,11 @@ describe("saveState / loadState", () => {
     state.completedAt = new Date().toISOString();
     await saveState(state);
 
-    const loaded = await loadState(state.runId, projectDir);
+    const loaded = await loadState(state.runId);
     expect(loaded!.status).toBe("passed");
     expect(loaded!.stages.s1.status).toBe("passed");
     expect(loaded!.completedAt).toBeDefined();
 
-    closeDatabase(projectDir);
   });
 });
 
@@ -324,6 +320,8 @@ describe("findResumePoint", () => {
 // ---------------------------------------------------------------------------
 
 describe("discoverRuns", () => {
+  useIsolatedDb();
+
   it("discovers runs from SQLite database", async () => {
     const projectDir = tmpProjectDir();
 
@@ -332,18 +330,16 @@ describe("discoverRuns", () => {
     ], "/artifacts/planning", projectDir);
     await saveState(state);
 
-    const runs = await discoverRuns(projectDir);
+    const runs = await discoverRuns();
     expect(runs).toHaveLength(1);
     expect(runs[0].state.pipeline).toBe("planning");
 
-    closeDatabase(projectDir);
   });
 
   it("returns empty for project with no runs", async () => {
     const projectDir = tmpProjectDir();
-    const runs = await discoverRuns(projectDir);
+    const runs = await discoverRuns();
     expect(runs).toHaveLength(0);
-    closeDatabase(projectDir);
   });
 
 });
@@ -353,6 +349,8 @@ describe("discoverRuns", () => {
 // ---------------------------------------------------------------------------
 
 describe("resetFromStage", () => {
+  useIsolatedDb();
+
   it("resets top-level stages (existing behavior)", async () => {
     const projectDir = tmpProjectDir();
     const state = createState("test", "proj", "t.yaml", [
@@ -374,7 +372,6 @@ describe("resetFromStage", () => {
     expect(state.stages.s3.status).toBe("pending");
     expect(state.status).toBe("running");
 
-    closeDatabase(projectDir);
   });
 
   it("clears nested children when resetting a top-level sub-pipeline stage", async () => {
@@ -405,7 +402,6 @@ describe("resetFromStage", () => {
     expect(state.stages.sub.children).toBeUndefined();
     expect(state.status).toBe("running");
 
-    closeDatabase(projectDir);
   });
 
   it("resets child stages via dotted path", async () => {
@@ -438,7 +434,6 @@ describe("resetFromStage", () => {
     expect(state.status).toBe("running");
     expect(state.stages.sub.children!.status).toBe("running");
 
-    closeDatabase(projectDir);
   });
 
   it("throws for non-existent child stage with helpful error", async () => {
@@ -453,7 +448,6 @@ describe("resetFromStage", () => {
 
     await expect(resetFromStage(state, "sub.nonexistent")).rejects.toThrow("Available stages: c1");
 
-    closeDatabase(projectDir);
   });
 
   it("throws for non-pipeline stage in dotted path", async () => {
@@ -466,7 +460,6 @@ describe("resetFromStage", () => {
 
     await expect(resetFromStage(state, "agent-stage.child")).rejects.toThrow("not \"pipeline\"");
 
-    closeDatabase(projectDir);
   });
 
   it("throws when sub-pipeline has not started", async () => {
@@ -478,6 +471,5 @@ describe("resetFromStage", () => {
 
     await expect(resetFromStage(state, "sub.child")).rejects.toThrow("has not started yet");
 
-    closeDatabase(projectDir);
   });
 });

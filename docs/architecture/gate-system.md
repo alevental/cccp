@@ -444,7 +444,7 @@ When running inside a cmux workspace, a desktop notification is sent when a gate
 
 ### Programmatically
 
-Any process that can write to the SQLite database (at `.cccp/cccp.db` in the project directory) can respond to a gate by updating the run's `gate_json` column.
+Any process that can write to the global SQLite database (at `~/.cccp/cccp.db`, or whatever `CCCP_DB_PATH` points to) can respond to a gate by updating the run's `gate_json` column. With one DB serving every worktree, a singleton MCP server can route gate responses for any active run on the machine.
 
 ## Related Documentation
 

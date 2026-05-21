@@ -41,20 +41,6 @@ export function statePath(artifactDir: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Database resolution
-// ---------------------------------------------------------------------------
-
-/**
- * Resolve the project directory for database access.
- * Priority: state.projectDir > derive from pipelineFile > cwd
- */
-function resolveProjectDir(state?: PipelineState | null): string {
-  if (state?.projectDir) return state.projectDir;
-  // Fall back to cwd (the MCP server and CLI always run from project root)
-  return process.cwd();
-}
-
-// ---------------------------------------------------------------------------
 // Stage entry flattening (parallel groups → flat stage list)
 // ---------------------------------------------------------------------------
 
@@ -96,7 +82,7 @@ export function createState(
   pipelineFile: string,
   stages: Array<{ name: string; type: string; groupId?: string }>,
   artifactDir: string,
-  projectDir?: string,
+  projectDir: string = process.cwd(),
   sessionId?: string,
 ): PipelineState {
   const stageMap: Record<string, StageState> = {};
@@ -138,12 +124,10 @@ export function createState(
  */
 export async function loadState(
   runId: string,
-  projectDir?: string,
   reloadFromDisk?: boolean,
 ): Promise<PipelineState | null> {
   try {
-    const dir = projectDir ?? resolveProjectDir();
-    const db = reloadFromDisk ? reopenDatabase(dir) : openDatabase(dir);
+    const db = reloadFromDisk ? reopenDatabase() : openDatabase();
     return db.getRun(runId);
   } catch (err) {
     // Log database errors but don't crash — callers handle null gracefully.
@@ -161,8 +145,7 @@ export async function loadState(
 export async function saveState(
   state: PipelineState,
 ): Promise<void> {
-  const dir = resolveProjectDir(state);
-  const db = openDatabase(dir);
+  const db = openDatabase();
   db.upsertRun(state, state.artifactDir);
 }
 
@@ -176,8 +159,7 @@ export async function saveStateWithEvent(
   stageName?: string,
   eventData?: unknown,
 ): Promise<void> {
-  const dir = resolveProjectDir(state);
-  const db = openDatabase(dir);
+  const db = openDatabase();
   db.upsertRun(state, state.artifactDir);
   db.appendEvent(state.runId, eventType, stageName, eventData);
 }
@@ -362,8 +344,7 @@ export async function resetFromStage(
     delete state.completedAt;
     delete state.gate;
 
-    const dir = resolveProjectDir(state);
-    const db = openDatabase(dir);
+    const db = openDatabase();
     db.deleteEventsForStages(state.runId, stagesToReset);
     db.deleteCheckpointsForStages(state.runId, stagesToReset);
     db.upsertRun(state, state.artifactDir);
@@ -416,8 +397,7 @@ export async function resetFromStage(
   delete state.gate;
 
   // DB cleanup.
-  const dir = resolveProjectDir(state);
-  const db = openDatabase(dir);
+  const db = openDatabase();
   const parentStageName = ancestors[ancestors.length - 1].stageName;
   db.deleteChildEventsForStages(state.runId, parentStageName, childStagesToReset);
   db.deleteCheckpointsForStages(state.runId, childStagesToReset);
@@ -444,12 +424,11 @@ export async function resetFromStage(
  * pinned WAL snapshot and miss sibling-process commits.
  */
 export async function discoverRuns(
-  projectDir: string,
   filter?: RunFilter,
   opts?: { fresh?: boolean },
 ): Promise<DiscoveredRun[]> {
   try {
-    const db = opts?.fresh ? reopenDatabase(projectDir) : openDatabase(projectDir);
+    const db = opts?.fresh ? reopenDatabase() : openDatabase();
     return db.findRuns(filter);
   } catch (err) {
     // Log database errors but don't crash — callers handle empty list gracefully.

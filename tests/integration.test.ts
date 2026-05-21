@@ -7,7 +7,7 @@ import { SilentLogger } from "../src/logger.js";
 import { TempFileTracker } from "../src/temp-tracker.js";
 import type { AgentDispatcher, DispatchOptions } from "../src/dispatcher.js";
 import type { AgentResult, RunContext, Pipeline } from "../src/types.js";
-import { tmpProjectDir, cleanupAll } from "./helpers.js";
+import { tmpProjectDir, cleanupAll, useIsolatedDb } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
 // Cleanup
@@ -94,6 +94,8 @@ function buildTestContext(opts: {
 // ---------------------------------------------------------------------------
 
 describe("Integration: full pipeline execution", () => {
+  useIsolatedDb();
+
   // -------------------------------------------------------------------------
   // 1. Happy path: agent stage passes
   // -------------------------------------------------------------------------
@@ -464,6 +466,8 @@ stages:
 // ---------------------------------------------------------------------------
 
 describe("Integration: pipeline stage (sub-pipeline)", () => {
+  useIsolatedDb();
+
   it("executes a sub-pipeline inline", async () => {
     const dir = tmpProjectDir();
     await writeAgent(dir, "worker.md", "# Worker\nDo work.");
@@ -731,7 +735,7 @@ stages:
 
     // Load state for resume
     const { openDatabase } = await import("../src/db.js");
-    const db = await openDatabase(dir);
+    const db = await openDatabase();
     const runs = db.listRuns();
     expect(runs.length).toBeGreaterThan(0);
     // Find the parent run (it has the pipeline name "resume-parent")
@@ -801,7 +805,7 @@ stages:
     // Load parent state and reset from the sub-pipeline stage.
     const { openDatabase } = await import("../src/db.js");
     const { resetFromStage } = await import("../src/state.js");
-    const db = await openDatabase(dir);
+    const db = await openDatabase();
     const parentState = db.listRuns().find(r => r.state.pipeline === "from-parent")!.state;
     await resetFromStage(parentState, "run-sub");
 

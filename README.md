@@ -308,7 +308,7 @@ npx @alevental/cccp examples [--dir <path>] [--agents-only] [--pipelines-only]
 
 ## Gate interaction
 
-When a pipeline hits a `human_gate` stage, it writes a pending gate to the SQLite state database (`.cccp/cccp.db`) and waits.
+When a pipeline hits a `human_gate` stage, it writes a pending gate to the global SQLite state database (`~/.cccp/cccp.db`) and waits.
 
 **Option 1: MCP server** — Register the MCP server in your project's `.mcp.json`:
 
@@ -329,7 +329,7 @@ Then from Claude Code: call `cccp_status` to see what's pending, `cccp_gate_resp
 
 ## State & resume
 
-Pipeline state is persisted to a SQLite database at `{projectDir}/.cccp/cccp.db` after every transition (stage start, planner dispatch, contract dispatch, generator dispatch, evaluator dispatch, routing decision). If a run is interrupted:
+Pipeline state is persisted to the global SQLite database at `~/.cccp/cccp.db` (override with `CCCP_DB_PATH`) after every transition (stage start, planner dispatch, contract dispatch, generator dispatch, evaluator dispatch, routing decision). One database holds runs from every worktree on the machine — see [ADR-004](docs/adr/004-global-state-db.md). If a run is interrupted:
 
 ```bash
 # Resume from the last incomplete stage

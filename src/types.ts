@@ -443,8 +443,11 @@ export interface PipelineState {
   gate?: GateInfo;
   /** Artifact output directory for this run. */
   artifactDir: string;
-  /** Project root directory. Used to locate the database. */
-  projectDir?: string;
+  /**
+   * Absolute project root directory the run was started from. Stored on every
+   * run so the global ~/.cccp/cccp.db can scope queries by project (worktree).
+   */
+  projectDir: string;
   /** MCP session that was active when this run started. Used for gate notification routing. */
   sessionId?: string;
 }

@@ -23,12 +23,13 @@ npx @alevental/cccp run -f <path> -p <name> [options]
 
 | Flag | Description |
 |------|-------------|
-| `-d, --project-dir <path>` | Project directory (defaults to `cwd`) |
+| `-d, --project-dir <path>` | Project directory (defaults to `cwd`). Used as the agent subprocess cwd, the artifact-root anchor, and the `runs.project_dir` value scoping this run in the global DB. |
 | `-a, --artifact-dir <path>` | Artifact output directory (overrides `cccp.yaml` and default pattern) |
 | `--dry-run` | Show assembled prompts and commands without executing agents |
 | `--headless` | Auto-approve all gates (no human interaction); disables TUI |
 | `--no-tui` | Disable the TUI dashboard (keep interactive gates) |
 | `-v, --var <key=value>` | Set pipeline variables (repeatable) |
+| `--session-id <id>` | MCP session ID for gate notification routing (matched against the singleton MCP server's session) |
 
 ### Artifact directory resolution
 
@@ -118,7 +119,7 @@ npx @alevental/cccp resume -p <name> -r <run-id-prefix> [options]
 
 | Flag | Description |
 |------|-------------|
-| `-d, --project-dir <path>` | Project directory (defaults to `cwd`) |
+| `-d, --project-dir <path>` | Project directory filter for prefix disambiguation. With state centralized in `~/.cccp/cccp.db`, this is only needed when the same run-id prefix exists in multiple worktrees; if omitted, lookup is global. |
 | `--headless` | Auto-approve all gates; disables TUI |
 | `--no-tui` | Disable the TUI dashboard (keep interactive gates) |
 | `--session-id <id>` | MCP session ID for gate notification routing (updates the run's session affinity) |
@@ -192,7 +193,8 @@ npx @alevental/cccp dashboard -r <run-id-prefix> [options]
 
 | Flag | Description |
 |------|-------------|
-| `-d, --project-dir <path>` | Project directory (defaults to `cwd`) |
+| `-p, --project <name>` | Project name filter for prefix disambiguation |
+| `-d, --project-dir <path>` | Project directory filter for prefix disambiguation. Only needed when the same run-id prefix exists across worktrees; runs from any worktree can be opened from any cwd. |
 | `--scope <stage>` | Scope to a sub-pipeline stage's children (stage must be `type: pipeline`) |
 
 ### Behavior

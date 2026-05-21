@@ -1,31 +1,31 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { existsSync, rmSync } from "node:fs";
+import { describe, it, expect } from "vitest";
+import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { CccpDatabase, dbPath, openDatabase, reopenDatabase, closeDatabase } from "../src/db.js";
-import { tmpProjectDir, makeState } from "./helpers.js";
+import { CccpDatabase, globalDbPath, openDatabase, reopenDatabase, closeDatabase } from "../src/db.js";
+import { makeState, useIsolatedDb } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
 // Database lifecycle
 // ---------------------------------------------------------------------------
 
 describe("CccpDatabase — lifecycle", () => {
+  useIsolatedDb();
+
   it("creates a new database with schema", async () => {
-    const dir = tmpProjectDir();
-    const db = await CccpDatabase.open(dir);
+    const db = await CccpDatabase.open();
 
     // node:sqlite creates the file on open; writes persist immediately (WAL mode).
-    expect(existsSync(dbPath(dir))).toBe(true);
+    expect(existsSync(globalDbPath())).toBe(true);
     db.close();
   });
 
   it("reopens an existing database", async () => {
-    const dir = tmpProjectDir();
-    const db1 = await CccpDatabase.open(dir);
+    const db1 = await CccpDatabase.open();
     const state = makeState();
     db1.insertRun(state, "/tmp/artifacts");
     db1.close();
 
-    const db2 = await CccpDatabase.open(dir);
+    const db2 = await CccpDatabase.open();
     const loaded = db2.getRun(state.runId);
     expect(loaded).not.toBeNull();
     expect(loaded!.pipeline).toBe("test-pipeline");
@@ -38,9 +38,10 @@ describe("CccpDatabase — lifecycle", () => {
 // ---------------------------------------------------------------------------
 
 describe("CccpDatabase — runs", () => {
+  useIsolatedDb();
+
   it("inserts and retrieves a run", async () => {
-    const dir = tmpProjectDir();
-    const db = await CccpDatabase.open(dir);
+    const db = await CccpDatabase.open();
     const state = makeState();
 
     db.insertRun(state, "/tmp/artifacts/test");
@@ -56,8 +57,7 @@ describe("CccpDatabase — runs", () => {
   });
 
   it("updates a run", async () => {
-    const dir = tmpProjectDir();
-    const db = await CccpDatabase.open(dir);
+    const db = await CccpDatabase.open();
     const state = makeState();
 
     db.insertRun(state, "/tmp/artifacts");
@@ -74,8 +74,7 @@ describe("CccpDatabase — runs", () => {
   });
 
   it("upserts — inserts if not exists, updates if exists", async () => {
-    const dir = tmpProjectDir();
-    const db = await CccpDatabase.open(dir);
+    const db = await CccpDatabase.open();
     const state = makeState();
 
     db.upsertRun(state, "/tmp/artifacts");
@@ -88,8 +87,7 @@ describe("CccpDatabase — runs", () => {
   });
 
   it("retrieves by artifact dir", async () => {
-    const dir = tmpProjectDir();
-    const db = await CccpDatabase.open(dir);
+    const db = await CccpDatabase.open();
     const state = makeState();
 
     db.insertRun(state, "/my/custom/artifacts");
@@ -101,8 +99,7 @@ describe("CccpDatabase — runs", () => {
   });
 
   it("returns null for non-existent run", async () => {
-    const dir = tmpProjectDir();
-    const db = await CccpDatabase.open(dir);
+    const db = await CccpDatabase.open();
 
     expect(db.getRun("nonexistent")).toBeNull();
     expect(db.getRunByArtifactDir("/nonexistent")).toBeNull();
@@ -110,8 +107,7 @@ describe("CccpDatabase — runs", () => {
   });
 
   it("lists runs sorted by status then date", async () => {
-    const dir = tmpProjectDir();
-    const db = await CccpDatabase.open(dir);
+    const db = await CccpDatabase.open();
 
     const completed = makeState({
       pipeline: "old",
@@ -135,8 +131,7 @@ describe("CccpDatabase — runs", () => {
   });
 
   it("stores and retrieves gate info", async () => {
-    const dir = tmpProjectDir();
-    const db = await CccpDatabase.open(dir);
+    const db = await CccpDatabase.open();
     const state = makeState();
     state.gate = {
       stageName: "approval",
@@ -154,6 +149,40 @@ describe("CccpDatabase — runs", () => {
     db.close();
   });
 
+  it("findRuns filters by projectDir", async () => {
+    const db = await CccpDatabase.open();
+
+    db.insertRun(makeState({ projectDir: "/wt/one" }), "/a/one");
+    db.insertRun(makeState({ projectDir: "/wt/two" }), "/a/two");
+    db.insertRun(makeState({ projectDir: "/wt/two" }), "/a/three");
+
+    const one = db.findRuns({ projectDir: "/wt/one" });
+    expect(one).toHaveLength(1);
+
+    const two = db.findRuns({ projectDir: "/wt/two" });
+    expect(two).toHaveLength(2);
+
+    db.close();
+  });
+
+  it("getRunByIdPrefix scopes by project/projectDir filter", async () => {
+    const db = await CccpDatabase.open();
+
+    // Two runs sharing a 1-char prefix but different projects.
+    const a = makeState({ runId: "abcdef-aaa-1", project: "alpha", projectDir: "/wt/a" });
+    const b = makeState({ runId: "abcdef-bbb-2", project: "beta",  projectDir: "/wt/b" });
+    db.insertRun(a, "/x/a");
+    db.insertRun(b, "/x/b");
+
+    // Ambiguous without filter.
+    expect(db.getRunByIdPrefix("abcdef")).toBeNull();
+
+    // Project filter disambiguates.
+    expect(db.getRunByIdPrefix("abcdef", { project: "alpha" })?.runId).toBe(a.runId);
+    expect(db.getRunByIdPrefix("abcdef", { projectDir: "/wt/b" })?.runId).toBe(b.runId);
+
+    db.close();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -161,9 +190,10 @@ describe("CccpDatabase — runs", () => {
 // ---------------------------------------------------------------------------
 
 describe("CccpDatabase — events", () => {
+  useIsolatedDb();
+
   it("appends and retrieves events", async () => {
-    const dir = tmpProjectDir();
-    const db = await CccpDatabase.open(dir);
+    const db = await CccpDatabase.open();
     const state = makeState();
     db.insertRun(state, "/artifacts");
 
@@ -183,8 +213,7 @@ describe("CccpDatabase — events", () => {
   });
 
   it("getEvents with sinceId returns incremental results", async () => {
-    const dir = tmpProjectDir();
-    const db = await CccpDatabase.open(dir);
+    const db = await CccpDatabase.open();
     const state = makeState();
     db.insertRun(state, "/artifacts");
 
@@ -207,9 +236,10 @@ describe("CccpDatabase — events", () => {
 // ---------------------------------------------------------------------------
 
 describe("CccpDatabase — event pruning", () => {
+  useIsolatedDb();
+
   it("pruneEvents keeps only the most recent N events", async () => {
-    const dir = tmpProjectDir();
-    const db = await CccpDatabase.open(dir);
+    const db = await CccpDatabase.open();
     const state = makeState();
     db.insertRun(state, "/artifacts");
 
@@ -232,8 +262,7 @@ describe("CccpDatabase — event pruning", () => {
   });
 
   it("pruneEvents is a no-op when fewer events than limit", async () => {
-    const dir = tmpProjectDir();
-    const db = await CccpDatabase.open(dir);
+    const db = await CccpDatabase.open();
     const state = makeState();
     db.insertRun(state, "/artifacts");
 
@@ -250,9 +279,10 @@ describe("CccpDatabase — event pruning", () => {
 // ---------------------------------------------------------------------------
 
 describe("CccpDatabase — checkpoints", () => {
+  useIsolatedDb();
+
   it("stores and retrieves checkpoints", async () => {
-    const dir = tmpProjectDir();
-    const db = await CccpDatabase.open(dir);
+    const db = await CccpDatabase.open();
 
     db.setCheckpoint("run1", "stage1", "contract", "/path/to/contract.md");
     const val = db.getCheckpoint("run1", "stage1", "contract");
@@ -261,8 +291,7 @@ describe("CccpDatabase — checkpoints", () => {
   });
 
   it("overwrites existing checkpoint", async () => {
-    const dir = tmpProjectDir();
-    const db = await CccpDatabase.open(dir);
+    const db = await CccpDatabase.open();
 
     db.setCheckpoint("run1", "stage1", "deliverable", "/v1.md");
     db.setCheckpoint("run1", "stage1", "deliverable", "/v2.md");
@@ -271,8 +300,7 @@ describe("CccpDatabase — checkpoints", () => {
   });
 
   it("returns null for non-existent checkpoint", async () => {
-    const dir = tmpProjectDir();
-    const db = await CccpDatabase.open(dir);
+    const db = await CccpDatabase.open();
 
     expect(db.getCheckpoint("x", "y", "z")).toBeNull();
     db.close();
@@ -284,9 +312,10 @@ describe("CccpDatabase — checkpoints", () => {
 // ---------------------------------------------------------------------------
 
 describe("CccpDatabase — persistence", () => {
+  useIsolatedDb();
+
   it("writes are visible to a reopened handle", async () => {
-    const dir = tmpProjectDir();
-    const db = await CccpDatabase.open(dir);
+    const db = await CccpDatabase.open();
     const state = makeState();
 
     db.insertRun(state, "/artifacts");
@@ -294,16 +323,15 @@ describe("CccpDatabase — persistence", () => {
     db.close();
 
     // Reopen and verify — no flush() needed with node:sqlite.
-    const db2 = await CccpDatabase.open(dir);
+    const db2 = await CccpDatabase.open();
     expect(db2.getRun(state.runId)).not.toBeNull();
     expect(db2.getEvents(state.runId)).toHaveLength(1);
     db2.close();
   });
 
   it("concurrent handles on the same file see each other's writes", async () => {
-    const dir = tmpProjectDir();
-    const writer = await CccpDatabase.open(dir);
-    const reader = await CccpDatabase.open(dir);
+    const writer = await CccpDatabase.open();
+    const reader = await CccpDatabase.open();
     const state = makeState();
 
     writer.insertRun(state, "/artifacts");
@@ -321,11 +349,10 @@ describe("CccpDatabase — persistence", () => {
   // recycled handle sees the row. We don't assert on the stale handle's
   // behavior — it's platform-dependent — only that the fix works.
   it("reopenDatabase picks up a sibling-process write on the reader side", () => {
-    const dir = tmpProjectDir();
-    const filePath = dbPath(dir);
+    const filePath = globalDbPath();
 
     // Seed one row so the DB file exists with schema applied.
-    const seed = openDatabase(dir);
+    const seed = openDatabase();
     seed.insertRun(makeState({ runId: "seed-run" }), "/artifacts");
 
     // Child process: open the same DB via node:sqlite directly, insert a
@@ -336,8 +363,8 @@ describe("CccpDatabase — persistence", () => {
       db.exec("PRAGMA journal_mode = WAL");
       db.exec("PRAGMA busy_timeout = 5000");
       db.prepare(
-        "INSERT INTO runs (run_id, pipeline, project, pipeline_file, artifact_dir, started_at, status, stages_json, stage_order_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-      ).run("child-run", "p", "pr", "/f", "/a", new Date().toISOString(), "running", "{}", "[]", new Date().toISOString());
+        "INSERT INTO runs (run_id, pipeline, project, pipeline_file, artifact_dir, project_dir, started_at, status, stages_json, stage_order_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      ).run("child-run", "p", "pr", "/f", "/a", "/wt/child", new Date().toISOString(), "running", "{}", "[]", new Date().toISOString());
       db.close();
     `;
     const child = spawnSync(process.execPath, ["-e", childScript], {
@@ -346,10 +373,10 @@ describe("CccpDatabase — persistence", () => {
     expect(child.status, child.stderr).toBe(0);
 
     // After reopen the reader must see the child-process write.
-    const fresh = reopenDatabase(dir);
+    const fresh = reopenDatabase();
     expect(fresh.getRun("child-run")).not.toBeNull();
     expect(fresh.getRun("seed-run")).not.toBeNull();
 
-    closeDatabase(dir);
+    closeDatabase();
   });
 });

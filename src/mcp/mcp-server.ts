@@ -12,6 +12,10 @@ import type { PipelineState, DiscoveredRun } from "../types.js";
 
 // ---------------------------------------------------------------------------
 // Run resolution
+//
+// The singleton MCP server reads from the global DB (~/.cccp/cccp.db) and
+// serves every project's runs. Tools that need a specific run resolve it by
+// run_id prefix — UUIDs make 8 chars globally unique in practice.
 // ---------------------------------------------------------------------------
 
 /** Module-level DbService — initialised in startMcpServer(). */
@@ -20,10 +24,9 @@ let dbService: DbService;
 async function resolveRun(
   runIdPrefix?: string,
 ): Promise<{ run: DiscoveredRun } | { error: string }> {
-  const projectDir = process.cwd();
   // Cross-process read — recycle the cached connection so the reader picks
   // up WAL frames committed by the runner since the last tool call.
-  const runs = await discoverRuns(projectDir, undefined, { fresh: true });
+  const runs = await discoverRuns(undefined, { fresh: true });
 
   if (runs.length === 0) {
     return { error: "No pipeline runs found. Start one with `cccp run`." };
@@ -67,8 +70,9 @@ function formatRunList(runs: DiscoveredRun[]): string {
     const gate = state.gate?.status === "pending"
       ? ` | GATE: ${state.gate.stageName}`
       : "";
+    const projectDir = state.projectDir ? ` @ ${state.projectDir}` : "";
     lines.push(
-      `  ${short}  ${state.pipeline} (${state.project})  ${state.status}${gate}  ${state.startedAt}`,
+      `  ${short}  ${state.pipeline} (${state.project})${projectDir}  ${state.status}${gate}  ${state.startedAt}`,
     );
   }
 
@@ -147,11 +151,10 @@ export async function startMcpServer(): Promise<void> {
   // with this session ID (via --session-id on cccp run) will trigger
   // notifications in this session.
   const sessionId = randomUUID();
-  const projectDir = process.cwd();
 
   const server = new McpServer({
     name: "cccp",
-    version: "0.1.0",
+    version: "0.18.0",
   }, {
     capabilities: {
       experimental: { "claude/channel": {} },
@@ -169,16 +172,44 @@ export async function startMcpServer(): Promise<void> {
   // --- cccp_runs ---
   server.tool(
     "cccp_runs",
-    "List all pipeline runs (active and completed). Shows run ID, pipeline name, project, status, and any pending gates.",
-    {},
-    async () => {
-      const runs = await discoverRuns(process.cwd(), undefined, { fresh: true });
+    "List pipeline runs across all projects on this machine (state lives in ~/.cccp/cccp.db). Optional filters narrow by project, pipeline, status, project directory, or this MCP session's runs only.",
+    {
+      project: z
+        .string()
+        .optional()
+        .describe("Filter to a single project name (matches runs.project)."),
+      pipeline: z
+        .string()
+        .optional()
+        .describe("Filter to a single pipeline name."),
+      status: z
+        .string()
+        .optional()
+        .describe('Filter by status (e.g. "running", "passed", "failed", "paused").'),
+      project_dir: z
+        .string()
+        .optional()
+        .describe("Filter to runs originating from this absolute project directory (worktree path)."),
+      session_only: z
+        .boolean()
+        .optional()
+        .describe("If true, only return runs started with this MCP server's session ID (--session-id on cccp run)."),
+    },
+    async ({ project, pipeline, status, project_dir, session_only }) => {
+      const runs = await discoverRuns(
+        { project, pipeline, status, projectDir: project_dir },
+        { fresh: true },
+      );
 
-      if (runs.length === 0) {
+      const filtered = session_only
+        ? runs.filter((r) => r.state.sessionId === sessionId)
+        : runs;
+
+      if (filtered.length === 0) {
         return textResult("No pipeline runs found.");
       }
 
-      return textResult(formatRunList(runs));
+      return textResult(formatRunList(filtered));
     },
   );
 
@@ -607,7 +638,7 @@ export async function startMcpServer(): Promise<void> {
   );
 
   // --- Start DB service and server ---
-  dbService = new DbService({ projectDir });
+  dbService = new DbService();
   dbService.start();
 
   const transport = new StdioServerTransport();
@@ -616,7 +647,6 @@ export async function startMcpServer(): Promise<void> {
   // --- Start gate notifier ---
   const notifier = new GateNotifier({
     server,
-    projectDir,
     sessionId,
     dbService,
   });

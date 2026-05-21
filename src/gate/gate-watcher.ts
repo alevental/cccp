@@ -22,7 +22,6 @@ const MAX_POLL_COUNT = 8640;
 export class FilesystemGateStrategy implements GateStrategy {
   constructor(
     private runId: string,
-    private projectDir?: string,
     private quiet?: boolean,
     private dbService?: DbService,
   ) {}
@@ -48,7 +47,7 @@ export class FilesystemGateStrategy implements GateStrategy {
             return;
           }
 
-          const state = await loadState(this.runId, this.projectDir, true);
+          const state = await loadState(this.runId, true);
           if (!state?.gate) return;
 
           if (state.gate.stageName !== gate.stageName) return;

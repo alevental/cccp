@@ -1,8 +1,7 @@
-import { describe, it, expect, vi, afterAll, afterEach, beforeEach } from "vitest";
-import { closeDatabase } from "../src/db.js";
-import { createState, saveState } from "../src/state.js";
+import { describe, it, expect, vi, afterAll, afterEach } from "vitest";
+import { createState, saveState, loadState } from "../src/state.js";
 import { GateNotifier } from "../src/mcp/gate-notifier.js";
-import { tmpProjectDir, cleanupAll } from "./helpers.js";
+import { tmpProjectDir, cleanupAll, useIsolatedDb } from "./helpers.js";
 import type { PipelineState } from "../src/types.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
@@ -73,6 +72,8 @@ async function createRunWithGate(
 // ---------------------------------------------------------------------------
 
 describe("GateNotifier", () => {
+  useIsolatedDb();
+
   let notifier: GateNotifier | undefined;
 
   afterEach(() => {
@@ -91,7 +92,6 @@ describe("GateNotifier", () => {
 
     notifier = new GateNotifier({
       server: mock,
-      projectDir,
       pollIntervalMs: 50,
     });
     notifier.start();
@@ -106,7 +106,7 @@ describe("GateNotifier", () => {
     expect(call.message).toContain("review");
     expect(call.message).toContain("Please approve this output.");
 
-    closeDatabase(projectDir);
+    
   });
 
   it("writes approval to state on accept with approve", async () => {
@@ -120,7 +120,6 @@ describe("GateNotifier", () => {
 
     notifier = new GateNotifier({
       server: mock,
-      projectDir,
       pollIntervalMs: 50,
     });
     notifier.start();
@@ -134,12 +133,12 @@ describe("GateNotifier", () => {
 
     // Reload state and verify gate was approved.
     const { loadState } = await import("../src/state.js");
-    const updated = await loadState(state.runId, projectDir, true);
+    const updated = await loadState(state.runId, true);
     expect(updated?.gate?.status).toBe("approved");
     expect(updated?.gate?.feedback).toBe("Looks great");
     expect(updated?.gate?.respondedAt).toBeDefined();
 
-    closeDatabase(projectDir);
+    
   });
 
   it("writes rejection to state on accept with reject decision", async () => {
@@ -153,7 +152,6 @@ describe("GateNotifier", () => {
 
     notifier = new GateNotifier({
       server: mock,
-      projectDir,
       pollIntervalMs: 50,
     });
     notifier.start();
@@ -165,11 +163,11 @@ describe("GateNotifier", () => {
     await new Promise((r) => setTimeout(r, 100));
 
     const { loadState } = await import("../src/state.js");
-    const updated = await loadState(state.runId, projectDir, true);
+    const updated = await loadState(state.runId, true);
     expect(updated?.gate?.status).toBe("rejected");
     expect(updated?.gate?.feedback).toBe("Needs more tests");
 
-    closeDatabase(projectDir);
+    
   });
 
   it("writes rejection on decline action", async () => {
@@ -182,7 +180,6 @@ describe("GateNotifier", () => {
 
     notifier = new GateNotifier({
       server: mock,
-      projectDir,
       pollIntervalMs: 50,
     });
     notifier.start();
@@ -194,10 +191,10 @@ describe("GateNotifier", () => {
     await new Promise((r) => setTimeout(r, 100));
 
     const { loadState } = await import("../src/state.js");
-    const updated = await loadState(state.runId, projectDir, true);
+    const updated = await loadState(state.runId, true);
     expect(updated?.gate?.status).toBe("rejected");
 
-    closeDatabase(projectDir);
+    
   });
 
   it("leaves gate pending on cancel and allows re-prompt", async () => {
@@ -215,7 +212,6 @@ describe("GateNotifier", () => {
 
     notifier = new GateNotifier({
       server: mock,
-      projectDir,
       pollIntervalMs: 50,
     });
     notifier.start();
@@ -228,10 +224,10 @@ describe("GateNotifier", () => {
     await new Promise((r) => setTimeout(r, 100));
 
     const { loadState } = await import("../src/state.js");
-    const updated = await loadState(state.runId, projectDir, true);
+    const updated = await loadState(state.runId, true);
     expect(updated?.gate?.status).toBe("approved");
 
-    closeDatabase(projectDir);
+    
   });
 
   it("does not re-prompt for the same gate", async () => {
@@ -247,7 +243,6 @@ describe("GateNotifier", () => {
 
     notifier = new GateNotifier({
       server: mock,
-      projectDir,
       pollIntervalMs: 50,
     });
     notifier.start();
@@ -260,7 +255,7 @@ describe("GateNotifier", () => {
     await new Promise((r) => setTimeout(r, 300));
     expect(elicitInput).toHaveBeenCalledTimes(1);
 
-    closeDatabase(projectDir);
+    
   });
 
   it("disables elicitation on error and falls back silently", async () => {
@@ -273,7 +268,6 @@ describe("GateNotifier", () => {
 
     notifier = new GateNotifier({
       server: mock,
-      projectDir,
       pollIntervalMs: 50,
     });
     notifier.start();
@@ -293,7 +287,7 @@ describe("GateNotifier", () => {
     await new Promise((r) => setTimeout(r, 300));
     expect(elicitInput).toHaveBeenCalledTimes(1);
 
-    closeDatabase(projectDir);
+    
   });
 
   it("handles gate resolved externally before elicitation response", async () => {
@@ -304,7 +298,7 @@ describe("GateNotifier", () => {
     const elicitInput = vi.fn<[], Promise<MockElicitResult>>().mockImplementation(async () => {
       // Simulate the gate being resolved externally while we wait.
       const { loadState: ls, saveState: ss } = await import("../src/state.js");
-      const fresh = await ls(state.runId, projectDir, true);
+      const fresh = await ls(state.runId, true);
       if (fresh?.gate) {
         fresh.gate.status = "approved";
         fresh.gate.respondedAt = new Date().toISOString();
@@ -319,7 +313,6 @@ describe("GateNotifier", () => {
 
     notifier = new GateNotifier({
       server: mock,
-      projectDir,
       pollIntervalMs: 50,
     });
     notifier.start();
@@ -332,10 +325,10 @@ describe("GateNotifier", () => {
 
     // Gate should remain approved (not overwritten by the reject).
     const { loadState } = await import("../src/state.js");
-    const updated = await loadState(state.runId, projectDir, true);
+    const updated = await loadState(state.runId, true);
     expect(updated?.gate?.status).toBe("approved");
 
-    closeDatabase(projectDir);
+    
   });
 
   // -------------------------------------------------------------------------
@@ -357,7 +350,6 @@ describe("GateNotifier", () => {
     // Create notifier with session-B — should NOT fire for session-A's gate.
     notifier = new GateNotifier({
       server: mock,
-      projectDir,
       sessionId: "session-B",
       pollIntervalMs: 50,
     });
@@ -369,7 +361,7 @@ describe("GateNotifier", () => {
     // Elicitation should never have been called.
     expect(elicitInput).not.toHaveBeenCalled();
 
-    closeDatabase(projectDir);
+    
   });
 
   it("notifies for gates matching its own session", async () => {
@@ -385,7 +377,6 @@ describe("GateNotifier", () => {
 
     notifier = new GateNotifier({
       server: mock,
-      projectDir,
       sessionId: "session-X",
       pollIntervalMs: 50,
     });
@@ -395,7 +386,7 @@ describe("GateNotifier", () => {
       expect(elicitInput).toHaveBeenCalledTimes(1);
     }, { timeout: 2000 });
 
-    closeDatabase(projectDir);
+    
   });
 
   it("notifies for gates with no sessionId (backward compat)", async () => {
@@ -410,7 +401,6 @@ describe("GateNotifier", () => {
 
     notifier = new GateNotifier({
       server: mock,
-      projectDir,
       sessionId: "any-session",
       pollIntervalMs: 50,
     });
@@ -420,7 +410,7 @@ describe("GateNotifier", () => {
       expect(elicitInput).toHaveBeenCalledTimes(1);
     }, { timeout: 2000 });
 
-    closeDatabase(projectDir);
+    
   });
 
   // -------------------------------------------------------------------------
@@ -474,7 +464,6 @@ describe("GateNotifier", () => {
     const { mock, notification } = createServerWithChannel();
     notifier = new GateNotifier({
       server: mock,
-      projectDir,
       sessionId: "sess-1",
       pollIntervalMs: 30,
     });
@@ -484,7 +473,7 @@ describe("GateNotifier", () => {
       expect(channelCallsOfType(notification, "pipeline_started").length).toBe(1);
     }, { timeout: 2000 });
 
-    closeDatabase(projectDir);
+    
   });
 
   it("does not push pipeline_started when the run has no sessionId", async () => {
@@ -494,7 +483,6 @@ describe("GateNotifier", () => {
     const { mock, notification } = createServerWithChannel();
     notifier = new GateNotifier({
       server: mock,
-      projectDir,
       sessionId: "sess-1",
       pollIntervalMs: 30,
     });
@@ -504,7 +492,7 @@ describe("GateNotifier", () => {
     await new Promise((r) => setTimeout(r, 250));
     expect(channelCallsOfType(notification, "pipeline_started")).toHaveLength(0);
 
-    closeDatabase(projectDir);
+    
   });
 
   it("does not push pipeline_started for a stale running run (startedAt outside recency window)", async () => {
@@ -526,7 +514,6 @@ describe("GateNotifier", () => {
     const { mock, notification } = createServerWithChannel();
     notifier = new GateNotifier({
       server: mock,
-      projectDir,
       sessionId: "sess-1",
       pollIntervalMs: 30,
     });
@@ -535,7 +522,7 @@ describe("GateNotifier", () => {
     await new Promise((r) => setTimeout(r, 250));
     expect(channelCallsOfType(notification, "pipeline_started")).toHaveLength(0);
 
-    closeDatabase(projectDir);
+    
   });
 
   it("pushes pipeline_resumed on paused → running transition", async () => {
@@ -548,7 +535,6 @@ describe("GateNotifier", () => {
     const { mock, notification } = createServerWithChannel();
     notifier = new GateNotifier({
       server: mock,
-      projectDir,
       sessionId: "sess-1",
       pollIntervalMs: 30,
     });
@@ -568,6 +554,6 @@ describe("GateNotifier", () => {
     // Should not also fire a start for the same run.
     expect(channelCallsOfType(notification, "pipeline_started")).toHaveLength(0);
 
-    closeDatabase(projectDir);
+    
   });
 });

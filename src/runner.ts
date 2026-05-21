@@ -161,7 +161,7 @@ async function collectStageOutputs(
   }
 
   // Store in checkpoints (persists across resume).
-  const db = openDatabase(ctx.projectDir);
+  const db = openDatabase();
   for (const [key, value] of Object.entries(collected)) {
     db.setCheckpoint(state.runId, stage.name, key, value);
   }
@@ -1230,7 +1230,7 @@ async function runPipelineHandoffStage(
       timedOut = true;
       // Last-chance reload — in case the ack landed between our last poll
       // and the timeout firing.
-      const fresh = await loadState(state.runId, ctx.projectDir, true);
+      const fresh = await loadState(state.runId, true);
       if (fresh?.gate?.status && fresh.gate.status !== "pending") {
         response = {
           approved: fresh.gate.status === "approved",
@@ -1249,7 +1249,7 @@ async function runPipelineHandoffStage(
   // Persist the resolved handoff payload (including launchedRunId/targetPane
   // if the orchestrator set them) before clearing. Reload once more to pick
   // up the orchestrator's writes.
-  const freshFinal = await loadState(state.runId, ctx.projectDir, true);
+  const freshFinal = await loadState(state.runId, true);
   const resolvedHandoff = freshFinal?.gate?.handoff ?? handoff;
   if (resolvedHandoff.launchedRunId) {
     setStageArtifact(state, stage.name, "handoff-launched-run", resolvedHandoff.launchedRunId);
@@ -1839,7 +1839,7 @@ async function runStages(
     if (!ctx.dryRun) {
       // pause_requested is written by the MCP server in a different process —
       // recycle the cached connection so we actually see its UPDATE.
-      const db = reopenDatabase(ctx.projectDir);
+      const db = reopenDatabase();
       if (db.isPauseRequested(state.runId)) {
         db.setPauseRequested(state.runId, false);
         const nextStage = step.stages[0].name;
@@ -1958,7 +1958,7 @@ export async function runPipeline(
 
   // Create gate strategy if not provided.
   if (!ctx.gateStrategy && !ctx.headless && !ctx.dryRun && initialState) {
-    ctx.gateStrategy = new FilesystemGateStrategy(initialState.runId, ctx.projectDir, ctx.quiet);
+    ctx.gateStrategy = new FilesystemGateStrategy(initialState.runId, ctx.quiet);
   }
 
   // Wrap dispatcher with pane manager when running inside cmux (non-headless, non-dry-run).
@@ -1995,7 +1995,7 @@ export async function runPipeline(
         const mu = process.memoryUsage();
         thresholdSnapshotter.maybeSnapshot(mu.rss, mu.heapUsed);
         try {
-          const db = openDatabase(ctx.projectDir);
+          const db = openDatabase();
           const count = db.countEvents(runIdForLog);
           memLogger!.record(count);
         } catch {

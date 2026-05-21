@@ -1,7 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { writeFile, mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { closeDatabase } from "../src/db.js";
 import { createState, saveState, loadState } from "../src/state.js";
 import type { AgentResult, PipelineState, GateInfo, Pipeline, RunContext } from "../src/types.js";
 import type { AgentDispatcher, DispatchOptions } from "../src/dispatcher.js";
@@ -11,7 +10,7 @@ import { SilentLogger } from "../src/logger.js";
 import { TempFileTracker } from "../src/temp-tracker.js";
 import { loadPipeline } from "../src/pipeline.js";
 import { runPipeline } from "../src/runner.js";
-import { tmpProjectDir, MockGateStrategy, mockRejectedGate } from "./helpers.js";
+import { tmpProjectDir, MockGateStrategy, mockRejectedGate, useIsolatedDb } from "./helpers.js";
 
 describe("MockGateStrategy", () => {
   it("returns configured response", async () => {
@@ -68,6 +67,8 @@ describe("MockGateStrategy", () => {
 // ---------------------------------------------------------------------------
 
 describe("FilesystemGateStrategy", { timeout: 10_000 }, () => {
+  useIsolatedDb();
+
   it("resolves when gate is approved", async () => {
     const projectDir = tmpProjectDir();
     const artifactDir = join(projectDir, "artifacts");
@@ -82,11 +83,11 @@ describe("FilesystemGateStrategy", { timeout: 10_000 }, () => {
     };
     await saveState(state);
 
-    const strategy = new FilesystemGateStrategy(state.runId, projectDir);
+    const strategy = new FilesystemGateStrategy(state.runId);
     const waitPromise = strategy.waitForGate(state.gate);
 
     setTimeout(async () => {
-      const s = await loadState(state.runId, projectDir);
+      const s = await loadState(state.runId);
       if (s?.gate) {
         s.gate.status = "approved";
         s.gate.respondedAt = new Date().toISOString();
@@ -96,7 +97,6 @@ describe("FilesystemGateStrategy", { timeout: 10_000 }, () => {
 
     const response = await waitPromise;
     expect(response.approved).toBe(true);
-    closeDatabase(projectDir);
   });
 
   it("resolves when gate is rejected with feedback", async () => {
@@ -112,11 +112,11 @@ describe("FilesystemGateStrategy", { timeout: 10_000 }, () => {
     };
     await saveState(state);
 
-    const strategy = new FilesystemGateStrategy(state.runId, projectDir);
+    const strategy = new FilesystemGateStrategy(state.runId);
     const waitPromise = strategy.waitForGate(state.gate);
 
     setTimeout(async () => {
-      const s = await loadState(state.runId, projectDir);
+      const s = await loadState(state.runId);
       if (s?.gate) {
         s.gate.status = "rejected";
         s.gate.feedback = "Needs more work";
@@ -127,7 +127,6 @@ describe("FilesystemGateStrategy", { timeout: 10_000 }, () => {
     const response = await waitPromise;
     expect(response.approved).toBe(false);
     expect(response.feedback).toBe("Needs more work");
-    closeDatabase(projectDir);
   });
 
   it("returns feedbackPath when present in gate state", async () => {
@@ -140,11 +139,11 @@ describe("FilesystemGateStrategy", { timeout: 10_000 }, () => {
     state.gate = { stageName: "review", status: "pending" };
     await saveState(state);
 
-    const strategy = new FilesystemGateStrategy(state.runId, projectDir);
+    const strategy = new FilesystemGateStrategy(state.runId);
     const waitPromise = strategy.waitForGate(state.gate);
 
     setTimeout(async () => {
-      const s = await loadState(state.runId, projectDir);
+      const s = await loadState(state.runId);
       if (s?.gate) {
         s.gate.status = "rejected";
         s.gate.feedback = "Fix the intro";
@@ -157,7 +156,6 @@ describe("FilesystemGateStrategy", { timeout: 10_000 }, () => {
     expect(response.approved).toBe(false);
     expect(response.feedback).toBe("Fix the intro");
     expect(response.feedbackPath).toBe("/tmp/feedback.md");
-    closeDatabase(projectDir);
   });
 
   it("returns feedbackPath on approved gate", async () => {
@@ -170,11 +168,11 @@ describe("FilesystemGateStrategy", { timeout: 10_000 }, () => {
     state.gate = { stageName: "check", status: "pending" };
     await saveState(state);
 
-    const strategy = new FilesystemGateStrategy(state.runId, projectDir);
+    const strategy = new FilesystemGateStrategy(state.runId);
     const waitPromise = strategy.waitForGate(state.gate);
 
     setTimeout(async () => {
-      const s = await loadState(state.runId, projectDir);
+      const s = await loadState(state.runId);
       if (s?.gate) {
         s.gate.status = "approved";
         s.gate.feedback = "Minor nits only";
@@ -186,7 +184,6 @@ describe("FilesystemGateStrategy", { timeout: 10_000 }, () => {
     const response = await waitPromise;
     expect(response.approved).toBe(true);
     expect(response.feedbackPath).toBe("/tmp/approved-feedback.md");
-    closeDatabase(projectDir);
   });
 });
 
@@ -195,6 +192,8 @@ describe("FilesystemGateStrategy", { timeout: 10_000 }, () => {
 // ---------------------------------------------------------------------------
 
 describe("Gate state in pipeline state", () => {
+  useIsolatedDb();
+
   it("writes and reads gate info from state", async () => {
     const projectDir = tmpProjectDir();
     const artifactDir = join(projectDir, "artifacts");
@@ -211,12 +210,11 @@ describe("Gate state in pipeline state", () => {
     state.gate = gateInfo;
     await saveState(state);
 
-    const loaded = await loadState(state.runId, projectDir);
+    const loaded = await loadState(state.runId);
     expect(loaded?.gate).toBeDefined();
     expect(loaded?.gate?.stageName).toBe("gate1");
     expect(loaded?.gate?.status).toBe("pending");
     expect(loaded?.gate?.prompt).toBe("Approve the design?");
-    closeDatabase(projectDir);
   });
 
   it("clears gate after response", async () => {
@@ -236,9 +234,8 @@ describe("Gate state in pipeline state", () => {
     state.gate = undefined;
     await saveState(state);
 
-    const loaded = await loadState(state.runId, projectDir);
+    const loaded = await loadState(state.runId);
     expect(loaded?.gate).toBeUndefined();
-    closeDatabase(projectDir);
   });
 
   it("persists feedbackPath through state save/load", async () => {
@@ -258,12 +255,11 @@ describe("Gate state in pipeline state", () => {
     };
     await saveState(state);
 
-    const loaded = await loadState(state.runId, projectDir);
+    const loaded = await loadState(state.runId);
     expect(loaded?.gate?.feedbackPath).toBe("/tmp/gate1-gate-feedback-1.md");
     expect(loaded?.gate?.feedback).toBe("Needs work");
     expect(loaded?.gate?.status).toBe("rejected");
     expect(loaded?.gate?.respondedAt).toBeDefined();
-    closeDatabase(projectDir);
   });
 
   it("persists feedbackPath as undefined when not set", async () => {
@@ -282,10 +278,9 @@ describe("Gate state in pipeline state", () => {
     };
     await saveState(state);
 
-    const loaded = await loadState(state.runId, projectDir);
+    const loaded = await loadState(state.runId);
     expect(loaded?.gate?.feedback).toBe("Rejected without artifact");
     expect(loaded?.gate?.feedbackPath).toBeUndefined();
-    closeDatabase(projectDir);
   });
 });
 
@@ -295,7 +290,7 @@ describe("Gate state in pipeline state", () => {
 
 /** Gate strategy that polls state at 50ms intervals — faster than Filesystem. */
 class FastPollGateStrategy implements GateStrategy {
-  constructor(private runId: string, private projectDir: string) {}
+  constructor(private runId: string) {}
   async waitForGate(_gate: GateInfo): Promise<GateResponse> {
     return new Promise((res, rej) => {
       const timeout = setTimeout(() => {
@@ -303,7 +298,7 @@ class FastPollGateStrategy implements GateStrategy {
         rej(new Error("FastPollGateStrategy timeout"));
       }, 10_000);
       const interval = setInterval(async () => {
-        const s = await loadState(this.runId, this.projectDir, true);
+        const s = await loadState(this.runId, true);
         if (s?.gate && s.gate.status !== "pending") {
           clearTimeout(timeout);
           clearInterval(interval);
@@ -391,6 +386,8 @@ function buildCtx(opts: {
 }
 
 describe("agent_gate runner execution", { timeout: 10_000 }, () => {
+  useIsolatedDb();
+
   it("publishes gate with kind: agent_eval and passes on approval", async () => {
     const dir = tmpProjectDir();
 
@@ -419,7 +416,6 @@ stages:
     expect(strategy.captured?.kind).toBe("agent_eval");
     expect(strategy.captured?.prompt).toBe("Is the draft ready?");
     expect(strategy.captured?.stageName).toBe("review-gate");
-    closeDatabase(dir);
   });
 
   it("fails on rejection with feedback", async () => {
@@ -448,7 +444,6 @@ stages:
     const stage = result.stages[0];
     expect(stage.status).toBe("failed");
     expect(stage.error).toContain("Coverage is insufficient");
-    closeDatabase(dir);
   });
 
   it("headless mode auto-approves", async () => {
@@ -476,11 +471,12 @@ stages:
     const result = await runPipeline(ctx, { existingState: state });
 
     expect(result.status).toBe("passed");
-    closeDatabase(dir);
   });
 });
 
 describe("pipeline_handoff runner execution", { timeout: 10_000 }, () => {
+  useIsolatedDb();
+
   it("publishes handoff payload and passes on orchestrator ack", async () => {
     const dir = tmpProjectDir();
 
@@ -505,7 +501,7 @@ stages:
     // Orchestrator ack simulator: poll until the handoff gate appears, then
     // write the ack.
     const ackInterval = setInterval(async () => {
-      const s = await loadState(state.runId, dir, true);
+      const s = await loadState(state.runId, true);
       if (!s?.gate || s.gate.kind !== "pipeline_handoff" || !s.gate.handoff) return;
       if (s.gate.status !== "pending") {
         clearInterval(ackInterval);
@@ -522,7 +518,7 @@ stages:
     const ctx = buildCtx({
       projectDir: dir,
       pipeline,
-      gateStrategy: new FastPollGateStrategy(state.runId, dir),
+      gateStrategy: new FastPollGateStrategy(state.runId),
     });
     const result = await runPipeline(ctx, { existingState: state });
 
@@ -530,11 +526,10 @@ stages:
     const stage = result.stages.find((s) => s.stageName === "chain");
     expect(stage?.status).toBe("passed");
 
-    const loaded = await loadState(state.runId, dir);
+    const loaded = await loadState(state.runId);
     const artifacts = loaded?.stages["chain"]?.artifacts ?? {};
     expect(artifacts["handoff-launched-run"]).toBe("child-run-abc");
     expect(artifacts["handoff-target-pane"]).toBe("surface:42");
-    closeDatabase(dir);
   });
 
   it("headless mode skips handoff as a no-op", async () => {
@@ -566,9 +561,8 @@ stages:
     expect(result.status).toBe("passed");
     // State.gate should never have been set — the stage returned before any
     // gate work. Confirm by checking status and that no gate is pending.
-    const loaded = await loadState(state.runId, dir);
+    const loaded = await loadState(state.runId);
     expect(loaded?.gate).toBeUndefined();
-    closeDatabase(dir);
   });
 
   it("on_timeout: skip marks stage as skipped when no ack arrives", async () => {
@@ -594,14 +588,13 @@ stages:
     const ctx = buildCtx({
       projectDir: dir,
       pipeline,
-      gateStrategy: new FastPollGateStrategy(state.runId, dir),
+      gateStrategy: new FastPollGateStrategy(state.runId),
     });
     const result = await runPipeline(ctx, { existingState: state });
 
     // Pipeline passes overall because the only stage was "skipped" (non-fatal).
     const stage = result.stages.find((s) => s.stageName === "chain");
     expect(stage?.status).toBe("skipped");
-    closeDatabase(dir);
   });
 
   it("on_timeout: stop fails the stage when no ack arrives", async () => {
@@ -626,13 +619,12 @@ stages:
     const ctx = buildCtx({
       projectDir: dir,
       pipeline,
-      gateStrategy: new FastPollGateStrategy(state.runId, dir),
+      gateStrategy: new FastPollGateStrategy(state.runId),
     });
     const result = await runPipeline(ctx, { existingState: state });
 
     const stage = result.stages.find((s) => s.stageName === "chain");
     expect(stage?.status).toBe("failed");
     expect(stage?.error).toContain("timed out");
-    closeDatabase(dir);
   });
 });

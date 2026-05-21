@@ -256,7 +256,7 @@ npx @alevental/cccp run -f pipelines/build-docs.yaml -p my-project -v feature=pa
 ### What happens
 
 1. Pipeline YAML is loaded and validated
-2. State is created in the SQLite database at `.cccp/cccp.db`
+2. State is created in the global SQLite database at `~/.cccp/cccp.db` (override with `CCCP_DB_PATH`)
 3. The TUI dashboard starts (unless `--headless`)
 4. Stages execute sequentially (or concurrently within parallel groups), persisting state after each transition
 5. Stream logs are written to `<artifact-dir>/.cccp/<agent>.stream.jsonl`

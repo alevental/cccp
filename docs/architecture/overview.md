@@ -43,7 +43,7 @@ The Plan-Generate-Evaluate cycle:
 6. Route: PASS -> next stage, FAIL + iterations left -> retry generator/evaluator loop with evaluation feedback, FAIL + max reached -> escalate
 
 ### State persistence (`src/state.ts`, `src/db.ts`)
-Pipeline state is persisted to a SQLite database at `{projectDir}/.cccp/cccp.db` via `node:sqlite` (Node 24 LTS built-in) with WAL mode. State is updated after every transition: stage start, contract write, generator dispatch, evaluator dispatch, routing decision, stage completion. All types (`PipelineState`, `StageState`, `GateInfo`, etc.) are defined in `src/types.ts`.
+Pipeline state is persisted to a single global SQLite database at `~/.cccp/cccp.db` (override with `CCCP_DB_PATH`) via `node:sqlite` (Node 24 LTS built-in) with WAL mode. State is updated after every transition: stage start, contract write, generator dispatch, evaluator dispatch, routing decision, stage completion. Runs from every worktree on the machine coexist in this DB, scoped by the `runs.project_dir` column. All types (`PipelineState`, `StageState`, `GateInfo`, etc.) are defined in `src/types.ts`.
 
 Resume finds the first non-completed stage and skips everything before it. PGE stages resume at the correct iteration and sub-step. `resetFromStage()` enables clean reset from a named stage onward — resets state, deletes events/checkpoints, and removes artifact files from disk. Used by `cccp resume --from <stage>`.
 
@@ -98,4 +98,4 @@ CLI (cli.ts)
 - **Fresh context per agent**: Each `claude -p` invocation starts with a clean context window. No context rot.
 - **Regex routing**: The evaluator's `### Overall: PASS/FAIL` line is the only thing the runner reads. No interpretation.
 - **Artifact-driven communication**: Agents read contracts and evaluations from disk. Artifacts are markdown files — the orchestrator only reads the `### Overall: PASS/FAIL` line.
-- **SQLite state backend**: Pipeline state persisted to `{projectDir}/.cccp/cccp.db` via `node:sqlite` with WAL mode. Append-only events table for audit trail. Writes persist immediately — no manual flush step (see [ADR-003](adr/003-node-sqlite-over-sql-js.md)).
+- **SQLite state backend**: Pipeline state persisted to `~/.cccp/cccp.db` (overridable via `CCCP_DB_PATH`) via `node:sqlite` with WAL mode. Append-only events table for audit trail. Writes persist immediately — no manual flush step. One DB per machine, scoped by `runs.project_dir` (see [ADR-004](adr/004-global-state-db.md) and [ADR-003](adr/003-node-sqlite-over-sql-js.md)).

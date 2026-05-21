@@ -239,7 +239,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
     if ((input === "p" || input === "P") && state.status === "running" && !pauseRequested) {
       setPauseRequested(true);
       try {
-        const db = openDatabase(projectDir);
+        const db = openDatabase();
         db.setPauseRequested(state.runId, true);
       } catch {
         // ignore — pause is best-effort from the UI.
@@ -300,7 +300,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
       // Persist a memory sample to JSONL. eventCountTotal is filled in from
       // the DB below; use the best-available value from the previous tick.
       try {
-        const db = openDatabase(projectDir);
+        const db = openDatabase();
         memLogger?.record(db.countEvents(runId));
       } catch {
         memLogger?.record(0);
@@ -311,7 +311,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
         // writes from a different process. Recycle the cached connection
         // so the reader picks up committed WAL frames — long-lived
         // DatabaseSync handles can otherwise pin a stale snapshot.
-        const parentState = await loadState(runId, projectDir, !useEventBus);
+        const parentState = await loadState(runId, !useEventBus);
         if (parentState) {
           // When scoped, extract the child pipeline state from the parent.
           const displayState = scopeStage
@@ -379,7 +379,7 @@ function Dashboard({ runId, artifactDir, projectDir, initialState, useEventBus, 
           }
 
           // Poll events incrementally. When scoped, filter to child events for this stage.
-          const db = dbService ? dbService.db() : openDatabase(projectDir);
+          const db = dbService ? dbService.db() : openDatabase();
           const newEvents = db.getEvents(parentState.runId, lastEventId.current);
           if (newEvents.length > 0) {
             lastEventId.current = newEvents[newEvents.length - 1].id;
@@ -550,7 +550,7 @@ export async function launchDashboard(
   // install, scoped dashboards leaked the same 426k-measure retention
   // pattern we fixed in the inline dashboard in v0.17.5.
   const uninstallPerfSink = installPerfMeasureSink();
-  const svc = new DbService({ projectDir });
+  const svc = new DbService();
   svc.start();
   const memSamples = new MemorySampleRing();
   const memLogger = isMemoryLogEnabled()

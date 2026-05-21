@@ -22,7 +22,7 @@ Add to your project's `.mcp.json`:
 }
 ```
 
-The server uses `process.cwd()` as the project directory when resolving the SQLite database at `.cccp/cccp.db`.
+The server reads from the global SQLite database at `~/.cccp/cccp.db` (override with `CCCP_DB_PATH`). A single MCP server can serve runs from every project on the machine — a singleton MCP server proxied across many Claude Code sessions in different worktrees sees and routes for all of them. Gate notifications are filtered by `sessionId` (passed via `--session-id` on `cccp run`) so only the originating Claude session gets pushed; `cccp_runs` accepts optional `project_dir`, `project`, `pipeline`, `status`, and `session_only` filters to narrow listings.
 
 ## Run Resolution
 

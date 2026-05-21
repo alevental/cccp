@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { homedir } from "node:os";
+import { resolve, dirname, join } from "node:path";
 import type {
   PipelineState,
   StateEvent,
@@ -13,14 +14,18 @@ export interface RunFilter {
   pipeline?: string;
   status?: string;
   artifactDir?: string;
+  /** Filter to runs originating from this absolute project directory. */
+  projectDir?: string;
 }
 
 // ---------------------------------------------------------------------------
-// Database path
+// Database path — single global DB shared by all projects on this machine.
+// Override with CCCP_DB_PATH (used by tests for isolation; also a power-user
+// knob for relocating state to e.g. a synced folder).
 // ---------------------------------------------------------------------------
 
-export function dbPath(projectDir: string): string {
-  return resolve(projectDir, ".cccp", "cccp.db");
+export function globalDbPath(): string {
+  return process.env.CCCP_DB_PATH || join(homedir(), ".cccp", "cccp.db");
 }
 
 // ---------------------------------------------------------------------------
@@ -37,11 +42,11 @@ export class CccpDatabase {
   }
 
   /**
-   * Open or create a database. Enables WAL mode so readers in other
-   * processes see committed writes without manual reload.
+   * Open or create the global database. Enables WAL mode so readers in
+   * other processes see committed writes without manual reload.
    */
-  static open(projectDir: string): CccpDatabase {
-    const fp = dbPath(projectDir);
+  static open(): CccpDatabase {
+    const fp = globalDbPath();
     mkdirSync(dirname(fp), { recursive: true });
 
     const db = new DatabaseSync(fp);
@@ -69,7 +74,7 @@ export class CccpDatabase {
           project          TEXT NOT NULL,
           pipeline_file    TEXT NOT NULL,
           artifact_dir     TEXT NOT NULL,
-          project_dir      TEXT,
+          project_dir      TEXT NOT NULL,
           started_at       TEXT NOT NULL,
           completed_at     TEXT,
           status           TEXT NOT NULL DEFAULT 'running',
@@ -84,6 +89,9 @@ export class CccpDatabase {
       );
       this.db.exec(
         `CREATE INDEX IF NOT EXISTS idx_runs_artifact_dir ON runs(artifact_dir)`,
+      );
+      this.db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_runs_project_dir ON runs(project_dir)`,
       );
 
       this.db.exec(`
@@ -140,6 +148,11 @@ export class CccpDatabase {
   // -------------------------------------------------------------------------
 
   insertRun(state: PipelineState, artifactDir: string): void {
+    if (!state.projectDir) {
+      throw new Error(
+        `Cannot insert run ${state.runId}: projectDir is required (global DB scopes runs by project_dir).`,
+      );
+    }
     this.db
       .prepare(
         `INSERT INTO runs (run_id, pipeline, project, pipeline_file, artifact_dir, project_dir, started_at, completed_at, status, stages_json, stage_order_json, gate_json, session_id, updated_at)
@@ -151,7 +164,7 @@ export class CccpDatabase {
         state.project,
         state.pipelineFile,
         artifactDir,
-        state.projectDir ?? null,
+        state.projectDir,
         state.startedAt,
         state.completedAt ?? null,
         state.status,
@@ -210,11 +223,27 @@ export class CccpDatabase {
     return row ? this.rowToState(row) : null;
   }
 
-  /** Find a run by ID prefix. Returns null if zero or multiple matches. */
-  getRunByIdPrefix(prefix: string): PipelineState | null {
+  /**
+   * Find a run by ID prefix, optionally narrowed by project/projectDir.
+   * Returns null if zero or multiple matches.
+   */
+  getRunByIdPrefix(
+    prefix: string,
+    filter?: Pick<RunFilter, "project" | "projectDir">,
+  ): PipelineState | null {
+    const conditions: string[] = ["run_id LIKE ? || '%'"];
+    const params: string[] = [prefix];
+    if (filter?.project) {
+      conditions.push("project = ?");
+      params.push(filter.project);
+    }
+    if (filter?.projectDir) {
+      conditions.push("project_dir = ?");
+      params.push(filter.projectDir);
+    }
     const rows = this.db
-      .prepare(`SELECT * FROM runs WHERE run_id LIKE ? || '%'`)
-      .all(prefix) as unknown as RunRow[];
+      .prepare(`SELECT * FROM runs WHERE ${conditions.join(" AND ")}`)
+      .all(...params) as unknown as RunRow[];
     return rows.length === 1 ? this.rowToState(rows[0]) : null;
   }
 
@@ -246,6 +275,10 @@ export class CccpDatabase {
       conditions.push("artifact_dir = ?");
       params.push(filter.artifactDir);
     }
+    if (filter?.projectDir) {
+      conditions.push("project_dir = ?");
+      params.push(filter.projectDir);
+    }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     const rows = this.db
@@ -275,7 +308,7 @@ export class CccpDatabase {
       stageOrder: JSON.parse(row.stage_order_json),
       gate: row.gate_json ? JSON.parse(row.gate_json) : undefined,
       artifactDir: row.artifact_dir,
-      projectDir: row.project_dir || undefined,
+      projectDir: row.project_dir,
       sessionId: row.session_id || undefined,
     };
   }
@@ -456,7 +489,7 @@ interface RunRow {
   project: string;
   pipeline_file: string;
   artifact_dir: string;
-  project_dir: string | null;
+  project_dir: string;
   started_at: string;
   completed_at: string | null;
   status: string;
@@ -479,34 +512,32 @@ interface EventRow {
 }
 
 // ---------------------------------------------------------------------------
-// Singleton cache
+// Singleton cache — one global DB handle per process, keyed by the resolved
+// path (so a test toggling CCCP_DB_PATH between suites gets a fresh handle).
 // ---------------------------------------------------------------------------
 
-const instances = new Map<string, CccpDatabase>();
+let cached: { path: string; db: CccpDatabase } | null = null;
 
 /**
- * Get or create a CccpDatabase for the given project directory.
- * Caches the instance for reuse within the same process.
+ * Get or create the process-wide CccpDatabase handle. If the resolved global
+ * path changed since the last call (e.g. tests overrode CCCP_DB_PATH), the
+ * stale handle is closed and a new one opened.
  */
-export function openDatabase(projectDir: string): CccpDatabase {
-  const key = resolve(projectDir);
-  let db = instances.get(key);
-  if (!db) {
-    db = CccpDatabase.open(projectDir);
-    instances.set(key, db);
-  }
-  return db;
+export function openDatabase(): CccpDatabase {
+  const path = resolve(globalDbPath());
+  if (cached && cached.path === path) return cached.db;
+  if (cached) cached.db.close();
+  cached = { path, db: CccpDatabase.open() };
+  return cached.db;
 }
 
 /**
- * Close and remove a cached database instance.
+ * Close and clear the cached database instance.
  */
-export function closeDatabase(projectDir: string): void {
-  const key = resolve(projectDir);
-  const db = instances.get(key);
-  if (db) {
-    db.close();
-    instances.delete(key);
+export function closeDatabase(): void {
+  if (cached) {
+    cached.db.close();
+    cached = null;
   }
 }
 
@@ -517,7 +548,7 @@ export function closeDatabase(projectDir: string): void {
  * committed by a sibling writer process until the connection is recycled.
  * See v0.17.3 notes / regression test in tests/db.test.ts.
  */
-export function reopenDatabase(projectDir: string): CccpDatabase {
-  closeDatabase(projectDir);
-  return openDatabase(projectDir);
+export function reopenDatabase(): CccpDatabase {
+  closeDatabase();
+  return openDatabase();
 }

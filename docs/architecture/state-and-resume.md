@@ -2,9 +2,9 @@
 
 ## State database
 
-Pipeline state lives in a SQLite database at `{projectDir}/.cccp/cccp.db`, managed by `src/db.ts` via `node:sqlite` (Node 24 LTS built-in). WAL mode is enabled on open, so writes persist immediately and cross-process readers see committed writes without any manual reload. One database per project, all runs in one place. See [ADR-003](../adr/003-node-sqlite-over-sql-js.md) for the migration rationale ([ADR-002](../adr/002-sql-js-over-better-sqlite3.md) is superseded).
+Pipeline state lives in a single global SQLite database at `~/.cccp/cccp.db` (override with the `CCCP_DB_PATH` env var), managed by `src/db.ts` via `node:sqlite` (Node 24 LTS built-in). WAL mode is enabled on open, so writes persist immediately and cross-process readers see committed writes without any manual reload. One database for every project on the machine — runs from sibling worktrees coexist and are scoped by the `project_dir` column. See [ADR-004](../adr/004-global-state-db.md) for the centralization rationale, [ADR-003](../adr/003-node-sqlite-over-sql-js.md) for the `node:sqlite` migration, and [ADR-001](../adr/001-sqlite-state.md) for the original SQLite decision.
 
-Three tables: `runs` (materialized current state), `events` (append-only audit log), `checkpoints` (cached stage outputs). See ADR-001 for the migration rationale.
+Three tables: `runs` (materialized current state), `events` (append-only audit log), `checkpoints` (cached stage outputs). Per-worktree `.cccp/` directories still hold artifact-tied content — stream logs (`{stage}.stream.jsonl`), gate-feedback markdown, heap snapshots, profiler outputs, and the legacy `state.json` snapshot — addressed via the absolute path stored in `runs.artifact_dir`.
 
 ## Schema
 
@@ -22,7 +22,8 @@ interface PipelineState {
   stages: Record<string, StageState>;
   stageOrder: string[];    // preserves YAML order
   gate?: GateInfo;         // active gate, if any
-  projectDir?: string;     // used to locate the database
+  projectDir: string;      // absolute project root (worktree path); persisted as runs.project_dir
+  sessionId?: string;      // MCP session ID for gate-notification routing
 }
 
 interface StageState {
@@ -54,10 +55,11 @@ CREATE TABLE IF NOT EXISTS runs (
   stages_json TEXT NOT NULL,     -- JSON-serialized Record<string, StageState>
   stage_order_json TEXT NOT NULL, -- JSON-serialized string[]
   gate_json TEXT,                -- JSON-serialized GateInfo | null
-  project_dir TEXT,
+  project_dir TEXT NOT NULL,     -- absolute worktree path; primary cross-project scope
   session_id TEXT,
   pause_requested INTEGER DEFAULT 0  -- cross-process pause signal (v3)
 );
+CREATE INDEX idx_runs_project_dir ON runs(project_dir);
 
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
